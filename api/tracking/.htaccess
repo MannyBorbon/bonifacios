@@ -1,0 +1,8 @@
+Options -MultiViews
+RewriteEngine On
+
+# Serve .php files for extensionless requests (e.g. /tracking/click → click.php)
+RewriteCond %{REQUEST_FILENAME} !-f
+RewriteCond %{REQUEST_FILENAME} !-d
+RewriteCond %{REQUEST_FILENAME}.php -f
+RewriteRule ^(.+)$ $1.php [L,QSA]

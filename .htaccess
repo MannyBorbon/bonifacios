@@ -1,0 +1,24 @@
+# Habilitar rewrite
+RewriteEngine On
+RewriteBase /
+
+# Excluir la carpeta api de las reglas de rewrite
+RewriteRule ^api/ - [L,NC]
+
+# Si el archivo o directorio existe, servirlo directamente
+RewriteCond %{REQUEST_FILENAME} !-f
+RewriteCond %{REQUEST_FILENAME} !-d
+
+# Redirigir todo lo demás a index.html
+RewriteRule ^ index.html [L]
+
+# Configuración de tipos MIME
+<IfModule mod_mime.c>
+  AddType text/javascript .js
+  AddType text/css .css
+</IfModule>
+
+# Habilitar compresión
+<IfModule mod_deflate.c>
+  AddOutputFilterByType DEFLATE text/html text/plain text/xml text/css text/javascript application/javascript
+</IfModule>

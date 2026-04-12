@@ -1,0 +1,48 @@
+PASOS PARA DIAGNOSTICAR EL ERROR 500 EN SUBMIT.PHP
+=====================================================
+
+1. SUBIR ARCHIVOS AL SERVIDOR (vía Hostinger File Manager):
+   
+   Sube estos archivos a: /public_html/api/applications/
+   
+   ✓ submit-debug.php
+   ✓ submit-minimal.php
+   
+   (Ya subiste test-submit.php, ese está bien)
+
+2. ABRIR ARCHIVO DE PRUEBA EN TU NAVEGADOR:
+   
+   - Busca el archivo: test-submit-form.html
+   - Haz DOBLE CLIC para abrirlo en tu navegador
+   - NO lo subas al servidor, ábrelo localmente
+
+3. HACER LAS PRUEBAS:
+   
+   En la página que se abre, verás 3 botones:
+   
+   a) Haz clic en: "Probar submit-minimal.php"
+      → Esto prueba con solo 4 campos
+      → Copia el resultado que aparezca
+   
+   b) Si el anterior funciona, haz clic en: "Probar submit-debug.php"
+      → Esto prueba con todos los campos + error reporting
+      → Copia el resultado completo que aparezca
+
+4. COMPARTIR RESULTADOS:
+   
+   Copia y pega aquí TODO el texto que aparezca en la página,
+   especialmente si dice "ERROR" o muestra un stack trace.
+
+ALTERNATIVA SI NO FUNCIONA:
+============================
+
+Accede directamente a esta URL en tu navegador:
+https://bonifaciossancarlos.com/api/applications/test-submit.php
+
+Esto ya lo hiciste y funcionó. Ahora necesito ver el error de submit.php.
+
+Si los archivos de prueba no funcionan, también puedes:
+1. Ir a Hostinger File Manager
+2. Abrir: /public_html/api/applications/submit.php
+3. Ver si el archivo tiene el contenido correcto (debe tener ~157 líneas)
+4. Verificar que no haya errores de sintaxis visibles

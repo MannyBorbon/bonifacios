@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>Test Submit API</title>
+    <style>
+        body { font-family: Arial; padding: 20px; max-width: 600px; margin: 0 auto; }
+        button { padding: 10px 20px; background: #007bff; color: white; border: none; cursor: pointer; }
+        #result { margin-top: 20px; padding: 15px; background: #f5f5f5; border-radius: 5px; white-space: pre-wrap; }
+        .error { background: #ffebee; color: #c62828; }
+        .success { background: #e8f5e9; color: #2e7d32; }
+    </style>
+</head>
+<body>
+    <h1>Test Submit API</h1>
+    <button onclick="testSubmit()">Enviar Solicitud de Prueba</button>
+    <button onclick="testDebug()">Probar submit-debug.php</button>
+    <button onclick="testMinimal()">Probar submit-minimal.php</button>
+    <div id="result"></div>
+
+    <script>
+        async function testSubmit() {
+            const resultDiv = document.getElementById('result');
+            resultDiv.textContent = 'Enviando...';
+            resultDiv.className = '';
+            
+            try {
+                const response = await fetch('https://bonifaciossancarlos.com/api/applications/submit.php', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        name: 'Test User',
+                        email: 'test@example.com',
+                        phone: '1234567890',
+                        position: 'Test Position',
+                        experience: 2,
+                        age: 25,
+                        gender: 'Masculino',
+                        address: 'Test Address',
+                        estudios: 'Test Studies',
+                        currentJob: 'Test Current Job'
+                    })
+                });
+                
+                const data = await response.json();
+                
+                if (response.ok) {
+                    resultDiv.className = 'success';
+                    resultDiv.textContent = '✅ SUCCESS!\n\n' + JSON.stringify(data, null, 2);
+                } else {
+                    resultDiv.className = 'error';
+                    resultDiv.textContent = '❌ ERROR ' + response.status + '\n\n' + JSON.stringify(data, null, 2);
+                }
+            } catch (error) {
+                resultDiv.className = 'error';
+                resultDiv.textContent = '❌ NETWORK ERROR\n\n' + error.message;
+            }
+        }
+
+        async function testDebug() {
+            const resultDiv = document.getElementById('result');
+            resultDiv.textContent = 'Enviando a submit-debug.php...';
+            resultDiv.className = '';
+            
+            try {
+                const response = await fetch('https://bonifaciossancarlos.com/api/applications/submit-debug.php', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        name: 'Test User',
+                        email: 'test@example.com',
+                        phone: '1234567890',
+                        position: 'Test Position',
+                        experience: 2,
+                        age: 25,
+                        gender: 'Masculino',
+                        address: 'Test Address',
+                        estudios: 'Test Studies',
+                        currentJob: 'Test Current Job'
+                    })
+                });
+                
+                const data = await response.json();
+                
+                if (response.ok) {
+                    resultDiv.className = 'success';
+                    resultDiv.textContent = '✅ SUCCESS!\n\n' + JSON.stringify(data, null, 2);
+                } else {
+                    resultDiv.className = 'error';
+                    resultDiv.textContent = '❌ ERROR ' + response.status + '\n\n' + JSON.stringify(data, null, 2);
+                }
+            } catch (error) {
+                resultDiv.className = 'error';
+                resultDiv.textContent = '❌ NETWORK ERROR\n\n' + error.message;
+            }
+        }
+
+        async function testMinimal() {
+            const resultDiv = document.getElementById('result');
+            resultDiv.textContent = 'Enviando a submit-minimal.php...';
+            resultDiv.className = '';
+            
+            try {
+                const response = await fetch('https://bonifaciossancarlos.com/api/applications/submit-minimal.php', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        name: 'Test User',
+                        phone: '1234567890',
+                        position: 'Test Position',
+                        experience: 2
+                    })
+                });
+                
+                const data = await response.json();
+                
+                if (response.ok) {
+                    resultDiv.className = 'success';
+                    resultDiv.textContent = '✅ SUCCESS!\n\n' + JSON.stringify(data, null, 2);
+                } else {
+                    resultDiv.className = 'error';
+                    resultDiv.textContent = '❌ ERROR ' + response.status + '\n\n' + JSON.stringify(data, null, 2);
+                }
+            } catch (error) {
+                resultDiv.className = 'error';
+                resultDiv.textContent = '❌ NETWORK ERROR\n\n' + error.message;
+            }
+        }
+    </script>
+</body>
+</html>
