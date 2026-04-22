@@ -37,6 +37,7 @@ if ($method !== 'POST') {
 
 try {
     $conn = getConnection();
+
     $input = json_decode(file_get_contents('php://input'), true);
     
     $module = $input['module'] ?? '';
@@ -81,7 +82,7 @@ try {
             break;
             
         case 'sales':
-            list($inserted, $updated, $failed) = syncSales($conn, $data);
+            list($inserted, $updated, $failed, $lastSyncError) = syncSales($conn, $data);
             break;
             
         case 'cash_movements':
@@ -98,6 +99,14 @@ try {
 
         case 'cancellations':
             list($inserted, $updated, $failed) = syncCancellationsData($conn, $data);
+            break;
+
+        case 'ticket_items':
+            list($inserted, $updated, $failed) = syncTicketItems($conn, $data);
+            break;
+
+        case 'shifts':
+            list($inserted, $updated, $failed) = syncShifts($conn, $data);
             break;
             
         default:
@@ -133,14 +142,16 @@ try {
     $updateConfigStmt->bind_param("is", $totalProcessed, $module);
     $updateConfigStmt->execute();
     
-    echo json_encode([
-        'success' => true,
-        'module' => $module,
+    $resp = [
+        'success'  => true,
+        'module'   => $module,
         'inserted' => $inserted,
-        'updated' => $updated,
-        'failed' => $failed,
-        'total' => $totalProcessed
-    ]);
+        'updated'  => $updated,
+        'failed'   => $failed,
+        'total'    => $totalProcessed,
+    ];
+    if (!empty($lastSyncError)) $resp['last_error'] = $lastSyncError;
+    echo json_encode($resp);
     
 } catch (Exception $e) {
     http_response_code(500);
@@ -364,139 +375,152 @@ function syncReservations($conn, $reservations) {
 }
 
 function syncSales($conn, $sales) {
-    $inserted = 0;
-    $updated = 0;
-    $failed = 0;
-    
+    $inserted  = 0;
+    $updated   = 0;
+    $failed    = 0;
+    $lastError = null;
+
+    // Asegurarse de que autocommit esté activo (sin transacciones pendientes)
+    $conn->autocommit(true);
+
     foreach ($sales as $sale) {
         try {
-            $conn->begin_transaction();
-            
-            // Buscar IDs locales (pueden ser NULL)
-            $tableId = isset($sale['table_id']) ? getLocalTableId($conn, $sale['table_id']) : null;
-            $waiterId = isset($sale['waiter_id']) ? getLocalEmployeeId($conn, $sale['waiter_id']) : null;
-            
-            // Insertar/actualizar venta
-            $folio = $sale['folio'] ?? $sale['ticket_number'] ?? '';
-            $saleTime = $sale['sale_time'] ?? null;
-            $tableNumber = $sale['table_number'] ?? '';
-            $waiterName = $sale['waiter_name'] ?? '';
-            $openedAt = $sale['opened_at'] ?? null;
-            $closedAt = $sale['closed_at'] ?? null;
-            
-            $stmt = $conn->prepare("
-                INSERT INTO sr_sales (
-                    sr_ticket_id, ticket_number, folio, sale_date, sale_time, sale_datetime,
-                    table_id, table_number, waiter_id, waiter_name, covers, subtotal, tax, discount, tip, total,
-                    status, payment_type, cash_amount, card_amount, voucher_amount, other_amount, opened_at, closed_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ON DUPLICATE KEY UPDATE
-                    ticket_number = VALUES(ticket_number),
-                    folio = VALUES(folio),
-                    sale_date = VALUES(sale_date),
-                    sale_time = VALUES(sale_time),
-                    sale_datetime = VALUES(sale_datetime),
-                    table_id = VALUES(table_id),
-                    table_number = VALUES(table_number),
-                    waiter_id = VALUES(waiter_id),
-                    waiter_name = VALUES(waiter_name),
-                    covers = VALUES(covers),
-                    subtotal = VALUES(subtotal),
-                    tax = VALUES(tax),
-                    discount = VALUES(discount),
-                    tip = VALUES(tip),
-                    total = VALUES(total),
-                    status = VALUES(status),
-                    payment_type = VALUES(payment_type),
-                    cash_amount = VALUES(cash_amount),
-                    card_amount = VALUES(card_amount),
-                    voucher_amount = VALUES(voucher_amount),
-                    other_amount = VALUES(other_amount),
-                    opened_at = VALUES(opened_at),
-                    closed_at = VALUES(closed_at)
-            ");
-            
-            $cashAmount = $sale['cash_amount'] ?? 0;
-            $cardAmount = $sale['card_amount'] ?? 0;
-            $voucherAmount = $sale['voucher_amount'] ?? 0;
-            $otherAmount = $sale['other_amount'] ?? 0;
-            
-            $stmt->bind_param("ssssssisisidddddssddddss",
-                $sale['sr_ticket_id'],
-                $sale['ticket_number'],
-                $folio,
-                $sale['sale_date'],
-                $saleTime,
-                $sale['sale_datetime'],
-                $tableId,
-                $tableNumber,
-                $waiterId,
-                $waiterName,
-                $sale['covers'],
-                $sale['subtotal'],
-                $sale['tax'],
-                $sale['discount'],
-                $sale['tip'],
-                $sale['total'],
-                $sale['status'],
-                $sale['payment_type'],
-                $cashAmount,
-                $cardAmount,
-                $voucherAmount,
-                $otherAmount,
-                $openedAt,
-                $closedAt
-            );
-            $stmt->execute();
-            
-            $saleId = $stmt->insert_id > 0 ? $stmt->insert_id : getLocalSaleId($conn, $sale['sr_ticket_id']);
-            
-            // Insertar items si existen
+            $status = $sale['status'] ?? 'open';
+            if ($status === 'canceled') $status = 'cancelled';
+            if (!in_array($status, ['open', 'closed', 'cancelled'])) $status = 'open';
+
+            $srId        = $conn->escape_string($sale['sr_ticket_id']   ?? '');
+            $ticketNum   = $conn->escape_string($sale['ticket_number']  ?? '');
+            $folio       = $conn->escape_string($sale['folio']          ?? $sale['ticket_number'] ?? '');
+            $saleDate    = $conn->escape_string($sale['sale_date']      ?? '');
+            $saleTime    = $conn->escape_string($sale['sale_time']      ?? '');
+            $saleDt      = $conn->escape_string($sale['sale_datetime']  ?? '');
+            $tableNum    = $conn->escape_string($sale['table_number']   ?? '');
+            $waiterName  = $conn->escape_string($sale['waiter_name']    ?? '');
+            $payType     = $conn->escape_string($sale['payment_type']   ?? 'pending');
+            $openedAt    = $conn->escape_string($sale['opened_at']      ?? '');
+            $closedAtVal = $sale['closed_at']
+                ? "'" . $conn->escape_string($sale['closed_at']) . "'"
+                : "NULL";
+
+            $covers  = intval($sale['covers']         ?? 0);
+            $sub     = floatval($sale['subtotal']      ?? 0);
+            $tax     = floatval($sale['tax']           ?? 0);
+            $disc    = floatval($sale['discount']      ?? 0);
+            $tip     = floatval($sale['tip']           ?? 0);
+            $total   = floatval($sale['total']         ?? 0);
+            $cash    = floatval($sale['cash_amount']   ?? 0);
+            $card    = floatval($sale['card_amount']   ?? 0);
+            $voucher = floatval($sale['voucher_amount']?? 0);
+            $other   = floatval($sale['other_amount']  ?? 0);
+
+            $tipPaid = intval($sale['tip_paid'] ?? 0);
+
+            $sql = "INSERT INTO sr_sales (
+                        sr_ticket_id, ticket_number, folio,
+                        sale_date, sale_time, sale_datetime,
+                        table_id, table_number, waiter_id, waiter_name, covers,
+                        subtotal, tax, discount, tip, tip_paid, total,
+                        status, payment_type,
+                        cash_amount, card_amount, voucher_amount, other_amount,
+                        opened_at, closed_at
+                    ) VALUES (
+                        '$srId', '$ticketNum', '$folio',
+                        '$saleDate', '$saleTime', '$saleDt',
+                        NULL, '$tableNum', NULL, '$waiterName', $covers,
+                        $sub, $tax, $disc, $tip, $tipPaid, $total,
+                        '$status', '$payType',
+                        $cash, $card, $voucher, $other,
+                        '$openedAt', $closedAtVal
+                    )
+                    ON DUPLICATE KEY UPDATE
+                        ticket_number   = VALUES(ticket_number),
+                        folio           = VALUES(folio),
+                        sale_date       = VALUES(sale_date),
+                        sale_time       = VALUES(sale_time),
+                        sale_datetime   = VALUES(sale_datetime),
+                        table_number    = VALUES(table_number),
+                        waiter_name     = VALUES(waiter_name),
+                        covers          = VALUES(covers),
+                        subtotal        = VALUES(subtotal),
+                        tax             = VALUES(tax),
+                        discount        = VALUES(discount),
+                        tip             = VALUES(tip),
+                        tip_paid        = VALUES(tip_paid),
+                        total           = VALUES(total),
+                        status          = VALUES(status),
+                        payment_type    = VALUES(payment_type),
+                        cash_amount     = VALUES(cash_amount),
+                        card_amount     = VALUES(card_amount),
+                        voucher_amount  = VALUES(voucher_amount),
+                        other_amount    = VALUES(other_amount),
+                        opened_at       = VALUES(opened_at),
+                        closed_at       = VALUES(closed_at)";
+
+            if ($conn->query($sql) === false) {
+                throw new Exception($conn->error);
+            }
+
+            $affectedRows = $conn->affected_rows;
+            $insertId     = $conn->insert_id;
+
             if (!empty($sale['items'])) {
-                syncSaleItems($conn, $saleId, $sale['items']);
+                $saleId = $insertId > 0 ? $insertId : getLocalSaleId($conn, $sale['sr_ticket_id']);
+                syncSaleItems($conn, $saleId, $sale['items'], $sale['sr_ticket_id']);
             }
-            
-            $conn->commit();
-            
-            if ($stmt->affected_rows > 0) {
-                $stmt->insert_id > 0 ? $inserted++ : $updated++;
+
+            if ($affectedRows > 0) {
+                $insertId > 0 ? $inserted++ : $updated++;
+            } else {
+                $updated++;
             }
-            
+
         } catch (Exception $e) {
-            $conn->rollback();
             $failed++;
-            // Log error details
-            error_log("syncSales ERROR: " . $e->getMessage() . " | Ticket: " . ($sale['sr_ticket_id'] ?? 'unknown'));
+            $lastError = $e->getMessage() . " | Ticket: " . ($sale['sr_ticket_id'] ?? 'unknown');
+            error_log("syncSales ERROR: " . $lastError);
         }
     }
-    
-    return [$inserted, $updated, $failed];
+
+    return [$inserted, $updated, $failed, $lastError];
 }
 
-function syncSaleItems($conn, $saleId, $items) {
-    // Eliminar items anteriores
-    $deleteStmt = $conn->prepare("DELETE FROM sr_sale_items WHERE sale_id = ?");
-    $deleteStmt->bind_param("i", $saleId);
+function syncSaleItems($conn, $saleId, $items, $srTicketId = null) {
+    // Eliminar items anteriores por sale_id o sr_ticket_id
+    if ($srTicketId) {
+        $deleteStmt = $conn->prepare("DELETE FROM sr_sale_items WHERE sr_ticket_id = ?");
+        $deleteStmt->bind_param("s", $srTicketId);
+    } else {
+        $deleteStmt = $conn->prepare("DELETE FROM sr_sale_items WHERE sale_id = ?");
+        $deleteStmt->bind_param("i", $saleId);
+    }
     $deleteStmt->execute();
     
-    // Insertar nuevos items
+    // Insertar nuevos items con sr_ticket_id
     $stmt = $conn->prepare("
         INSERT INTO sr_sale_items (
-            sale_id, product_id, product_name, quantity, unit_price, discount, subtotal
-        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            sale_id, sr_ticket_id, product_id, product_name, quantity, unit_price, discount, subtotal
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     ");
     
     foreach ($items as $item) {
-        $productId = getLocalProductId($conn, $item['product_id']);
+        $productId = $item['product_id'] ?? '';
+        $productName = $item['product_name'] ?? '';
+        $quantity = floatval($item['quantity'] ?? 0);
+        $unitPrice = floatval($item['unit_price'] ?? 0);
+        $discount = floatval($item['discount'] ?? 0);
+        $subtotal = floatval($item['subtotal'] ?? ($quantity * $unitPrice - $discount));
+        $ticketId = $srTicketId ?? '';
         
-        $stmt->bind_param("iisdddd",
+        $stmt->bind_param("isssdddd",
             $saleId,
+            $ticketId,
             $productId,
-            $item['product_name'],
-            $item['quantity'],
-            $item['unit_price'],
-            $item['discount'],
-            $item['subtotal']
+            $productName,
+            $quantity,
+            $unitPrice,
+            $discount,
+            $subtotal
         );
         $stmt->execute();
     }
@@ -532,24 +556,39 @@ function syncCashMovements($conn, $movements) {
     
     foreach ($movements as $m) {
         try {
-            $isTipPayment = $m['is_tip_payment'] ? 1 : 0;
+            // Normalizar campos (compatible con v1 y v2 del sender)
+            $movementId    = $m['movement_id'] ?? $m['sr_movement_id'] ?? uniqid('mov_');
+            $folioMovto    = $m['folio_movto'] ?? $m['sr_movement_id'] ?? '';
+            $movementType  = $m['movement_type'] ?? 'other';
+            $tipoOriginal  = intval($m['tipo_original'] ?? 0);
+            $amount        = floatval($m['amount'] ?? 0);
+            $amountSigned  = floatval($m['amount_signed'] ?? $amount);
+            $movementDate  = $m['movement_date'] ?? date('Y-m-d');
+            $movementTime  = $m['movement_time'] ?? '';
+            $movementDT    = $m['movement_datetime'] ?? ($movementDate . ' ' . $movementTime);
+            $shiftId       = $m['shift_id'] ?? '';
+            $concept       = $m['concept'] ?? $m['description'] ?? '';
+            $reference     = $m['reference'] ?? '';
+            $userCancel    = $m['user_cancel'] ?? '';
+            $isTipPayment  = !empty($m['is_tip_payment']) ? 1 : 0;
+            $companyId     = $m['company_id'] ?? '1';
             
             $stmt->bind_param("sssiddsssssssis",
-                $m['movement_id'],
-                $m['folio_movto'],
-                $m['movement_type'],
-                $m['tipo_original'],
-                $m['amount'],
-                $m['amount_signed'],
-                $m['movement_date'],
-                $m['movement_time'],
-                $m['movement_datetime'],
-                $m['shift_id'],
-                $m['concept'],
-                $m['reference'],
-                $m['user_cancel'],
+                $movementId,
+                $folioMovto,
+                $movementType,
+                $tipoOriginal,
+                $amount,
+                $amountSigned,
+                $movementDate,
+                $movementTime,
+                $movementDT,
+                $shiftId,
+                $concept,
+                $reference,
+                $userCancel,
                 $isTipPayment,
-                $m['company_id']
+                $companyId
             );
             $stmt->execute();
             
@@ -689,12 +728,100 @@ function getLocalProductId($conn, $srProductId) {
     return $result->num_rows > 0 ? $result->fetch_assoc()['id'] : null;
 }
 
+function syncTicketItems($conn, $tickets) {
+    $inserted = 0; $updated = 0; $failed = 0;
+
+    $stmtDel = $conn->prepare("DELETE FROM sr_ticket_items WHERE folio = ?");
+    $stmtIns = $conn->prepare("
+        INSERT INTO sr_ticket_items (folio, product_id, product_name, category, qty, unit_price, subtotal, discount, notes)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ");
+
+    foreach ($tickets as $t) {
+        $folio = $conn->real_escape_string($t['folio'] ?? '');
+        if (!$folio) continue;
+        try {
+            $stmtDel->bind_param('s', $folio);
+            $stmtDel->execute();
+            foreach (($t['items'] ?? []) as $item) {
+                $pid   = $item['product_id']   ?? '';
+                $pname = $item['product_name'] ?? '';
+                $cat   = $item['category']     ?? '';
+                $qty   = floatval($item['qty']        ?? 1);
+                $uprice= floatval($item['unit_price']  ?? 0);
+                $sub   = floatval($item['subtotal']    ?? 0);
+                $disc  = floatval($item['discount']    ?? 0);
+                $notes = $item['notes']        ?? '';
+                $stmtIns->bind_param('ssssdddds', $folio, $pid, $pname, $cat, $qty, $uprice, $sub, $disc, $notes);
+                $stmtIns->execute();
+                $inserted++;
+            }
+        } catch (Exception $e) { $failed++; }
+    }
+    return [$inserted, $updated, $failed];
+}
+
 function getLocalSaleId($conn, $srTicketId) {
     $stmt = $conn->prepare("SELECT id FROM sr_sales WHERE sr_ticket_id = ?");
     $stmt->bind_param("s", $srTicketId);
     $stmt->execute();
     $result = $stmt->get_result();
     return $result->num_rows > 0 ? $result->fetch_assoc()['id'] : null;
+}
+
+function syncShifts($conn, $shifts) {
+    $inserted = 0;
+    $updated  = 0;
+    $failed   = 0;
+
+    $stmt = $conn->prepare("
+        INSERT INTO sr_shifts (
+            sr_shift_id, sr_turno_id, cajero, estacion,
+            apertura, cierre, fondo,
+            declarado_efectivo, declarado_tarjeta,
+            declarado_vales, declarado_credito, company_id
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON DUPLICATE KEY UPDATE
+            sr_turno_id         = VALUES(sr_turno_id),
+            cajero              = VALUES(cajero),
+            estacion            = VALUES(estacion),
+            apertura            = VALUES(apertura),
+            cierre              = VALUES(cierre),
+            fondo               = VALUES(fondo),
+            declarado_efectivo  = VALUES(declarado_efectivo),
+            declarado_tarjeta   = VALUES(declarado_tarjeta),
+            declarado_vales     = VALUES(declarado_vales),
+            declarado_credito   = VALUES(declarado_credito),
+            company_id          = VALUES(company_id)
+    ");
+
+    foreach ($shifts as $s) {
+        try {
+            $shiftId   = $s['sr_shift_id']        ?? '';
+            $turnoId   = $s['sr_turno_id']         ?? '';
+            $cajero    = $s['cajero']              ?? '';
+            $estacion  = $s['estacion']            ?? '';
+            $apertura  = $s['apertura']            ?? null;
+            $cierre    = $s['cierre']              ?? null;
+            $fondo     = floatval($s['fondo']              ?? 0);
+            $efectivo  = floatval($s['declarado_efectivo'] ?? 0);
+            $tarjeta   = floatval($s['declarado_tarjeta']  ?? 0);
+            $vales     = floatval($s['declarado_vales']    ?? 0);
+            $credito   = floatval($s['declarado_credito']  ?? 0);
+            $company   = $s['company_id']          ?? '';
+
+            $stmt->bind_param('ssssssddddds',
+                $shiftId, $turnoId, $cajero, $estacion,
+                $apertura, $cierre, $fondo,
+                $efectivo, $tarjeta, $vales, $credito, $company
+            );
+            $stmt->execute();
+            $stmt->affected_rows > 0 ? ($stmt->insert_id > 0 ? $inserted++ : $updated++) : null;
+        } catch (Exception $e) {
+            $failed++;
+        }
+    }
+    return [$inserted, $updated, $failed];
 }
 
 function syncCancellationsData($conn, $cancellations) {

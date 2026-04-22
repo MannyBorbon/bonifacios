@@ -232,6 +232,9 @@ function AdminLayout() {
               <Link to="/admin/calendar" className={`whitespace-nowrap rounded-lg px-4 py-2 text-sm font-light transition-all ${isActive('/admin/calendar') ? 'bg-cyan-500/15 text-cyan-400 border border-cyan-500/20' : 'text-slate-400 hover:bg-cyan-500/5 hover:text-cyan-300'}`}>Agenda</Link>
               <Link to="/admin/meetings" className={`whitespace-nowrap rounded-lg px-4 py-2 text-sm font-light transition-all ${isActive('/admin/meetings') ? 'bg-cyan-500/15 text-cyan-400 border border-cyan-500/20' : 'text-slate-400 hover:bg-cyan-500/5 hover:text-cyan-300'}`}>Reuniones</Link>
               <Link to="/admin/messages" className={`whitespace-nowrap rounded-lg px-4 py-2 text-sm font-light transition-all ${isActive('/admin/messages') ? 'bg-cyan-500/15 text-cyan-400 border border-cyan-500/20' : 'text-slate-400 hover:bg-cyan-500/5 hover:text-cyan-300'}`}>Mensajes</Link>
+              {['manuel','misael'].includes(user?.username?.toLowerCase()) && (
+                <Link to="/admin/permissions" className={`whitespace-nowrap rounded-lg px-4 py-2 text-sm font-light transition-all ${isActive('/admin/permissions') ? 'bg-amber-500/15 text-amber-400 border border-amber-500/20' : 'text-amber-600/60 hover:bg-amber-500/5 hover:text-amber-400'}`}>🔐 Permisos</Link>
+              )}
             </div>
 
             {/* Right side actions */}

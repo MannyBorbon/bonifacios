@@ -270,15 +270,22 @@ class CompleteSyncSR {
                     $tipo = intval($m['tipo']);
                     $isPropinaPago = intval($m['pagodepropina']) === 1;
                     
-                    // Determinar tipo de movimiento
+                    // Determinar tipo de movimiento usando campo 'tipo' de SoftRestaurant:
+                    // tipo=1 = DEPOSITO (dinero entra a caja)
+                    // tipo=2 = RETIRO  (dinero sale de caja, incluye "CAJA PAGA")
                     $movementType = 'other';
                     if ($isPropinaPago) {
                         $movementType = 'tip_payment';
-                    } elseif ($importe < 0) {
-                        $movementType = 'withdrawal'; // Retiro/salida
-                    } elseif ($importe > 0) {
-                        $movementType = 'deposit'; // Ingreso/entrada
+                    } elseif ($tipo === 1) {
+                        $movementType = 'withdrawal'; // Retiro/salida de caja
+                    } elseif ($tipo === 2) {
+                        $movementType = 'deposit'; // Deposito/entrada a caja
                     }
+
+                    // amount_signed: negativo para salidas, positivo para entradas
+                    $amountSigned = ($movementType === 'withdrawal' || $movementType === 'tip_payment')
+                        ? -abs($importe)
+                        : abs($importe);
                     
                     $data[] = [
                         'movement_id' => (string)$m['folio'],
@@ -286,7 +293,7 @@ class CompleteSyncSR {
                         'movement_type' => $movementType,
                         'tipo_original' => $tipo,
                         'amount' => abs($importe),
-                        'amount_signed' => $importe,
+                        'amount_signed' => $amountSigned,
                         'movement_date' => $movementDate,
                         'movement_time' => $fechaObj->format('H:i:s'),
                         'movement_datetime' => $movementDatetime,

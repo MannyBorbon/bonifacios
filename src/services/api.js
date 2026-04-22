@@ -134,6 +134,11 @@ export const meetingsAPI = {
   saveMinutes: (data) => api.post('/meetings/minutes.php', data),
 };
 
+export const userPermissionsAPI = {
+  getPermissions: () => api.get('/users/edit-permissions.php'),
+  setPermission: (username, canEdit) => api.post('/users/edit-permissions.php', { username, can_edit: canEdit }),
+};
+
 export const calendarAPI = {
   getEvents: (month, year) => api.get(`/calendar/events.php?month=${month}&year=${year}`),
   createEvent: (data) => api.post('/calendar/events.php', { action: 'create', ...data }),

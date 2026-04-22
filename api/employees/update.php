@@ -11,16 +11,19 @@ if (!isset($_SESSION['user_id'])) {
 $userId = $_SESSION['user_id'];
 $conn = getConnection();
 
-$userSql = "SELECT role FROM users WHERE id = ?";
+$userSql = "SELECT role, username, can_edit_employees FROM users WHERE id = ?";
 $stmt = $conn->prepare($userSql);
 $stmt->bind_param("i", $userId);
 $stmt->execute();
 $userResult = $stmt->get_result();
 $user = $userResult->fetch_assoc();
 
-if ($user['role'] !== 'administrador') {
+$isAdmin   = $user['role'] === 'administrador';
+$canEdit   = (bool)($user['can_edit_employees'] ?? false);
+
+if (!$isAdmin && !$canEdit) {
     http_response_code(403);
-    echo json_encode(['error' => 'Forbidden - Admin only']);
+    echo json_encode(['error' => 'Forbidden - No tienes permiso para editar empleados']);
     exit();
 }
 
@@ -38,7 +41,7 @@ $types = "";
 $values = [];
 
 // Build dynamic update query
-$allowedFields = ['name', 'age', 'gender', 'studies', 'email', 'phone', 'address', 'position', 'experience', 'current_job', 'status', 'notes', 'hire_date', 'emergency_contact'];
+$allowedFields = ['name', 'age', 'gender', 'studies', 'email', 'phone', 'address', 'position', 'experience', 'current_job', 'status', 'notes', 'hire_date', 'emergency_contact', 'employee_number', 'daily_salary', 'estado_civil', 'tipo_sangre', 'alergias', 'enfermedades', 'idiomas'];
 
 foreach ($allowedFields as $field) {
     if (isset($data[$field])) {

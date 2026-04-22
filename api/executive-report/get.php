@@ -23,6 +23,7 @@ $sql = "SELECT
     ef.*,
     ef.hire_date as start_date,
     ef.studies as estudios,
+    ef.sueldo as daily_salary,
     COALESCE(er.main_amount, 0) as main_amount,
     COALESCE(er.secondary_amount, 0) as secondary_amount
 FROM employee_files ef

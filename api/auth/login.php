@@ -78,12 +78,13 @@ $_SESSION['token'] = $token;
 echo json_encode([
     'token' => $token,
     'user' => [
-        'id' => $user['id'],
+        'id'       => $user['id'],
         'username' => $user['username'],
-        'full_name' => $user['full_name'],
-        'email' => $user['email'],
-        'role' => $user['role'],
-        'avatar' => $user['avatar']
+        'full_name'=> $user['full_name'],
+        'email'    => $user['email'],
+        'role'     => $user['role'],
+        'avatar'   => $user['avatar'],
+        'can_edit' => (bool)($user['can_edit'] ?? false),
     ]
 ]);
 

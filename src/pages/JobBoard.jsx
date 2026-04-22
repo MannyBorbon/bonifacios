@@ -18,6 +18,7 @@ function JobBoard() {
     age: '',
     gender: '',
     privacyAccepted: false,
+    parentalConsent: false,
     noCurrentJob: false,
     noStudies: false,
     noEmail: false
@@ -46,10 +47,13 @@ function JobBoard() {
         genderFemale: 'Femenino',
         genderOther: 'Otro',
         privacy: 'Acepto el aviso de privacidad y términos de uso de mi información.',
+        parentalConsent: 'Cuento con permiso de mis padres o tutor legal (requerido para menores de 18 años)',
         noCurrentJob: 'No tengo trabajo actual',
         noStudies: 'No tengo estudios',
         noEmail: 'No tengo correo',
-        submit: 'Enviar'
+        submit: 'Enviar',
+        ageError: 'Debes tener al menos 15 años para aplicar',
+        parentalConsentError: 'Los menores de 18 años requieren permiso de sus padres o tutor legal'
       },
       positions: [
         'Chef',
@@ -181,6 +185,20 @@ function JobBoard() {
 
   const handleSubmit = async (e) => {
     e.preventDefault()
+    
+    // Validar edad mínima
+    const age = parseInt(formData.age)
+    if (age < 15) {
+      alert(t.form.ageError)
+      return
+    }
+    
+    // Validar permiso de padres para menores de 18
+    if (age < 18 && !formData.parentalConsent) {
+      alert(t.form.parentalConsentError)
+      return
+    }
+    
     if (!formData.privacyAccepted) {
       alert('Por favor acepta el aviso de privacidad para continuar.')
       return
@@ -603,12 +621,12 @@ function JobBoard() {
                     id="age"
                     name="age"
                     required
-                    min="18"
+                    min="15"
                     max="100"
                     value={formData.age}
                     onChange={handleChange}
                     className="w-full rounded-lg border border-[#D4AF37]/20 bg-black/40 px-4 py-3 text-[#F4E4C1] backdrop-blur-sm transition-all duration-300 placeholder:text-[#F4E4C1]/30 focus:border-[#D4AF37]/50 focus:outline-none focus:ring-2 focus:ring-[#D4AF37]/20"
-                    placeholder="18"
+                    placeholder="15"
                   />
                 </div>
 
@@ -688,6 +706,24 @@ function JobBoard() {
                   </div>
                 )}
               </div>
+
+              {/* Parental consent for minors */}
+              {formData.age && parseInt(formData.age) < 18 && (
+                <div className="flex items-start gap-3 rounded-lg border border-amber-500/30 bg-amber-500/5 p-4">
+                  <input
+                    type="checkbox"
+                    id="parentalConsent"
+                    name="parentalConsent"
+                    required
+                    checked={formData.parentalConsent}
+                    onChange={handleChange}
+                    className="mt-1 h-4 w-4 rounded border-amber-500/40 bg-black/40 text-amber-500 focus:ring-2 focus:ring-amber-500/20"
+                  />
+                  <label htmlFor="parentalConsent" className="text-sm font-light leading-relaxed text-amber-400">
+                    {t.form.parentalConsent}
+                  </label>
+                </div>
+              )}
 
               <div className="flex items-start gap-3">
                 <input

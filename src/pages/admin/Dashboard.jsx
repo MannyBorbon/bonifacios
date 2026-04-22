@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { analyticsAPI, siteAnalyticsAPI, userStatusAPI, quotesAPI } from '../../services/api';
+import { analyticsAPI, siteAnalyticsAPI, userStatusAPI, quotesAPI, userPermissionsAPI } from '../../services/api';
+import SalesWidget from '../../components/SalesWidget';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, AreaChart, Area } from 'recharts';
 import AdminDashboard from './AdminDashboard';
 
@@ -15,8 +16,11 @@ function ViewerDashboard() {
   const [onsiteLoading, setOnsiteLoading] = useState(false);
   const [quotesStats, setQuotesStats] = useState(null);
   const [unreadChat, setUnreadChat] = useState(0);
+  const [editPerms, setEditPerms] = useState([]);
+  const [permSaving, setPermSaving] = useState({});
   const user = JSON.parse(localStorage.getItem('user') || '{}');
   const isAdmin = user.role === 'administrador';
+  const isManuelOrMisael = ['manuel','misael'].includes(user.username?.toLowerCase());
 
   const DEUDA_TOTAL = 550000;
   const [aportaciones, setAportaciones] = useState([
@@ -71,8 +75,24 @@ function ViewerDashboard() {
 
   useEffect(() => {
     loadDashboard();
-    if (isManuel || isMisael) loadOnsiteStatus();
+    if (isManuel || isMisael) { loadOnsiteStatus(); loadEditPerms(); }
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const loadEditPerms = async () => {
+    try {
+      const res = await userPermissionsAPI.getPermissions();
+      if (res.data.success) setEditPerms(res.data.users || []);
+    } catch { /* silent */ }
+  };
+
+  const toggleEditPerm = async (username, current) => {
+    setPermSaving(p => ({ ...p, [username]: true }));
+    try {
+      await userPermissionsAPI.setPermission(username, !current);
+      setEditPerms(p => p.map(u => u.username === username ? { ...u, can_edit: !current } : u));
+    } catch { /* silent */ }
+    setPermSaving(p => ({ ...p, [username]: false }));
+  };
 
   const loadOnsiteStatus = async () => {
     try {
@@ -186,6 +206,9 @@ function ViewerDashboard() {
 
   return (
     <div className="space-y-4 p-1">
+
+      {/* ── SALES WIDGET (visible para todos los viewers) ── */}
+      <SalesWidget />
 
       {/* ── ROW 1: Header + Hero Metric + Glowing Radar ── */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
@@ -455,6 +478,37 @@ function ViewerDashboard() {
           <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-gradient-to-r from-transparent via-cyan-500/30 to-transparent" />
         </div>
       </div>
+
+      {/* ── PANEL DE PERMISOS (solo Manuel y Misael, invisible para Francisco/Santiago) ── */}
+      {isManuelOrMisael && editPerms.length > 0 && (
+        <div className="relative overflow-hidden rounded-2xl border border-slate-700/30 bg-gradient-to-br from-[#040c1a] to-[#060f20] p-5">
+          <div className="absolute inset-0 bg-gradient-to-b from-amber-500/2 to-transparent pointer-events-none" />
+          <div className="flex items-center justify-between mb-4">
+            <div>
+              <p className="text-[10px] uppercase tracking-widest text-amber-500/40 mb-0.5">Acceso</p>
+              <h3 className="text-sm font-light text-white">Permisos de Edición</h3>
+            </div>
+            <span className="text-[9px] text-slate-600 uppercase tracking-widest">Solo tú puedes ver esto</span>
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            {editPerms.map(u => (
+              <div key={u.username} className="flex items-center justify-between bg-black/30 rounded-xl px-4 py-3 border border-slate-800">
+                <div>
+                  <p className="text-xs text-white font-medium">{u.full_name || u.username}</p>
+                  <p className="text-[9px] text-slate-600 uppercase tracking-wide">{u.can_edit ? 'Puede editar datos' : 'Solo lectura'}</p>
+                </div>
+                <button
+                  onClick={() => toggleEditPerm(u.username, u.can_edit)}
+                  disabled={permSaving[u.username]}
+                  className={`relative h-6 w-11 rounded-full transition-all duration-300 flex-shrink-0 ${u.can_edit ? 'bg-green-500' : 'bg-slate-700'} ${permSaving[u.username] ? 'opacity-50 cursor-wait' : 'cursor-pointer'}`}
+                >
+                  <span className={`absolute top-0.5 h-5 w-5 rounded-full bg-white shadow transition-all duration-300 ${u.can_edit ? 'left-5' : 'left-0.5'}`} />
+                </button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* ── FINANCIAL PANEL (Admin only) ── */}
       {isAdmin && (

@@ -1,14 +1,9 @@
 <?php
 /**
- * Test simple de conexión a Hostinger
+ * Diagnostico SQL Server - campos reales de cheques
  */
 
-$apiUrl = 'https://bonifaciossancarlos.com/api/softrestaurant/sync.php';
-$apiKey = 'bonifacios-sr-sync-2024-secret-key';
-
-echo "=== TEST DE CONEXIÓN A HOSTINGER ===\n\n";
-echo "URL: $apiUrl\n";
-echo "API Key: $apiKey\n\n";
+echo "=== DIAGNOSTICO SQL SERVER ===\n\n";
 
 // Datos de prueba mínimos
 $payload = json_encode([

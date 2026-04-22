@@ -15,7 +15,7 @@ echo Presiona Ctrl+C para detener
 echo.
 
 :loop
-php "%~dp0sync-realtime.php"
+php "%~dp0sync-historico.php"
 
 REM Si el script termina, esperar 5 segundos y reiniciar
 echo.

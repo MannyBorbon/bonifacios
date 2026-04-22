@@ -28,8 +28,10 @@ export default function SalesWidget() {
       const data = await res.json();
       
       if (data.success) {
+        const todayStats = data.stats.today;
+        const openAmount = data.open_stats?.total || 0;
         setStats({
-          today: data.stats.today,
+          today: { ...todayStats, total: (todayStats.total || 0) + openAmount, openAmount },
           yesterday: data.stats.yesterday
         });
         setHourlyData(data.hourly || []);
@@ -89,6 +91,9 @@ export default function SalesWidget() {
       <div className="mb-4">
         <div className="flex items-baseline gap-2">
           <span className="text-3xl font-light text-white">{formatCurrency(stats.today.total)}</span>
+          {stats.today.openAmount > 0 && (
+            <span className="text-[10px] text-orange-400 font-bold">{formatCurrency(stats.today.openAmount)} en curso</span>
+          )}
           <span className={`text-sm ${change >= 0 ? 'text-green-400' : 'text-red-400'}`}>
             {change >= 0 ? '↑' : '↓'} {Math.abs(change).toFixed(1)}%
           </span>

@@ -23,6 +23,7 @@ import MeetingRoom from './pages/admin/MeetingRoom'
 import QuoteCotizacion from './pages/admin/QuoteCotizacion'
 import AportacionDetail from './pages/admin/AportacionDetail'
 import Communities from './pages/admin/Communities'
+import Permissions from './pages/admin/Permissions'
 
 function ProtectedRoute({ children }) {
   const token = localStorage.getItem('token');
@@ -56,6 +57,7 @@ function App() {
           <Route path="tracking" element={<UserTracking />} />
           <Route path="analytics" element={<SiteAnalytics />} />
           <Route path="communities" element={<Communities />} />
+          <Route path="permissions" element={<Permissions />} />
         </Route>
         <Route path="/admin/report/:reportId" element={<ProtectedRoute><ReportDetail /></ProtectedRoute>} />
         <Route path="/admin/aportaciones/:id" element={<ProtectedRoute><AportacionDetail /></ProtectedRoute>} />

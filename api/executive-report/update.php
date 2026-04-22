@@ -9,10 +9,22 @@ $userSql = "SELECT role FROM users WHERE id = ?";
 $stmt = $conn->prepare($userSql);
 $stmt->bind_param("i", $userId);
 $stmt->execute();
-$userResult = $stmt->get_result();
-$user = $userResult->fetch_assoc();
+$user = $stmt->get_result()->fetch_assoc();
 
-if ($user['role'] !== 'administrador') {
+$canEdit = false;
+if ($user['role'] === 'administrador') {
+    $canEdit = true;
+} else {
+    try {
+        $s2 = $conn->prepare("SELECT can_edit_employees FROM users WHERE id = ?");
+        $s2->bind_param("i", $userId);
+        $s2->execute();
+        $r2 = $s2->get_result()->fetch_assoc();
+        $canEdit = intval($r2['can_edit_employees'] ?? 0) === 1;
+    } catch (Throwable $e) { $canEdit = false; }
+}
+
+if (!$canEdit) {
     http_response_code(403);
     echo json_encode(['error' => 'Forbidden - Admin only']);
     exit();
@@ -42,17 +54,21 @@ $value = $data['value'];
 // Map frontend field names to employee_files column names
 $fieldMapping = [
     'start_date' => 'hire_date',
-    'estudios' => 'studies'
+    'estudios' => 'studies',
+    'daily_salary' => 'sueldo'
 ];
 
 // Apply mapping if exists
 $dbField = isset($fieldMapping[$field]) ? $fieldMapping[$field] : $field;
 
 $allowedFields = [
-    'main_amount', 'secondary_amount', 'start_date', 'application_date',
+    'main_amount', 'daily_salary', 'secondary_amount', 'start_date', 'application_date',
     'name', 'position', 'email', 'phone', 'age', 'gender', 
     'address', 'studies', 'estudios', 'experience', 'current_job', 'status', 'hire_date', 'emergency_contact',
-    'employee_number', 'estado_civil', 'idiomas', 'accesos', 'sueldo', 'prestaciones', 'tipo_sangre', 'alergias', 'enfermedades'
+    'employee_number', 'estado_civil', 'idiomas', 'accesos', 'sueldo', 'prestaciones', 'tipo_sangre', 'alergias', 'enfermedades',
+    'fecha_baja', 'motivo_baja', 'dias_trabajados_total', 'liquidacion_despido', 'liquidacion_renuncia', 'liquidacion_notas',
+    'liquid_tres_meses', 'liquid_veinte_dias', 'liquid_vacaciones', 'liquid_prima_vacacional', 'liquid_aguinaldo',
+    'renuncia_vacaciones', 'renuncia_prima_vacacional', 'renuncia_aguinaldo'
 ];
 
 if (!in_array($field, $allowedFields)) {
@@ -64,6 +80,19 @@ if (!in_array($field, $allowedFields)) {
     ]);
     exit();
 }
+
+// SQL para agregar las nuevas columnas (ejecutar una vez en phpMyAdmin):
+/*
+ALTER TABLE employee_files
+  ADD COLUMN IF NOT EXISTS liquid_tres_meses DECIMAL(10,2) DEFAULT 0 COMMENT '3 meses de salario para liquidación',
+  ADD COLUMN IF NOT EXISTS liquid_veinte_dias DECIMAL(10,2) DEFAULT 0 COMMENT '20 días por año para liquidación',
+  ADD COLUMN IF NOT EXISTS liquid_vacaciones DECIMAL(10,2) DEFAULT 0 COMMENT 'Vacaciones proporcionales para liquidación',
+  ADD COLUMN IF NOT EXISTS liquid_prima_vacacional DECIMAL(10,2) DEFAULT 0 COMMENT 'Prima vacacional para liquidación',
+  ADD COLUMN IF NOT EXISTS liquid_aguinaldo DECIMAL(10,2) DEFAULT 0 COMMENT 'Aguinaldo para liquidación',
+  ADD COLUMN IF NOT EXISTS renuncia_vacaciones DECIMAL(10,2) DEFAULT 0 COMMENT 'Vacaciones proporcionales para renuncia',
+  ADD COLUMN IF NOT EXISTS renuncia_prima_vacacional DECIMAL(10,2) DEFAULT 0 COMMENT 'Prima vacacional para renuncia',
+  ADD COLUMN IF NOT EXISTS renuncia_aguinaldo DECIMAL(10,2) DEFAULT 0 COMMENT 'Aguinaldo para renuncia';
+*/
 
 // Update employee_files for most fields, executive_report for amounts
 if ($field === 'main_amount' || $field === 'secondary_amount') {

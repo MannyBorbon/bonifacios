@@ -28,7 +28,7 @@ function EventQuote() {
 
   const phoneE164Mx = '526221738884'
 
-  const eventTypes = ['Boda', 'Bautizo', 'Cumpleaños', 'Aniversario', 'Evento Corporativo', 'Graduación', 'Otro']
+  const eventTypes = ['Boda', 'Bautizo', 'Cumpleaños', 'Aniversario', 'Baby Shower', 'Evento Corporativo', 'Graduación', 'Otro']
 
   const addToCart = (item) => {
     setCart(prev => ({

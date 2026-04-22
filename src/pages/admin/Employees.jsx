@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, lazy, Suspense } from 'react';
+import { useState, useEffect, useRef, lazy, Suspense, useCallback } from 'react';
 import 'react-quill-new/dist/quill.snow.css';
 import LocationMap from '../../components/LocationMap';
 import { geocodeAddress } from '../../utils/geo';
@@ -13,1718 +13,1145 @@ function Employees() {
   const [geoLoading, setGeoLoading] = useState(false);
   const [showAddForm, setShowAddForm] = useState(false);
   const [newPerson, setNewPerson] = useState({ 
-    name: '', 
-    email: '', 
-    phone: '', 
-    age: '', 
-    gender: '', 
-    position: '', 
-    experience: '', 
-    currentJob: '', 
-    address: '', 
-    estudios: '',
-    application_date: new Date().toISOString().split('T')[0], 
-    start_date: '' 
+    name: '', email: '', phone: '', age: '', gender: '', position: '', experience: '', currentJob: '', address: '', estudios: '',
+    application_date: new Date().toISOString().split('T')[0], start_date: '' 
   });
   const [showReportModal, setShowReportModal] = useState(null);
   const [reportType, setReportType] = useState('file');
-  const [newReport, setNewReport] = useState({ name: '', content: '', file: null, photo: null });
+  const [newReport, setNewReport] = useState({ name: '', content: '', file: null });
   const [employeeReports, setEmployeeReports] = useState({});
   const [reportViewMode, setReportViewMode] = useState('list');
   const [reportSearch, setReportSearch] = useState('');
   const [imagePreview, setImagePreview] = useState(null);
   const [filterGender, setFilterGender] = useState('all');
   const [filterAge, setFilterAge] = useState('all');
+  const [empTabs, setEmpTabs] = useState({});
+  const [empAttendance, setEmpAttendance] = useState({});
+  const [attendanceLoading, setAttendanceLoading] = useState({});
+  const [payrollPeriodOffset, setPayrollPeriodOffset] = useState({});
+  const [empSchedules, setEmpSchedules] = useState({});
+  const [scheduleDrafts, setScheduleDrafts] = useState({});
+  const [savingSchedule, setSavingSchedule] = useState({});
+  const [todayAttendanceMap, setTodayAttendanceMap] = useState({});
+  const [todayAttendanceByName, setTodayAttendanceByName] = useState({});
+  const [srEmployeeIds, setSrEmployeeIds] = useState([]);
+  const [viewMode, setViewMode] = useState('personal'); // personal | horario | nomina
+  const [scheduleWeekOffset, setScheduleWeekOffset] = useState(0);
+
   const user = JSON.parse(localStorage.getItem('user') || '{}');
   const isAdmin = user.role === 'administrador';
+  
   const dragItem = useRef(null);
   const dragOverItem = useRef(null);
   const [dragging, setDragging] = useState(false);
-
-  // ── Notes (one per employee, auto-save) ────────────────────────────────
-  const [empNotes, setEmpNotes] = useState({});       // { [empId]: { id, content } }
-  const [empNoteSaving, setEmpNoteSaving] = useState({}); // { [empId]: bool }
-  const noteTimers = useRef({});  // debounce timers
-  const noteRefresh = useRef({}); // periodic refresh intervals
+  const [empNotes, setEmpNotes] = useState({});       
+  const [empNoteSaving, setEmpNoteSaving] = useState({}); 
+  const noteTimers = useRef({});  
   const isTouchDevice = typeof window !== 'undefined' && ('ontouchstart' in window || navigator.maxTouchPoints > 0);
 
   const formatMoney = (amount) => {
     const num = parseFloat(amount || 0);
-    return num.toLocaleString('en-US', {
-      minimumFractionDigits: 2,
-      maximumFractionDigits: 2
+    return num.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  };
+
+  const normalizeName = (value) => String(value || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/\s+/g, ' ').trim().toUpperCase();
+  const normalizeEmployeeId = (value) => {
+    const raw = String(value ?? '').trim();
+    if (!raw) return '';
+    return /^\d+$/.test(raw) ? String(parseInt(raw, 10)) : raw;
+  };
+
+  const getLocalDateYmd = () => {
+    const now = new Date();
+    const tzOffsetMs = now.getTimezoneOffset() * 60000;
+    return new Date(now.getTime() - tzOffsetMs).toISOString().slice(0, 10);
+  };
+
+  const getEmpKey = (item) => normalizeEmployeeId(item?.employee_number || item?.id || '');
+  const getWeekIndexFromJsDay = (jsDay) => (jsDay === 0 ? 6 : jsDay - 1);
+
+  const getAttendanceForItem = (item) => {
+    const key = normalizeEmployeeId(item?.employee_number || '');
+    if (key && todayAttendanceMap[key]) return todayAttendanceMap[key];
+    const normalizedName = normalizeName(item?.name);
+    return todayAttendanceByName[normalizedName] || null;
+  };
+
+  const getScheduleForItem = (item) => {
+    const key = getEmpKey(item);
+    if (key && empSchedules[key]) return empSchedules[key];
+    return empSchedules[normalizeName(item?.name)] || {};
+  };
+
+  const getScheduleDraftForItem = (item) => {
+    const key = getEmpKey(item);
+    return scheduleDrafts[key] || scheduleDrafts[normalizeName(item?.name)] || {};
+  };
+
+  const updateScheduleDraft = (item, dayIndex, field, value) => {
+    const key = getEmpKey(item);
+    const nameKey = normalizeName(item?.name);
+    setScheduleDrafts(prev => {
+      const source = prev[key] || prev[nameKey] || {};
+      const next = { ...source, [dayIndex]: { ...(source[dayIndex] || {}), [field]: value } };
+      if (field === 'entry' || field === 'exit') next[dayIndex].is_day_off = !next[dayIndex].entry && !next[dayIndex].exit;
+      return { ...prev, [key]: next, [nameKey]: next };
     });
+  };
+
+  const getPayrollDates = (offsetWeeks = 0) => {
+    const today = new Date();
+    const currentDay = today.getDay(); 
+    const daysToLastThursday = (currentDay >= 4) ? currentDay - 4 : currentDay + 3;
+    const end = new Date(today);
+    end.setDate(today.getDate() - daysToLastThursday + (offsetWeeks * 7));
+    const start = new Date(end); start.setDate(end.getDate() - 6); 
+    return { start: start.toISOString().split('T')[0], end: end.toISOString().split('T')[0], label: `${start.toLocaleDateString('es-MX', {day:'2-digit', month:'short'})} al ${end.toLocaleDateString('es-MX', {day:'2-digit', month:'short'})}` };
+  };
+
+  const calculatePayroll = (attendanceRecords, item) => {
+    const dailyRate = parseFloat(item.daily_salary) || 0;
+    const baseWeekly = dailyRate * 7; 
+    let absences = 0, totalExtraMinutes = 0;
+    attendanceRecords.forEach(rec => {
+      if (rec.status === 'absent') absences++;
+      if (rec.minutes_worked > 480) totalExtraMinutes += (rec.minutes_worked - 480);
+    });
+    const extraHours = Math.floor(totalExtraMinutes / 60);
+    const deduction = absences * dailyRate;
+    const extraPay = extraHours * 50; 
+    return { baseWeekly, absences, extraHours, extraPay, deduction, netPay: baseWeekly - deduction + extraPay };
   };
 
   const loadExecutiveReport = async () => {
     try {
       const response = await fetch(`${import.meta.env.VITE_API_URL}/executive-report/get.php`, { credentials: 'include' });
       const result = await response.json();
-      if (result.success) {
-        setExecutiveReport(result.data || []);
-      }
-    } catch (error) {
-      console.error('Error loading executive report:', error);
-    }
+      if (result.success) setExecutiveReport(result.data || []);
+    } catch (error) { console.error('Error al cargar reporte:', error); }
   };
 
   useEffect(() => {
-    loadExecutiveReport();
-  }, []);
-
-  // Geocode all employee addresses for the general map
-  useEffect(() => {
     if (executiveReport.length === 0) return;
-    let cancelled = false;
     setGeoLoading(true);
     const run = async () => {
-      const markers = [];
-      const coordsMap = {};
+      const markers = []; const coordsMap = {};
       for (const emp of executiveReport) {
-        if (cancelled) return;
         if (emp.address) {
           const coords = await geocodeAddress(emp.address);
           if (coords) {
             coordsMap[emp.id] = coords;
-            const status = emp.status || 'active';
-            const markerColor = status === 'inactive' ? 'red' : status === 'vacation' ? 'orange' : status === 'eventual' ? 'blue' : 'green';
-            const statusLabel = status === 'inactive' ? 'Inactivo' : status === 'vacation' ? 'Vacaciones' : status === 'eventual' ? 'Eventual' : 'Activo';
-            markers.push({
-              lat: coords[0], lng: coords[1], color: markerColor, label: emp.name,
-              popup: `<b>${emp.name}</b><br/>${emp.position || ''}<br/><span style="color: ${markerColor === 'red' ? '#f87171' : markerColor === 'orange' ? '#fb923c' : '#4ade80'}">${statusLabel}</span><br/><small>${emp.address}</small>`
-            });
+            const markerColor = emp.status === 'inactive' ? 'red' : 'green';
+            markers.push({ lat: coords[0], lng: coords[1], color: markerColor, label: emp.name, popup: `<b>${emp.name}</b><br/>${emp.address}` });
           }
         }
       }
-      if (!cancelled) {
-        setEmpCoords(coordsMap);
-        setAllEmpMarkers(markers);
-        setGeoLoading(false);
-      }
+      setEmpCoords(coordsMap); setAllEmpMarkers(markers); setGeoLoading(false);
     };
     run();
-    return () => { cancelled = true; };
   }, [executiveReport]);
 
-  const handlePhotoUpload = async (employeeId, file, photoType = 'profile') => {
-    if (!file) return;
-
-    const formData = new FormData();
-    formData.append('photo', file);
-    formData.append('employee_id', employeeId);
-    formData.append('photo_type', photoType);
-
-    try {
-      const response = await fetch(`${import.meta.env.VITE_API_URL}/employees/upload-photo.php`, {
-        method: 'POST',
-        credentials: 'include',
-        body: formData
-      });
-
-      const result = await response.json();
-      if (result.success) {
-        alert(photoType === 'id' ? 'Identificación subida exitosamente' : 'Foto subida exitosamente');
-        loadExecutiveReport();
-      } else {
-        alert(result.error || 'Error al subir la foto');
-      }
-    } catch (error) {
-      console.error('Error uploading photo:', error);
-      alert('Error al subir la foto');
-    }
-  };
-
-  const _handleDeleteEmployee = async (id, name) => {
-    if (!window.confirm(`¿Estás seguro de eliminar a ${name}? Esta acción no se puede deshacer.`)) {
-      return;
-    }
-
-    try {
-      const response = await fetch(`${import.meta.env.VITE_API_URL}/employees/delete.php`, {
-        method: 'POST',
-        credentials: 'include',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id })
-      });
-
-      const result = await response.json();
-      
-      if (result.success) {
-        alert('Empleado eliminado exitosamente');
-        loadExecutiveReport();
-      } else {
-        alert(result.error || 'Error al eliminar empleado');
-      }
-    } catch (error) {
-      console.error('Error deleting employee:', error);
-      alert('Error al eliminar empleado');
-    }
-  };
-
-  const loadReports = async (employeeId) => {
-    try {
-      const response = await fetch(`${import.meta.env.VITE_API_URL}/employees/get-reports-mysqli.php?employee_id=${employeeId}`, { credentials: 'include' });
-      const result = await response.json();
-      if (result.success) {
-        setEmployeeReports(prev => ({ ...prev, [employeeId]: result.reports || [] }));
-      }
-    } catch (error) {
-      console.error('Error loading reports:', error);
-    }
-  };
-
-  const handleDeleteReport = async (reportId, employeeId) => {
-    if (!window.confirm('¿Eliminar este reporte?')) return;
-    try {
-      const response = await fetch(`${import.meta.env.VITE_API_URL}/employees/delete-report-mysqli.php`, {
-        method: 'POST',
-        credentials: 'include',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ report_id: reportId })
-      });
-      const result = await response.json();
-      if (result.success) {
-        loadReports(employeeId);
-      } else {
-        alert(result.error || 'Error al eliminar reporte');
-      }
-    } catch (error) {
-      console.error('Error deleting report:', error);
-    }
-  };
-
-  
-  const handleUploadReport = async (employeeId) => {
-    if (!newReport.name) {
-      alert('Por favor ingresa un nombre para el reporte');
-      return;
-    }
-    if (reportType === 'file' && !newReport.file) {
-      alert('Por favor selecciona un archivo');
-      return;
-    }
-    if (reportType === 'text' && !newReport.content) {
-      alert('Por favor ingresa contenido para el reporte');
-      return;
-    }
-    try {
-      const formData = new FormData();
-      formData.append('employee_id', employeeId);
-      formData.append('report_name', newReport.name);
-      formData.append('report_type', reportType);
-      if (reportType === 'file') {
-        formData.append('file', newReport.file);
-      } else {
-        formData.append('content', newReport.content);
-      }
-      if (newReport.photo) {
-        formData.append('photo', newReport.photo);
-      }
-      const response = await fetch(`${import.meta.env.VITE_API_URL}/employees/create-report.php`, {
-        method: 'POST',
-        credentials: 'include',
-        body: formData
-      });
-      const result = await response.json();
-      if (result.success) {
-        alert('Reporte creado exitosamente');
-        setShowReportModal(null);
-        setNewReport({ name: '', content: '', file: null, photo: null });
-        setReportType('file');
-        loadReports(employeeId);
-      } else {
-        alert(result.error || 'Error al crear reporte');
-      }
-    } catch (error) {
-      console.error('Error creating report:', error);
-      alert('Error al crear reporte');
-    }
-  };
-
   const handleReportEdit = (id, field, value) => {
-    setEditingReport(prev => ({
-      ...prev,
-      [id]: {
-        ...prev[id],
-        [field]: value
-      }
-    }));
+    setEditingReport(p => ({ ...p, [id]: { ...(p[id] || {}), [field]: value } }));
   };
 
   const saveReportChanges = async (id) => {
-    const changes = editingReport[id];
-    if (!changes) return;
-
+    const changes = editingReport[id]; if (!changes) return;
     try {
-      // Send each field update separately (skip internal flags)
       for (const [field, value] of Object.entries(changes)) {
-        if (field.startsWith('_')) continue;
         await fetch(`${import.meta.env.VITE_API_URL}/executive-report/update.php`, {
-          method: 'POST',
-          credentials: 'include',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            id: id,
-            field: field,
-            value: value
-          })
+          method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ id, field, value })
         });
       }
-      
-      loadExecutiveReport();
-      setEditingReport(prev => {
-        const newState = { ...prev };
-        delete newState[id];
-        return newState;
+      await loadExecutiveReport();
+      setEditingReport(p => { const n = {...p}; delete n[id]; return n; });
+      alert('Datos guardados exitosamente');
+    } catch { alert('Error al guardar los cambios'); }
+  };
+
+  const handlePhotoUpload = async (id, file, type) => {
+    const formData = new FormData();
+    formData.append('photo', file); formData.append('employee_id', id); formData.append('photo_type', type);
+    try {
+      const res = await fetch(`${import.meta.env.VITE_API_URL}/employees/upload-photo.php`, { method: 'POST', credentials: 'include', body: formData });
+      if ((await res.json()).success) { alert('Foto actualizada'); loadExecutiveReport(); }
+    } catch (error) { console.error('Error upload:', error); }
+  };
+
+  const loadAttendance = async (empId, srId, name, offset = 0) => {
+    setAttendanceLoading(p => ({ ...p, [empId]: true }));
+    const dates = getPayrollDates(offset);
+    try {
+      const params = new URLSearchParams({ id: empId, sr_id: srId || '', name: name || '', start: dates.start, end: dates.end });
+      const res = await fetch(`${import.meta.env.VITE_API_URL}/employees/get-attendance.php?${params.toString()}`, { credentials: 'include' });
+      const result = await res.json();
+      if (result.success) { setEmpAttendance(p => ({ ...p, [empId]: result.data })); setPayrollPeriodOffset(p => ({...p, [empId]: offset})); }
+    } catch (error) { console.error('Error attendance:', error); }
+    setAttendanceLoading(p => ({ ...p, [empId]: false }));
+  };
+
+  const loadSchedules = useCallback(async () => {
+    try {
+      const res = await fetch(`${import.meta.env.VITE_API_URL}/employees/attendance-management.php?action=schedules`, { credentials: 'include' });
+      const result = await res.json();
+      if (!result.success) return;
+      const mapped = {};
+      (result.schedules || []).forEach((s) => {
+        const empKey = normalizeEmployeeId(s.employee_id || '');
+        const nameKey = normalizeName(s.employee_name);
+        const day = Number(s.day_of_week);
+        const row = { entry: s.scheduled_start || '', exit: s.scheduled_end || '', is_day_off: Number(s.is_day_off) === 1 || (!s.scheduled_start && !s.scheduled_end) };
+        if (!Number.isNaN(day) && day >= 0 && day <= 6) {
+          if (empKey) { if (!mapped[empKey]) mapped[empKey] = {}; mapped[empKey][day] = row; }
+          if (nameKey) { if (!mapped[nameKey]) mapped[nameKey] = {}; mapped[nameKey][day] = row; }
+        }
       });
-      alert('Cambios guardados exitosamente');
-    } catch (error) {
-      console.error('Error saving report:', error);
-      alert('Error al guardar cambios');
-    }
+      setEmpSchedules(mapped); setScheduleDrafts(mapped);
+    } catch (error) { console.error('Error schedules:', error); }
+  }, []);
+
+  const loadTodayAttendance = useCallback(async () => {
+    const today = getLocalDateYmd();
+    try {
+      const res = await fetch(`${import.meta.env.VITE_API_URL}/employees/attendance-management.php?action=attendance&range=today&date=${today}`, { credentials: 'include' });
+      const result = await res.json();
+      if (!result.success) return;
+      const byId = {}; const byName = {}; const sourceIds = new Set();
+      (result.attendance || []).forEach((row) => {
+        const idKey = normalizeEmployeeId(row.employee_id || '');
+        const nameKey = normalizeName(row.display_name || row.employee_name);
+        if (row.employee_id) sourceIds.add(String(row.employee_id).toUpperCase());
+        if (idKey) byId[idKey] = row;
+        if (nameKey) byName[nameKey] = row;
+      });
+      setTodayAttendanceMap(byId); setTodayAttendanceByName(byName);
+      setSrEmployeeIds(Array.from(sourceIds).sort());
+    } catch (error) { console.error('Error today attendance:', error); }
+  }, []);
+
+  const saveSchedule = async (item) => {
+    const key = getEmpKey(item);
+    const draft = getScheduleDraftForItem(item);
+    if (!key || !draft) return;
+    setSavingSchedule(prev => ({ ...prev, [item.id]: true }));
+    try {
+      const schedules = Array.from({ length: 7 }, (_, day) => ({
+        day_of_week: day, start: draft[day]?.entry || null, end: draft[day]?.exit || null, is_day_off: draft[day]?.is_day_off || (!draft[day]?.entry && !draft[day]?.exit)
+      }));
+      const res = await fetch(`${import.meta.env.VITE_API_URL}/employees/attendance-management.php`, {
+        method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'save_schedule', employee_id: key, employee_name: item.name || '', schedules })
+      });
+      if ((await res.json()).success) { setEmpSchedules(p => ({...p, [key]: draft})); alert('Horario guardado'); }
+    } catch { alert('Error al guardar horario'); }
+    setSavingSchedule(prev => ({ ...prev, [item.id]: false }));
   };
 
-  // ── Drag & Drop (desktop) ───────────────────────────────────────────────
-  const handleDragStart = (index) => {
-    dragItem.current = index;
-    setDragging(true);
+  useEffect(() => {
+    loadExecutiveReport();
+    loadSchedules();
+    loadTodayAttendance();
+    const timer = setInterval(loadTodayAttendance, 60000);
+    return () => clearInterval(timer);
+  }, [loadSchedules, loadTodayAttendance]);
+
+  const loadNotes = async (id) => {
+    try {
+      const res = await fetch(`${import.meta.env.VITE_API_URL}/employees/notes.php?employee_id=${id}`, { credentials: 'include' });
+      const data = await res.json();
+      if (data.success && data.notes?.length > 0) setEmpNotes(p => ({ ...p, [id]: { id: data.notes[0].id, content: data.notes[0].content || '' } }));
+    } catch (error) { console.error('Error loading notes:', error); }
   };
 
-  const handleDragEnter = (index) => {
-    dragOverItem.current = index;
+  const loadReports = async (id) => {
+    try {
+      const res = await fetch(`${import.meta.env.VITE_API_URL}/employees/get-reports-mysqli.php?employee_id=${id}`, { credentials: 'include' });
+      const result = await res.json();
+      if (result.success) {
+        const reports = (result.reports || []).map(r => ({ ...r, file_path: r.file_path?.startsWith('http') ? r.file_path : `${import.meta.env.VITE_API_URL}${r.file_path}` }));
+        setEmployeeReports(p => ({ ...p, [id]: reports }));
+      }
+    } catch (error) { console.error('Error reports:', error); }
+  };
+
+  const handleUploadReport = async (employeeId) => {
+    if (!newReport.name) return alert('El nombre es obligatorio');
+    const formData = new FormData();
+    formData.append('employee_id', employeeId); formData.append('report_name', newReport.name); formData.append('report_type', reportType);
+    if (reportType === 'file' && newReport.file) formData.append('file', newReport.file);
+    else if (reportType === 'text' && newReport.content) formData.append('content', newReport.content);
+    try {
+      const res = await fetch(`${import.meta.env.VITE_API_URL}/employees/upload-report.php`, { method: 'POST', credentials: 'include', body: formData });
+      if ((await res.json()).success) { setShowReportModal(null); setNewReport({name:'', content:'', file:null}); loadReports(employeeId); alert('Reporte guardado'); }
+    } catch { alert('Error al subir'); }
+  };
+
+  const handleNoteChange = (id, content) => {
+    setEmpNotes(p => ({ ...p, [id]: { ...(p[id] || {}), content } }));
+    clearTimeout(noteTimers.current[id]);
+    noteTimers.current[id] = setTimeout(async () => {
+      setEmpNoteSaving(p => ({ ...p, [id]: true }));
+      try {
+        const existingNoteId = noteTimers.current[`note_id_${id}`];
+        const payload = existingNoteId 
+          ? { action: 'update', id: existingNoteId, content, title: 'Nota de administración', color: 'default' }
+          : { action: 'create', employee_id: id, content, title: 'Nota de administración', color: 'default' };
+        const res = await fetch(`${import.meta.env.VITE_API_URL}/employees/notes.php`, { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+        const data = await res.json();
+        if (data.success && data.note?.id) { noteTimers.current[`note_id_${id}`] = data.note.id; setEmpNotes(p => ({ ...p, [id]: { ...(p[id] || {}), id: data.note.id } })); }
+      } catch (error) { console.error(error); }
+      setEmpNoteSaving(p => ({ ...p, [id]: false }));
+    }, 800);
+  };
+
+  const handleAddPerson = async () => {
+    if (!newPerson.name || !newPerson.position) return alert('Nombre y puesto obligatorios');
+    try {
+      const res = await fetch(`${import.meta.env.VITE_API_URL}/executive-report/create.php`, { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(newPerson) });
+      if ((await res.json()).success) { setShowAddForm(false); loadExecutiveReport(); }
+    } catch (error) { console.error('Error create:', error); }
+  };
+
+  const handleDeleteEmployee = async (id, name) => {
+    if (!window.confirm(`¿Eliminar a ${name}?`)) return;
+    try {
+      await fetch(`${import.meta.env.VITE_API_URL}/employees/delete.php`, { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id }) });
+      loadExecutiveReport();
+    } catch (error) { console.error('Error delete:', error); }
   };
 
   const handleDragEnd = async () => {
     setDragging(false);
-    if (dragItem.current === null || dragOverItem.current === null || dragItem.current === dragOverItem.current) {
-      dragItem.current = null;
-      dragOverItem.current = null;
-      return;
-    }
-    const list = [...executiveReport];
-    const [removed] = list.splice(dragItem.current, 1);
-    list.splice(dragOverItem.current, 0, removed);
-    setExecutiveReport(list);
-    dragItem.current = null;
-    dragOverItem.current = null;
-    await persistOrder(list);
-  };
-
-  const handleDragOver = (e) => {
-    e.preventDefault();
-  };
-
-  // ── Move buttons (mobile-friendly) ─────────────────────────────────────
-  const moveItem = async (index, direction) => {
-    const newIndex = index + direction;
-    if (newIndex < 0 || newIndex >= executiveReport.length) return;
-    const list = [...executiveReport];
-    [list[index], list[newIndex]] = [list[newIndex], list[index]];
-    setExecutiveReport(list);
-    await persistOrder(list);
-  };
-
-  const persistOrder = async (list) => {
+    if (dragItem.current === null || dragOverItem.current === null || dragItem.current === dragOverItem.current) return;
+    const items = [...executiveReport];
+    const draggedItem = items[dragItem.current];
+    items.splice(dragItem.current, 1); items.splice(dragOverItem.current, 0, draggedItem);
+    dragItem.current = null; dragOverItem.current = null;
     try {
-      await fetch(`${import.meta.env.VITE_API_URL}/executive-report/reorder.php`, {
-        method: 'POST',
-        credentials: 'include',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ order: list.map(i => i.id) })
-      });
-    } catch (error) {
-      console.error('Error saving order:', error);
-    }
+      const updates = items.map((item, index) => ({ id: item.id, sort_order: index }));
+      await fetch(`${import.meta.env.VITE_API_URL}/employees/reorder.php`, { method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ updates }) });
+      setExecutiveReport(items);
+    } catch (error) { console.error('Error reorder:', error); }
   };
 
-  // per-employee active tab: 'reportes' | 'notas'
-  const [empTabs, setEmpTabs] = useState({});
-
-  const loadEmpNote = async (empId) => {
-    if (empNotes[empId] !== undefined) return; // already loaded
-    try {
-      const res = await fetch(`${import.meta.env.VITE_API_URL}/employees/notes.php?employee_id=${empId}`, { credentials: 'include' });
-      const d = await res.json();
-      const notes = Array.isArray(d.notes) ? d.notes : [];
-      const first = notes[0];
-      setEmpNotes(prev => ({ ...prev, [empId]: first ? { id: first.id, content: first.content || '' } : { id: null, content: '' } }));
-    } catch { /* silent */ }
-  };
-
-  const startNoteRefresh = (empId) => {
-    if (noteRefresh.current[empId]) return;
-    noteRefresh.current[empId] = setInterval(async () => {
-      if (noteTimers.current[empId]) return; // user is typing — skip
-      try {
-        const res = await fetch(`${import.meta.env.VITE_API_URL}/employees/notes.php?employee_id=${empId}`, { credentials: 'include' });
-        const d = await res.json();
-        const notes = Array.isArray(d.notes) ? d.notes : [];
-        const first = notes[0];
-        const serverContent = first?.content || '';
-        setEmpNotes(prev => {
-          if (prev[empId]?.content === serverContent) return prev;
-          return { ...prev, [empId]: { id: first?.id || prev[empId]?.id || null, content: serverContent } };
-        });
-      } catch { /* silent */ }
-    }, 5000);
-  };
-
-  const stopNoteRefresh = (empId) => {
-    clearInterval(noteRefresh.current[empId]);
-    delete noteRefresh.current[empId];
-  };
-
-  const toggleItem = (id) => {
-    const willExpand = !expandedItems[id];
-    setExpandedItems(prev => ({
-      ...prev,
-      [id]: willExpand
-    }));
-    if (willExpand) {
-      if (!employeeReports[id]) loadReports(id);
-    }
-  };
-
-  const handleAddPerson = async () => {
-    if (!newPerson.name || !newPerson.email || !newPerson.phone || !newPerson.position) {
-      alert('Por favor completa los campos requeridos: Nombre, Email, Teléfono y Puesto');
-      return;
-    }
-
-    try {
-      // 1. Create job application with "Aceptada" status
-      const applicationResponse = await fetch(`${import.meta.env.VITE_API_URL}/applications/submit.php`, {
-        method: 'POST',
-        credentials: 'include',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          name: newPerson.name,
-          email: newPerson.email,
-          phone: newPerson.phone,
-          age: newPerson.age || '',
-          gender: newPerson.gender || '',
-          position: newPerson.position,
-          experience: newPerson.experience || '0',
-          currentJob: newPerson.currentJob || '',
-          address: newPerson.address || '',
-          estudios: newPerson.estudios || '',
-          autoAccept: true // Special flag to auto-accept
-        })
-      });
-      const appResult = await applicationResponse.json();
-      
-      if (appResult.success) {
-        // 2. Create executive report entry with amounts
-        const reportResponse = await fetch(`${import.meta.env.VITE_API_URL}/executive-report/create.php`, {
-          method: 'POST',
-          credentials: 'include',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            name: newPerson.name,
-            position: newPerson.position,
-            application_date: newPerson.application_date,
-            start_date: newPerson.start_date
-          })
-        });
-        
-        const reportResult = await reportResponse.json();
-        
-        if (reportResult.success) {
-          alert('Persona agregada exitosamente');
-          loadExecutiveReport();
-          setNewPerson({ name: '', email: '', phone: '', age: '', gender: '', position: '', experience: '', currentJob: '', address: '', estudios: '', application_date: '', start_date: '' });
-          setShowAddForm(false);
-        }
-      }
-    } catch (error) {
-      console.error('Error adding person:', error);
-      alert('Error al agregar persona');
-    }
-  };
-
-  const handleNoteChange = (empId, content) => {
-    setEmpNotes(prev => ({ ...prev, [empId]: { ...(prev[empId] || { id: null }), content } }));
-    clearTimeout(noteTimers.current[empId]);
-    noteTimers.current[empId] = setTimeout(() => {
-      noteTimers.current[empId] = null;
-      saveEmpNote(empId, content);
-    }, 800);
-  };
-
-  const saveEmpNote = async (empId, content) => {
-    setEmpNoteSaving(prev => ({ ...prev, [empId]: true }));
-    try {
-
-      const note = empNotes[empId];
-      const payload = note?.id
-        ? { action: 'update', id: note.id, title: 'Nota', content, color: 'default' }
-        : { action: 'create', employee_id: empId, title: 'Nota', content, color: 'default', created_by_name: user.username };
-      const res = await fetch(`${import.meta.env.VITE_API_URL}/employees/notes.php`, {
-        method: 'POST', credentials: 'include',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
-      });
-      const d = await res.json();
-      if (d.success && !note?.id && d.note?.id) {
-        setEmpNotes(prev => ({ ...prev, [empId]: { id: d.note.id, content } }));
-      }
-    } catch { /* silent */ }
-    finally { setEmpNoteSaving(prev => ({ ...prev, [empId]: false })); }
-  };
-
-  const _handleDelete = async (id) => {
-    if (!window.confirm('¿Estás seguro de eliminar este registro?')) {
-      return;
-    }
-
-    try {
-      const response = await fetch(`${import.meta.env.VITE_API_URL}/executive-report/delete.php`, {
-        method: 'POST',
-        credentials: 'include',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id })
-      });
-      
-      const result = await response.json();
-      if (result.success) {
-        loadExecutiveReport();
-      }
-    } catch (error) {
-      console.error('Error deleting report:', error);
-    }
-  };
+  const activeList = executiveReport.filter(i => (i.status || 'active') !== 'inactive');
+  const inactiveList = executiveReport.filter(i => i.status === 'inactive');
 
   return (
-    <div className="space-y-4 sm:space-y-6">
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+    <div className="space-y-6 p-4 bg-[#030712] min-h-screen text-slate-300">
+      {/* HEADER */}
+      <div className="flex justify-between items-center bg-[#0b1120] p-6 rounded-2xl border border-slate-800 shadow-2xl">
         <div>
-          <h1 className="text-xl sm:text-2xl lg:text-3xl font-light text-white tracking-wide">Personal</h1>
-          <p className="mt-1 text-xs sm:text-sm text-slate-500">
-            {isAdmin ? 'Gestión de personal y acciones' : 'Vista de personal (solo lectura)'}
-          </p>
+          <h1 className="text-3xl font-black text-white tracking-tighter">COLABORADORES</h1>
+          <p className="text-slate-500 text-xs mt-1 uppercase tracking-widest font-bold">Gestión de Expedientes y Liquidaciones</p>
         </div>
-        {isAdmin && (
-          <button
-            onClick={() => setShowAddForm(!showAddForm)}
-            className="rounded-lg border border-cyan-500/25 bg-cyan-500/10 px-3 py-1.5 sm:px-4 sm:py-2 text-xs sm:text-sm text-cyan-400 transition-all hover:bg-cyan-500/20 w-full sm:w-auto"
-          >
-            + Agregar Persona
-          </button>
-        )}
+        {isAdmin && <button onClick={() => setShowAddForm(!showAddForm)} className="bg-cyan-500 text-black px-5 py-2.5 rounded-xl font-black text-xs hover:scale-105 transition-all shadow-lg shadow-cyan-500/20">+ NUEVO INGRESO</button>}
       </div>
 
-      {/* Add new person form - Job Application Format */}
       {showAddForm && (
-        <div className="rounded-2xl border border-cyan-500/15 bg-gradient-to-br from-[#040c1a] to-[#060f20] p-4 sm:p-6 shadow-lg shadow-cyan-500/5">
-          <h3 className="mb-4 text-lg font-light text-white">Agregar Nueva Persona</h3>
-          <div className="grid gap-4 sm:grid-cols-2">
-            {/* Información Personal */}
-            <div>
-              <label className="block text-xs text-cyan-500/60 mb-1">Nombre Completo *</label>
-              <input
-                type="text"
-                placeholder="Nombre completo"
-                value={newPerson.name}
-                onChange={(e) => setNewPerson({...newPerson, name: e.target.value})}
-                className="w-full rounded-lg border border-cyan-500/20 bg-[#030b18]/60 px-3 py-2 text-sm text-slate-200 focus:border-cyan-400/50 focus:outline-none focus:ring-1 focus:ring-cyan-500/15 placeholder:text-slate-700"
-              />
-            </div>
-            
-            <div>
-              <label className="block text-xs text-cyan-500/60 mb-1">Email *</label>
-              <input
-                type="text"
-                placeholder="correo@ejemplo.com"
-                value={newPerson.email}
-                onChange={(e) => setNewPerson({...newPerson, email: e.target.value})}
-                className="w-full rounded-lg border border-cyan-500/20 bg-[#030b18]/60 px-3 py-2 text-sm text-slate-200 focus:border-cyan-400/50 focus:outline-none focus:ring-1 focus:ring-cyan-500/15 placeholder:text-slate-700"
-              />
-            </div>
-            
-            <div>
-              <label className="block text-xs text-cyan-500/60 mb-1">Teléfono *</label>
-              <input
-                type="tel"
-                placeholder="1234567890"
-                value={newPerson.phone}
-                onChange={(e) => setNewPerson({...newPerson, phone: e.target.value})}
-                className="w-full rounded-lg border border-cyan-500/20 bg-[#030b18]/60 px-3 py-2 text-sm text-slate-200 focus:border-cyan-400/50 focus:outline-none focus:ring-1 focus:ring-cyan-500/15 placeholder:text-slate-700"
-              />
-            </div>
-            
-            <div>
-              <label className="block text-xs text-cyan-500/60 mb-1">Edad</label>
-              <input
-                type="number"
-                placeholder="18"
-                value={newPerson.age}
-                onChange={(e) => setNewPerson({...newPerson, age: e.target.value})}
-                className="w-full rounded-lg border border-cyan-500/20 bg-[#030b18]/60 px-3 py-2 text-sm text-slate-200 focus:border-cyan-400/50 focus:outline-none focus:ring-1 focus:ring-cyan-500/15 placeholder:text-slate-700"
-              />
-            </div>
-            
-            <div>
-              <label className="block text-xs text-cyan-500/60 mb-1">Sexo</label>
-              <select
-                value={newPerson.gender}
-                onChange={(e) => setNewPerson({...newPerson, gender: e.target.value})}
-                className="w-full rounded-lg border border-cyan-500/20 bg-[#030b18]/60 px-3 py-2 text-sm text-slate-200 focus:border-cyan-400/50 focus:outline-none focus:ring-1 focus:ring-cyan-500/15 placeholder:text-slate-700"
-              >
-                <option value="">Seleccionar</option>
-                <option value="Masculino">Masculino</option>
-                <option value="Femenino">Femenino</option>
-                <option value="Otro">Otro</option>
-              </select>
-            </div>
-            
-            <div>
-              <label className="block text-xs text-cyan-500/60 mb-1">Puesto Deseado *</label>
-              <input
-                type="text"
-                placeholder="Ej: Mesero, Cocinero"
-                value={newPerson.position}
-                onChange={(e) => setNewPerson({...newPerson, position: e.target.value})}
-                className="w-full rounded-lg border border-cyan-500/20 bg-[#030b18]/60 px-3 py-2 text-sm text-slate-200 focus:border-cyan-400/50 focus:outline-none focus:ring-1 focus:ring-cyan-500/15 placeholder:text-slate-700"
-              />
-            </div>
-            
-            <div>
-              <label className="block text-xs text-cyan-500/60 mb-1">Experiencia (años)</label>
-              <input
-                type="number"
-                placeholder="0"
-                value={newPerson.experience}
-                onChange={(e) => setNewPerson({...newPerson, experience: e.target.value})}
-                className="w-full rounded-lg border border-cyan-500/20 bg-[#030b18]/60 px-3 py-2 text-sm text-slate-200 focus:border-cyan-400/50 focus:outline-none focus:ring-1 focus:ring-cyan-500/15 placeholder:text-slate-700"
-              />
-            </div>
-            
-            <div>
-              <label className="block text-xs text-cyan-500/60 mb-1">Trabajo Actual</label>
-              <input
-                type="text"
-                placeholder="Empresa/negocio actual"
-                value={newPerson.currentJob}
-                onChange={(e) => setNewPerson({...newPerson, currentJob: e.target.value})}
-                className="w-full rounded-lg border border-cyan-500/20 bg-[#030b18]/60 px-3 py-2 text-sm text-slate-200 focus:border-cyan-400/50 focus:outline-none focus:ring-1 focus:ring-cyan-500/15 placeholder:text-slate-700"
-              />
-            </div>
-            
-            <div className="sm:col-span-2">
-              <label className="block text-xs text-cyan-500/60 mb-1">Dirección</label>
-              <input
-                type="text"
-                placeholder="Calle, número, colonia, ciudad"
-                value={newPerson.address}
-                onChange={(e) => setNewPerson({...newPerson, address: e.target.value})}
-                className="w-full rounded-lg border border-cyan-500/20 bg-[#030b18]/60 px-3 py-2 text-sm text-slate-200 focus:border-cyan-400/50 focus:outline-none focus:ring-1 focus:ring-cyan-500/15 placeholder:text-slate-700"
-              />
-            </div>
-            
-            <div className="sm:col-span-2">
-              <label className="block text-xs text-cyan-500/60 mb-1">Estudios</label>
-              <input
-                type="text"
-                placeholder="Nivel de estudios completados"
-                value={newPerson.estudios}
-                onChange={(e) => setNewPerson({...newPerson, estudios: e.target.value})}
-                className="w-full rounded-lg border border-cyan-500/20 bg-[#030b18]/60 px-3 py-2 text-sm text-slate-200 focus:border-cyan-400/50 focus:outline-none focus:ring-1 focus:ring-cyan-500/15 placeholder:text-slate-700"
-              />
-            </div>
-            
-            {/* Fechas */}
-            <div>
-              <label className="block text-xs text-cyan-500/60 mb-1">Fecha de Solicitud</label>
-              <input
-                type="date"
-                value={newPerson.application_date}
-                onChange={(e) => setNewPerson({...newPerson, application_date: e.target.value})}
-                className="w-full rounded-lg border border-cyan-500/20 bg-[#030b18]/60 px-3 py-2 text-sm text-slate-200 focus:border-cyan-400/50 focus:outline-none focus:ring-1 focus:ring-cyan-500/15 placeholder:text-slate-700"
-              />
-            </div>
-            
-            <div>
-              <label className="block text-xs text-cyan-500/60 mb-1">Fecha de Inicio de Labores</label>
-              <input
-                type="date"
-                value={newPerson.start_date}
-                onChange={(e) => setNewPerson({...newPerson, start_date: e.target.value})}
-                className="w-full rounded-lg border border-cyan-500/20 bg-[#030b18]/60 px-3 py-2 text-sm text-slate-200 focus:border-cyan-400/50 focus:outline-none focus:ring-1 focus:ring-cyan-500/15 placeholder:text-slate-700"
-              />
-            </div>
-          </div>
-          
-          <div className="mt-4 flex gap-2">
-            <button
-              onClick={handleAddPerson}
-              className="flex-1 rounded-lg border border-cyan-500/25 bg-cyan-500/10 px-4 py-2 text-sm text-cyan-400 transition-all hover:bg-cyan-500/20"
-            >
-              Guardar y Agregar
-            </button>
-            <button
-              onClick={() => {
-                setShowAddForm(false);
-                setNewPerson({ name: '', email: '', phone: '', age: '', gender: '', position: '', experience: '', currentJob: '', address: '', estudios: '', application_date: new Date().toISOString().split('T')[0], start_date: '' });
-              }}
-              className="rounded-lg border border-slate-700/40 bg-[#040c1a]/60 px-4 py-2 text-sm text-slate-500 transition-all hover:text-slate-300"
-            >
-              Cancelar
-            </button>
+        <div className="bg-[#040c1a] border border-cyan-500/20 p-6 rounded-2xl animate-in fade-in duration-300">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <input type="text" placeholder="Nombre completo" value={newPerson.name} onChange={e => setNewPerson({...newPerson, name: e.target.value})} className="bg-black/40 border border-slate-800 p-3 rounded-xl text-white outline-none focus:border-cyan-500 text-sm" />
+            <input type="text" placeholder="Puesto" value={newPerson.position} onChange={e => setNewPerson({...newPerson, position: e.target.value})} className="bg-black/40 border border-slate-800 p-3 rounded-xl text-white outline-none focus:border-cyan-500 text-sm" />
+            <input type="date" value={newPerson.start_date} onChange={e => setNewPerson({...newPerson, start_date: e.target.value})} className="bg-black/40 border border-slate-800 p-3 rounded-xl text-white outline-none focus:border-cyan-500 text-sm" />
+            <button onClick={handleAddPerson} className="md:col-span-3 bg-cyan-500/20 text-cyan-400 py-3 rounded-xl font-bold border border-cyan-500/30 hover:bg-cyan-500/30">DAR DE ALTA</button>
           </div>
         </div>
       )}
 
-      {/* Filter bar */}
-      <div className="mb-4 flex flex-wrap items-center gap-2 sm:gap-3 rounded-xl border border-cyan-500/10 bg-[#040c1a]/60 px-3 py-2.5 sm:px-4 sm:py-3">
-        <span className="text-xs text-cyan-500/50 mr-1">Filtros:</span>
-        <select
-          value={filterGender}
-          onChange={(e) => setFilterGender(e.target.value)}
-          className="rounded-lg border border-cyan-500/15 bg-[#030b18]/60 px-2.5 py-1.5 text-xs text-slate-300 focus:border-cyan-400/40 focus:outline-none"
-        >
-          <option value="all">Todos los sexos</option>
-          <option value="Masculino">Masculino</option>
-          <option value="Femenino">Femenino</option>
-          <option value="Otro">Otro</option>
-        </select>
-        <select
-          value={filterAge}
-          onChange={(e) => setFilterAge(e.target.value)}
-          className="rounded-lg border border-cyan-500/15 bg-[#030b18]/60 px-2.5 py-1.5 text-xs text-slate-300 focus:border-cyan-400/40 focus:outline-none"
-        >
-          <option value="all">Todas las edades</option>
-          <option value="18-35">18 - 35 años</option>
-          <option value="36-54">36 - 54 años</option>
-          <option value="55-80">55 - 80 años</option>
-        </select>
-        {(filterGender !== 'all' || filterAge !== 'all') && (
-          <button
-            onClick={() => { setFilterGender('all'); setFilterAge('all'); }}
-            className="rounded-lg bg-[#040c1a]/60 border border-slate-700/30 px-2.5 py-1.5 text-[10px] text-slate-500 hover:text-slate-300 transition-colors"
-          >
-            Limpiar filtros
+      {/* MENU SUPERIOR: MODO DE VISTA */}
+      <div className="flex gap-2 bg-[#040c1a] p-2 rounded-2xl border border-slate-800">
+        {[
+          { id: 'personal', label: 'Personal', icon: '👥' },
+          { id: 'horario',  label: 'Horario',  icon: '📅' },
+          { id: 'nomina',   label: 'Nómina',   icon: '💰' },
+        ].map(v => (
+          <button key={v.id} onClick={() => setViewMode(v.id)} className={`flex-1 py-3 rounded-xl text-[11px] font-black uppercase tracking-widest transition-all ${viewMode === v.id ? 'bg-cyan-500 text-black shadow-lg shadow-cyan-500/20' : 'text-slate-400 hover:bg-white/5'}`}>
+            <span className="mr-2">{v.icon}</span>{v.label}
           </button>
-        )}
+        ))}
       </div>
 
-      {/* Section: Empleados Activos / Vacaciones */}
-      <div className="mb-2 flex items-center gap-3">
-        <div className="flex items-center gap-2">
-          <span className="h-2.5 w-2.5 rounded-full bg-green-500" />
-          <h2 className="text-base sm:text-lg font-light text-white">Empleados Activos</h2>
-        </div>
-        <span className="text-[10px] text-slate-600">
-          {executiveReport.filter(item => {
-            const s = item.status || 'active';
-            if (s !== 'active' && s !== 'vacation' && s !== 'eventual') return false;
-            const genderMatch = filterGender === 'all' || (item.gender || '') === filterGender;
-            const age = parseInt(item.age);
-            const ageMatch = filterAge === 'all' || (filterAge === '18-35' && age >= 18 && age <= 35) || (filterAge === '36-54' && age >= 36 && age <= 54) || (filterAge === '55-80' && age >= 55 && age <= 80);
-            return genderMatch && (isNaN(age) ? filterAge === 'all' : ageMatch);
-          }).length} empleados
-        </span>
+      {viewMode === 'personal' && (<>
+      {/* FILTROS */}
+      <div className="flex gap-4 bg-[#040c1a] p-4 rounded-xl border border-slate-800">
+        <select value={filterGender} onChange={e => setFilterGender(e.target.value)} className="bg-black/40 text-slate-300 text-xs p-2 rounded-lg border border-slate-700 outline-none">
+          <option value="all">Género: Todos</option><option value="Masculino">Masculino</option><option value="Femenino">Femenino</option>
+        </select>
+        <select value={filterAge} onChange={e => setFilterAge(e.target.value)} className="bg-black/40 text-slate-300 text-xs p-2 rounded-lg border border-slate-700 outline-none">
+          <option value="all">Edad: Todas</option><option value="18-35">18-35 años</option><option value="36-54">36-54 años</option><option value="55-80">55+ años</option>
+        </select>
       </div>
-      <div className="space-y-3">
-        {executiveReport.filter(item => {
-          const s = item.status || 'active';
-          if (s !== 'active' && s !== 'vacation') return false;
-          const genderMatch = filterGender === 'all' || (item.gender || '') === filterGender;
-          const age = parseInt(item.age);
-          const ageMatch = filterAge === 'all' || (filterAge === '18-35' && age >= 18 && age <= 35) || (filterAge === '36-54' && age >= 36 && age <= 54) || (filterAge === '55-80' && age >= 55 && age <= 80);
-          return genderMatch && (isNaN(age) ? filterAge === 'all' : ageMatch);
-        }).map((item, index) => (
-          <div
-            key={item.id}
-            draggable={isAdmin && !isTouchDevice}
-            onDragStart={() => handleDragStart(index)}
-            onDragEnter={() => handleDragEnter(index)}
-            onDragEnd={handleDragEnd}
-            onDragOver={handleDragOver}
-            className={`rounded-xl border border-cyan-500/15 bg-gradient-to-br from-[#040c1a] to-[#060f20] overflow-hidden shadow-xl shadow-cyan-500/5 transition-all ${
-              dragging ? 'cursor-grabbing' : ''
-            }`}
-          >
-            <div
-              onClick={() => toggleItem(item.id)}
-              className="flex cursor-pointer items-center justify-between px-3 py-2 sm:p-4 transition-all hover:bg-cyan-500/5"
-            >
-              {/* Drag handle (desktop) + move buttons (mobile) */}
-              {isAdmin && (
-                <div className="flex-shrink-0 mr-2 sm:mr-3 flex items-center gap-0.5">
-                  <div className="hidden sm:block cursor-grab active:cursor-grabbing text-cyan-500/20 hover:text-cyan-400/50 transition-colors" onMouseDown={(e) => e.stopPropagation()} title="Arrastra para reordenar">
-                    <svg className="h-5 w-5" fill="currentColor" viewBox="0 0 24 24">
-                      <circle cx="9" cy="6" r="1.5" /><circle cx="15" cy="6" r="1.5" />
-                      <circle cx="9" cy="12" r="1.5" /><circle cx="15" cy="12" r="1.5" />
-                      <circle cx="9" cy="18" r="1.5" /><circle cx="15" cy="18" r="1.5" />
-                    </svg>
+
+      {/* RESUMEN ESTADO ACTUAL */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+        {(() => {
+          const now = new Date();
+          const todayIndex = getWeekIndexFromJsDay(now.getDay());
+          const working = activeList.filter(item => { const att = getAttendanceForItem(item); return Boolean(att?.clock_in) && !att?.clock_out; }).length;
+          const scheduled = activeList.filter(item => { const sch = getScheduleForItem(item)?.[todayIndex]; return sch && !sch.is_day_off; }).length;
+          const late = activeList.filter(item => {
+            const sch = getScheduleForItem(item)?.[todayIndex]; const att = getAttendanceForItem(item);
+            if (!sch || sch.is_day_off || !sch.entry) return false;
+            if (att?.clock_in) return false;
+            const [eH, eM] = sch.entry.split(':').map(Number);
+            const eT = new Date(); eT.setHours(eH, eM, 0, 0);
+            return now > eT;
+          }).length;
+          const off = activeList.filter(item => { const sch = getScheduleForItem(item)?.[todayIndex]; const att = getAttendanceForItem(item); if (att?.clock_in) return false; return !sch || sch.is_day_off; }).length;
+          
+          return [
+            { label: 'Trabajando', count: working, color: 'green', icon: 'ACT' },
+            { label: 'Programados', count: scheduled, color: 'blue', icon: 'PROG' },
+            { label: 'Tarde/Ausentes', count: late, color: 'red', icon: 'TARDE' },
+            { label: 'Descanso', count: off, color: 'slate', icon: 'DESC' }
+          ].map(stat => (
+            <div key={stat.label} className={`bg-[#040c1a] border border-${stat.color}-500/20 p-4 rounded-xl text-center`}>
+              <div className={`text-2xl mb-1 text-${stat.color}-400`}>{stat.icon}</div>
+              <div className={`text-xl font-bold text-${stat.color}-400`}>{stat.count}</div>
+              <div className="text-[9px] text-slate-400 uppercase">{stat.label}</div>
+            </div>
+          ));
+        })()}
+      </div>
+
+      {/* LISTA ACTIVA */}
+      <div className="grid grid-cols-1 gap-4">
+        {activeList.map((item, index) => {
+          const expanded = expandedItems[item.id];
+          const activeTab = empTabs[item.id] || 'nomina';
+          const payroll = calculatePayroll(empAttendance[item.id] || [], item);
+          const attendance = getAttendanceForItem(item);
+
+          return (
+            <div key={item.id} 
+                 draggable={isAdmin && !isTouchDevice} 
+                 onDragStart={() => { dragItem.current = index; setDragging(true); }}
+                 onDragEnter={() => { dragOverItem.current = index; }}
+                 onDragEnd={handleDragEnd}
+                 onDragOver={(e) => e.preventDefault()}
+                 className={`bg-[#0b1120] border border-slate-800 rounded-2xl overflow-hidden shadow-xl transition-all ${dragging ? 'opacity-50' : ''}`}>
+              <div onClick={() => setExpandedItems(p => ({...p, [item.id]: !expanded}))} className="p-5 flex justify-between items-center cursor-pointer hover:bg-white/[0.02]">
+                <div className="flex items-center gap-4">
+                  <div className="w-12 h-12 rounded-full overflow-hidden border-2 border-slate-700 bg-slate-800">
+                    {item.photo ? <img src={item.photo} className="w-full h-full object-cover" alt="" /> : <div className="h-full flex items-center justify-center opacity-20">👤</div>}
                   </div>
-                  <div className="flex sm:hidden flex-col gap-0.5">
-                    <button onClick={(e) => { e.stopPropagation(); moveItem(index, -1); }} disabled={index === 0}
-                      className="p-0.5 rounded text-cyan-500/30 hover:text-cyan-400 disabled:opacity-20 transition-colors">
-                      <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M5 15l7-7 7 7" /></svg>
-                    </button>
-                    <button onClick={(e) => { e.stopPropagation(); moveItem(index, 1); }} disabled={index === executiveReport.length - 1}
-                      className="p-0.5 rounded text-cyan-500/30 hover:text-cyan-400 disabled:opacity-20 transition-colors">
-                      <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M19 9l-7 7-7-7" /></svg>
-                    </button>
+                  <div>
+                    <h3 className="text-white font-bold text-base">{item.name}</h3>
+                    <div className="flex items-center gap-2 mt-0.5">
+                      <span className={`w-1.5 h-1.5 rounded-full ${attendance?.clock_in && !attendance?.clock_out ? 'bg-green-500 animate-pulse' : 'bg-slate-600'}`} />
+                      <p className="text-[10px] text-slate-500 font-bold uppercase tracking-wider">{item.position} • {attendance?.clock_in ? 'En Turno' : 'Fuera'}</p>
+                    </div>
                   </div>
                 </div>
-              )}
-              <div className="flex-1 min-w-0">
-                <div className="flex flex-wrap items-center gap-2 mb-1">
-                  <span className={`h-2 w-2 rounded-full flex-shrink-0 ${
-                    (item.status || 'active') === 'active' ? 'bg-green-500' :
-                    item.status === 'vacation' ? 'bg-amber-400' :
-                    item.status === 'eventual' ? 'bg-blue-400' : 'bg-red-400'
-                  }`} title={item.status === 'inactive' ? 'Inactivo' : item.status === 'vacation' ? 'Vacaciones' : item.status === 'eventual' ? 'Eventual' : 'Activo'} />
-                  <h3 className={`text-sm sm:text-base font-medium truncate ${item.status === 'inactive' ? 'text-slate-600' : 'text-slate-200'}`}>{item.name}</h3>
-                  <span className="rounded-full bg-cyan-500/10 border border-cyan-500/20 px-2 py-0.5 text-xs text-cyan-400">
-                    {item.position || 'Sin posición'}
-                  </span>
+                <div className="flex items-center gap-6">
+                  <div className="text-right">
+                    <p className="text-[9px] text-slate-500 font-black uppercase">Neto Semanal</p>
+                    <p className="text-lg font-black text-emerald-400">${formatMoney(payroll.netPay)}</p>
+                  </div>
+                  <span className={`text-slate-600 transform transition-transform ${expanded ? 'rotate-180' : ''}`}>▼</span>
                 </div>
-                <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-400">
-                  {item.main_amount > 0 || item.secondary_amount > 0 ? (
-                    <span>
-                      ${formatMoney(item.main_amount)} / ${formatMoney(item.secondary_amount)}
-                    </span>
-                  ) : (
-                    <span>
-                      Inicio: {item.start_date || 'Pendiente'}
-                    </span>
+              </div>
+
+              {expanded && (
+                <div className="p-6 bg-black/40 border-t border-slate-800 animate-in slide-in-from-top-2 duration-200">
+                  <div className="flex gap-2 mb-6 border-b border-slate-800 overflow-x-auto pb-px">
+                    {['info', 'horario', 'nomina', 'reportes', 'notas'].map(t => (
+                      <button key={t} onClick={() => {
+                        setEmpTabs(p => ({...p, [item.id]: t}));
+                        if(t === 'nomina') loadAttendance(item.id, item.employee_number, item.name);
+                        if(t === 'reportes') loadReports(item.id);
+                        if(t === 'notas') loadNotes(item.id);
+                      }} className={`px-5 py-2.5 text-[10px] font-black uppercase tracking-widest transition-all ${activeTab === t ? 'text-cyan-400 border-b-2 border-cyan-400' : 'text-slate-500 hover:text-slate-300'}`}>
+                        {t === 'nomina' ? 'Liquidación / Nómina' : t}
+                      </button>
+                    ))}
+                  </div>
+
+                  {activeTab === 'nomina' && (
+                    <div className="space-y-6">
+                      <div className="bg-red-500/5 border border-red-500/20 p-6 rounded-2xl">
+                        <div className="flex justify-between items-center mb-6">
+                          <h4 className="text-red-400 text-xs font-black uppercase tracking-widest">Cálculos de Salida y Liquidación</h4>
+                          <span className="text-[10px] text-slate-500 font-mono">Antigüedad: {(() => {
+                            const inicio = item.hire_date || item.start_date;
+                            if(!inicio) return 'No definida';
+                            const anios = Math.max(0, (new Date() - new Date(inicio)) / (1000 * 60 * 60 * 24 * 365.25));
+                            const aniosE = Math.floor(anios);
+                            return `${aniosE} años ${Math.round((anios - aniosE) * 12)} meses`;
+                          })()}</span>
+                        </div>
+                        
+                        {(() => {
+                          const salario = parseFloat(editingReport[item.id]?.daily_salary ?? item.daily_salary ?? 0);
+                          const inicio = item.hire_date || item.start_date;
+                          const aniosEnteros = inicio ? Math.floor(Math.max(0, (new Date() - new Date(inicio)) / (1000 * 60 * 60 * 24 * 365.25))) : 0;
+                          
+                          const base_tresMeses = salario * 90;
+                          const base_veinteDias = salario * 20 * aniosEnteros;
+                          const base_vacaciones = aniosEnteros >= 1 ? salario * (6 + Math.floor((aniosEnteros - 1) / 2) * 2) : 0;
+                          const base_prima = base_vacaciones * 0.25;
+                          const base_aguinaldo = salario * 15;
+
+                          const getVal = (field, baseVal) => {
+                            const edited = editingReport[item.id]?.[field];
+                            if (edited !== undefined && edited !== '') return parseFloat(edited) || 0;
+                            if (edited === '') return 0;
+                            const dbVal = item[field];
+                            if (dbVal !== undefined && dbVal !== null && dbVal !== '') return parseFloat(dbVal) || 0;
+                            return baseVal;
+                          };
+
+                          const d_3m = getVal('liquid_tres_meses', base_tresMeses);
+                          const d_20d = getVal('liquid_veinte_dias', base_veinteDias);
+                          const d_vac = getVal('liquid_vacaciones', base_vacaciones);
+                          const d_prima = getVal('liquid_prima_vacacional', base_prima);
+                          const d_agui = getVal('liquid_aguinaldo', base_aguinaldo);
+                          const totalDespido = d_3m + d_20d + d_vac + d_prima + d_agui;
+
+                          const r_vac = getVal('renuncia_vacaciones', base_vacaciones);
+                          const r_prima = getVal('renuncia_prima_vacacional', base_prima);
+                          const r_agui = getVal('renuncia_aguinaldo', base_aguinaldo);
+                          const totalRenuncia = r_vac + r_prima + r_agui;
+
+                          return (
+                            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                              <div className="bg-red-950/30 rounded-xl p-4 border border-red-900/20 space-y-3">
+                                <p className="text-[10px] text-red-400 font-black uppercase tracking-widest mb-4">Por Despido (Art. 50 LFT)</p>
+                                <div className="flex justify-between items-center text-[10px]">
+                                  <span className="text-slate-400">3 meses de salario</span>
+                                  <input type="number" value={editingReport[item.id]?.liquid_tres_meses ?? item.liquid_tres_meses ?? ''} onChange={e => handleReportEdit(item.id, 'liquid_tres_meses', e.target.value)} className="bg-black/40 border border-slate-600 text-white w-24 px-2 py-1 rounded outline-none focus:border-red-400 text-right" placeholder={base_tresMeses.toFixed(2)} />
+                                </div>
+                                <div className="flex justify-between items-center text-[10px]">
+                                  <span className="text-slate-400">20 días × año</span>
+                                  <input type="number" value={editingReport[item.id]?.liquid_veinte_dias ?? item.liquid_veinte_dias ?? ''} onChange={e => handleReportEdit(item.id, 'liquid_veinte_dias', e.target.value)} className="bg-black/40 border border-slate-600 text-white w-24 px-2 py-1 rounded outline-none focus:border-red-400 text-right" placeholder={base_veinteDias.toFixed(2)} />
+                                </div>
+                                <div className="flex justify-between items-center text-[10px]">
+                                  <span className="text-slate-400">Vacaciones proporcionales</span>
+                                  <input type="number" value={editingReport[item.id]?.liquid_vacaciones ?? item.liquid_vacaciones ?? ''} onChange={e => handleReportEdit(item.id, 'liquid_vacaciones', e.target.value)} className="bg-black/40 border border-slate-600 text-white w-24 px-2 py-1 rounded outline-none focus:border-red-400 text-right" placeholder={base_vacaciones.toFixed(2)} />
+                                </div>
+                                <div className="flex justify-between items-center text-[10px]">
+                                  <span className="text-slate-400">Prima vacacional (25%)</span>
+                                  <input type="number" value={editingReport[item.id]?.liquid_prima_vacacional ?? item.liquid_prima_vacacional ?? ''} onChange={e => handleReportEdit(item.id, 'liquid_prima_vacacional', e.target.value)} className="bg-black/40 border border-slate-600 text-white w-24 px-2 py-1 rounded outline-none focus:border-red-400 text-right" placeholder={base_prima.toFixed(2)} />
+                                </div>
+                                <div className="flex justify-between items-center text-[10px]">
+                                  <span className="text-slate-400">Aguinaldo (15 días)</span>
+                                  <input type="number" value={editingReport[item.id]?.liquid_aguinaldo ?? item.liquid_aguinaldo ?? ''} onChange={e => handleReportEdit(item.id, 'liquid_aguinaldo', e.target.value)} className="bg-black/40 border border-slate-600 text-white w-24 px-2 py-1 rounded outline-none focus:border-red-400 text-right" placeholder={base_aguinaldo.toFixed(2)} />
+                                </div>
+                                <div className="flex justify-between text-xs font-black border-t border-red-900/30 pt-3 mt-2">
+                                  <span className="text-red-300">TOTAL DESPIDO</span>
+                                  <span className="text-red-300 text-lg">${formatMoney(totalDespido)}</span>
+                                </div>
+                              </div>
+
+                              <div className="bg-orange-950/20 rounded-xl p-4 border border-orange-900/20 space-y-3">
+                                <p className="text-[10px] text-orange-400 font-black uppercase tracking-widest mb-4">Por Renuncia (Art. 48 LFT)</p>
+                                <div className="flex justify-between items-center text-[10px]">
+                                  <span className="text-slate-400">Vacaciones proporcionales</span>
+                                  <input type="number" value={editingReport[item.id]?.renuncia_vacaciones ?? item.renuncia_vacaciones ?? ''} onChange={e => handleReportEdit(item.id, 'renuncia_vacaciones', e.target.value)} className="bg-black/40 border border-slate-600 text-white w-24 px-2 py-1 rounded outline-none focus:border-orange-400 text-right" placeholder={base_vacaciones.toFixed(2)} />
+                                </div>
+                                <div className="flex justify-between items-center text-[10px]">
+                                  <span className="text-slate-400">Prima vacacional (25%)</span>
+                                  <input type="number" value={editingReport[item.id]?.renuncia_prima_vacacional ?? item.renuncia_prima_vacacional ?? ''} onChange={e => handleReportEdit(item.id, 'renuncia_prima_vacacional', e.target.value)} className="bg-black/40 border border-slate-600 text-white w-24 px-2 py-1 rounded outline-none focus:border-orange-400 text-right" placeholder={base_prima.toFixed(2)} />
+                                </div>
+                                <div className="flex justify-between items-center text-[10px]">
+                                  <span className="text-slate-400">Aguinaldo (15 días)</span>
+                                  <input type="number" value={editingReport[item.id]?.renuncia_aguinaldo ?? item.renuncia_aguinaldo ?? ''} onChange={e => handleReportEdit(item.id, 'renuncia_aguinaldo', e.target.value)} className="bg-black/40 border border-slate-600 text-white w-24 px-2 py-1 rounded outline-none focus:border-orange-400 text-right" placeholder={base_aguinaldo.toFixed(2)} />
+                                </div>
+                                <div className="flex justify-between text-xs font-black border-t border-orange-900/30 pt-3 mt-2">
+                                  <span className="text-orange-300">TOTAL RENUNCIA</span>
+                                  <span className="text-orange-300 text-lg">${formatMoney(totalRenuncia)}</span>
+                                </div>
+                              </div>
+                            </div>
+                          );
+                        })()}
+                        <button onClick={() => saveReportChanges(item.id)} className="w-full mt-6 bg-red-600 text-white py-4 rounded-2xl font-black text-xs uppercase tracking-widest shadow-xl shadow-red-900/20 hover:bg-red-500 transition-all">ACTUALIZAR LIQUIDACIÓN EN BASE DE DATOS</button>
+                      </div>
+
+                      <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
+                        <div className="bg-[#0b1120] border border-slate-800 p-5 rounded-2xl">
+                          <div className="flex justify-between items-center mb-4 border-b border-slate-800 pb-2">
+                            <div>
+                              <p className="text-[10px] text-slate-500 font-black uppercase">Resumen Semanal</p>
+                              <p className="text-[9px] text-slate-600 mt-0.5">{getPayrollDates(payrollPeriodOffset[item.id] || 0).label}</p>
+                            </div>
+                            <div className="flex gap-1">
+                               <button onClick={() => loadAttendance(item.id, item.employee_number, item.name, (payrollPeriodOffset[item.id] || 0) - 1)} className="text-[8px] bg-slate-800 px-2 py-1 rounded hover:bg-cyan-500 hover:text-black" title="Semana anterior">←</button>
+                               <button onClick={() => loadAttendance(item.id, item.employee_number, item.name, 0)} className="text-[8px] bg-slate-800 px-2 py-1 rounded hover:bg-cyan-500 hover:text-black" title="Semana actual">HOY</button>
+                               <button onClick={() => loadAttendance(item.id, item.employee_number, item.name, (payrollPeriodOffset[item.id] || 0) + 1)} className="text-[8px] bg-slate-800 px-2 py-1 rounded hover:bg-cyan-500 hover:text-black" title="Semana siguiente">→</button>
+                            </div>
+                          </div>
+                          <div className="space-y-3">
+                            <div className="flex justify-between text-xs"><span>Sueldo Base (7d)</span><span className="text-white font-mono">${formatMoney(payroll.baseWeekly)}</span></div>
+                            <div className="flex justify-between text-xs text-red-400"><span>Faltas ({payroll.absences})</span><span className="font-mono">-${formatMoney(payroll.deduction)}</span></div>
+                            <div className="flex justify-between text-xs text-cyan-400"><span>Bonos/Extras</span><span className="font-mono">+${formatMoney(payroll.extraPay)}</span></div>
+                            <div className="pt-3 border-t border-slate-800 flex justify-between font-black text-white text-base"><span>PAGO NETO</span><span className="text-emerald-400 font-mono">${formatMoney(payroll.netPay)}</span></div>
+                          </div>
+                        </div>
+                        <div className="lg:col-span-2 space-y-2 max-h-52 overflow-y-auto pr-2 custom-scrollbar">
+                          {attendanceLoading[item.id] ? <div className="py-20 text-center animate-pulse text-[10px] text-slate-600 font-black">SINCRONIZANDO RELOJ...</div> : 
+                            (empAttendance[item.id] || []).map((r, i) => (
+                              <div key={i} className="flex justify-between items-center p-3 bg-white/[0.02] border border-white/[0.05] rounded-xl">
+                                <span className="text-[10px] font-black text-slate-400 uppercase">{new Date(r.date+'T00:00:00').toLocaleDateString('es-MX', {weekday:'short', day:'2-digit'})}</span>
+                                <span className="text-[10px] font-mono text-slate-500">{r.clock_in?.split(' ')[1]?.substring(0,5) || '--:--'} - {r.clock_out?.split(' ')[1]?.substring(0,5) || '--:--'}</span>
+                                <span className={`text-[8px] font-black px-2 py-1 rounded-lg ${r.status === 'present' ? 'bg-green-500/10 text-green-400 border border-green-500/20' : 'bg-red-500/10 text-red-400 border border-red-500/20'}`}>{r.status.toUpperCase()}</span>
+                              </div>
+                            ))
+                          }
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {activeTab === 'info' && (
+                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 animate-in slide-in-from-bottom-2 duration-300">
+                      <div className="space-y-4">
+                        {/* DATOS GENERALES */}
+                        <div className="bg-black/20 p-5 rounded-2xl border border-slate-800 space-y-4">
+                          <p className="text-[10px] text-cyan-400 font-black uppercase tracking-widest border-b border-slate-800 pb-2">Datos Generales</p>
+                          <div><label className="text-[8px] text-slate-500 font-black uppercase mb-1 block">Nombre Completo</label>
+                            <input type="text" value={editingReport[item.id]?.name ?? item.name ?? ''} onChange={e => handleReportEdit(item.id, 'name', e.target.value)} className="w-full bg-transparent border-b border-slate-700 text-white text-sm py-1 focus:border-cyan-500 outline-none" />
+                          </div>
+                          <div className="grid grid-cols-2 gap-4">
+                            <div><label className="text-[8px] text-slate-500 font-black uppercase mb-1 block">Puesto</label>
+                              <input type="text" value={editingReport[item.id]?.position ?? item.position ?? ''} onChange={e => handleReportEdit(item.id, 'position', e.target.value)} className="w-full bg-transparent border-b border-slate-700 text-white text-sm py-1 focus:border-cyan-500 outline-none" />
+                            </div>
+                            <div><label className="text-[8px] text-slate-500 font-black uppercase mb-1 block">Sueldo Diario</label>
+                              <input type="number" value={editingReport[item.id]?.daily_salary ?? item.daily_salary ?? ''} onChange={e => handleReportEdit(item.id, 'daily_salary', e.target.value)} className="w-full bg-transparent border-b border-slate-700 text-white text-sm py-1 focus:border-cyan-500 outline-none" />
+                            </div>
+                          </div>
+                          <div className="grid grid-cols-2 gap-4">
+                            <div><label className="text-[8px] text-slate-500 font-black uppercase mb-1 block">ID SoftRestaurant</label>
+                              <input type="text" value={editingReport[item.id]?.employee_number ?? item.employee_number ?? ''} onChange={e => handleReportEdit(item.id, 'employee_number', e.target.value.toUpperCase())} className="w-full bg-transparent border-b border-slate-700 text-white text-sm py-1 focus:border-cyan-500 outline-none" list="sr-id-options" />
+                              <datalist id="sr-id-options">{srEmployeeIds.map((srId) => (<option key={srId} value={srId} />))}</datalist>
+                            </div>
+                            <div><label className="text-[8px] text-slate-500 font-black uppercase mb-1 block">Contratación</label>
+                              <input type="date" value={editingReport[item.id]?.hire_date ?? item.hire_date ?? ''} onChange={e => handleReportEdit(item.id, 'hire_date', e.target.value)} className="w-full bg-transparent border-b border-slate-700 text-white text-sm py-1 focus:border-cyan-500 outline-none" />
+                            </div>
+                          </div>
+                          <div className="bg-black/40 p-3 rounded-xl border border-slate-700 flex items-center gap-3">
+                            <label className="text-[9px] text-slate-500 font-black uppercase">Foto:</label>
+                            <input type="file" onChange={e => e.target.files[0] && handlePhotoUpload(item.id, e.target.files[0], 'profile')} className="text-[9px] text-cyan-400 flex-1" />
+                          </div>
+                        </div>
+
+                        {/* CONTACTO */}
+                        <div className="bg-black/20 p-5 rounded-2xl border border-slate-800 space-y-4">
+                          <p className="text-[10px] text-cyan-400 font-black uppercase tracking-widest border-b border-slate-800 pb-2">Información de Contacto</p>
+                          <div className="grid grid-cols-2 gap-4">
+                            <div><label className="text-[8px] text-slate-500 font-black uppercase mb-1 block">Teléfono</label>
+                              <input type="tel" value={editingReport[item.id]?.phone ?? item.phone ?? ''} onChange={e => handleReportEdit(item.id, 'phone', e.target.value)} className="w-full bg-transparent border-b border-slate-700 text-white text-sm py-1 focus:border-cyan-500 outline-none" />
+                            </div>
+                            <div><label className="text-[8px] text-slate-500 font-black uppercase mb-1 block">Correo Electrónico</label>
+                              <input type="email" value={editingReport[item.id]?.email ?? item.email ?? ''} onChange={e => handleReportEdit(item.id, 'email', e.target.value)} className="w-full bg-transparent border-b border-slate-700 text-white text-sm py-1 focus:border-cyan-500 outline-none" />
+                            </div>
+                          </div>
+                          <div><label className="text-[8px] text-slate-500 font-black uppercase mb-1 block">Contacto de Emergencia</label>
+                            <input type="text" placeholder="Nombre y teléfono" value={editingReport[item.id]?.emergency_contact ?? item.emergency_contact ?? ''} onChange={e => handleReportEdit(item.id, 'emergency_contact', e.target.value)} className="w-full bg-transparent border-b border-slate-700 text-white text-sm py-1 focus:border-cyan-500 outline-none" />
+                          </div>
+                        </div>
+
+                        {/* DATOS MÉDICOS */}
+                        <div className="bg-red-500/[0.03] p-5 rounded-2xl border border-red-500/15 space-y-4">
+                          <p className="text-[10px] text-red-400 font-black uppercase tracking-widest border-b border-red-500/20 pb-2">Datos Médicos</p>
+                          <div><label className="text-[8px] text-slate-500 font-black uppercase mb-1 block">Tipo de Sangre</label>
+                            <select value={editingReport[item.id]?.tipo_sangre ?? item.tipo_sangre ?? ''} onChange={e => handleReportEdit(item.id, 'tipo_sangre', e.target.value)} className="w-full bg-black/40 border border-slate-700 text-white text-xs p-2 rounded-lg outline-none focus:border-red-500">
+                              <option value="">No especificado</option>
+                              <option value="O+">O+</option><option value="O-">O-</option>
+                              <option value="A+">A+</option><option value="A-">A-</option>
+                              <option value="B+">B+</option><option value="B-">B-</option>
+                              <option value="AB+">AB+</option><option value="AB-">AB-</option>
+                            </select>
+                          </div>
+                          <div><label className="text-[8px] text-slate-500 font-black uppercase mb-1 block">Alergias</label>
+                            <textarea rows="2" value={editingReport[item.id]?.alergias ?? item.alergias ?? ''} onChange={e => handleReportEdit(item.id, 'alergias', e.target.value)} className="w-full bg-black/40 border border-slate-700 text-white text-xs p-2 rounded-lg outline-none focus:border-red-500" placeholder="Alergias conocidas..." />
+                          </div>
+                          <div><label className="text-[8px] text-slate-500 font-black uppercase mb-1 block">Enfermedades / Condiciones</label>
+                            <textarea rows="2" value={editingReport[item.id]?.enfermedades ?? item.enfermedades ?? ''} onChange={e => handleReportEdit(item.id, 'enfermedades', e.target.value)} className="w-full bg-black/40 border border-slate-700 text-white text-xs p-2 rounded-lg outline-none focus:border-red-500" placeholder="Condiciones médicas..." />
+                          </div>
+                        </div>
+
+                        <button onClick={() => saveReportChanges(item.id)} className="w-full bg-cyan-500/10 text-cyan-400 py-3 rounded-xl text-[10px] font-black border border-cyan-500/20 hover:bg-cyan-500/20 uppercase tracking-widest">Guardar Expediente</button>
+                      </div>
+
+                      <div className="space-y-4">
+                        {/* RESUMEN SEMANAL */}
+                        <div className="bg-[#0b1120] border border-emerald-500/20 p-5 rounded-2xl">
+                          <div className="flex justify-between items-center mb-4 border-b border-slate-800 pb-2">
+                            <div>
+                              <p className="text-[10px] text-emerald-400 font-black uppercase tracking-widest">Resumen Semanal</p>
+                              <p className="text-[9px] text-slate-600 mt-0.5">{getPayrollDates(payrollPeriodOffset[item.id] || 0).label}</p>
+                            </div>
+                            <div className="flex gap-1">
+                              <button onClick={() => loadAttendance(item.id, item.employee_number, item.name, (payrollPeriodOffset[item.id] || 0) - 1)} className="text-[8px] bg-slate-800 text-slate-300 px-2 py-1 rounded hover:bg-cyan-500 hover:text-black" title="Semana anterior">←</button>
+                              <button onClick={() => loadAttendance(item.id, item.employee_number, item.name, 0)} className="text-[8px] bg-slate-800 text-slate-300 px-2 py-1 rounded hover:bg-cyan-500 hover:text-black" title="Semana actual">HOY</button>
+                              <button onClick={() => loadAttendance(item.id, item.employee_number, item.name, (payrollPeriodOffset[item.id] || 0) + 1)} className="text-[8px] bg-slate-800 text-slate-300 px-2 py-1 rounded hover:bg-cyan-500 hover:text-black" title="Semana siguiente">→</button>
+                            </div>
+                          </div>
+                          <div className="space-y-2.5">
+                            <div className="flex justify-between text-xs"><span className="text-slate-500">Sueldo Base (7d)</span><span className="text-white font-mono">${formatMoney(payroll.baseWeekly)}</span></div>
+                            <div className="flex justify-between text-xs text-red-400"><span>Faltas ({payroll.absences})</span><span className="font-mono">-${formatMoney(payroll.deduction)}</span></div>
+                            <div className="flex justify-between text-xs text-cyan-400"><span>Bonos/Extras</span><span className="font-mono">+${formatMoney(payroll.extraPay)}</span></div>
+                            <div className="pt-3 border-t border-slate-800 flex justify-between font-black text-white text-base"><span>Pago Neto</span><span className="text-emerald-400 font-mono">${formatMoney(payroll.netPay)}</span></div>
+                          </div>
+                        </div>
+
+                        {/* UBICACIÓN */}
+                        <div className="bg-black/20 p-4 rounded-2xl border border-slate-800">
+                          <p className="text-[10px] text-slate-400 font-black uppercase tracking-widest mb-3 border-b border-slate-800 pb-2">Ubicación</p>
+                          <input type="text" placeholder="Dirección completa..." value={editingReport[item.id]?.address ?? item.address ?? ''} onChange={e => handleReportEdit(item.id, 'address', e.target.value)} className="w-full bg-black/40 border border-slate-700 p-2 rounded-lg text-white text-xs mb-3 outline-none focus:border-cyan-500" />
+                          {empCoords[item.id] ? (
+                            <div className="rounded-xl overflow-hidden border border-slate-700">
+                              <LocationMap markers={[{lat: empCoords[item.id][0], lng: empCoords[item.id][1], label: item.name, popup: `<b>${item.name}</b><br/>${item.address}`}]} height={220} />
+                            </div>
+                          ) : (
+                            <div className="h-40 flex flex-col items-center justify-center text-center rounded-xl border border-slate-800 bg-black/20">
+                              <p className="text-3xl mb-2 opacity-20">📍</p><p className="text-[10px] text-slate-600">Sin dirección</p>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {activeTab === 'horario' && (
+                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 animate-in slide-in-from-bottom-2 duration-300">
+                      <div className="bg-[#0c1222] p-5 rounded-2xl border border-purple-500/20 shadow-2xl">
+                        <h4 className="text-[9px] font-black text-purple-400 uppercase mb-4 tracking-widest">Configuración de Horario Fijo</h4>
+                        <div className="space-y-2">
+                          {['Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado', 'Domingo'].map((day, dIdx) => (
+                            <div key={day} className="grid grid-cols-3 gap-3 items-center bg-black/30 p-2.5 rounded-xl border border-white/[0.03]">
+                              <div className="text-[10px] font-bold text-slate-400">{day}</div>
+                              <div className="flex gap-1.5 col-span-2">
+                                <input type="time" className="flex-1 bg-slate-900 border border-slate-700 text-white text-[10px] p-1.5 rounded-lg outline-none focus:border-purple-500" value={getScheduleDraftForItem(item)?.[dIdx]?.entry || ''} onChange={(e) => updateScheduleDraft(item, dIdx, 'entry', e.target.value)} />
+                                <input type="time" className="flex-1 bg-slate-900 border border-slate-700 text-white text-[10px] p-1.5 rounded-lg outline-none focus:border-purple-500" value={getScheduleDraftForItem(item)?.[dIdx]?.exit || ''} onChange={(e) => updateScheduleDraft(item, dIdx, 'exit', e.target.value)} />
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                        <button onClick={() => saveSchedule(item)} disabled={!!savingSchedule[item.id]} className="w-full mt-4 bg-purple-500/20 text-purple-400 py-3 rounded-xl text-[10px] font-black border border-purple-500/20 hover:bg-purple-500/30 transition-all">
+                          {savingSchedule[item.id] ? 'PROCESANDO...' : 'ACTUALIZAR HORARIO SEMANAL'}
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
+                  {activeTab === 'reportes' && (
+                    <div className="space-y-4">
+                      <div className="flex gap-2 items-center bg-black/20 p-3 rounded-xl border border-slate-800">
+                        <button onClick={() => setReportViewMode('list')} className={`px-3 py-2 text-[9px] font-bold rounded-lg transition-all ${reportViewMode === 'list' ? 'bg-cyan-500 text-white shadow-lg' : 'bg-slate-800 text-slate-400'}`}>📋 LISTA</button>
+                        <button onClick={() => setReportViewMode('grid')} className={`px-3 py-2 text-[9px] font-bold rounded-lg transition-all ${reportViewMode === 'grid' ? 'bg-cyan-500 text-white shadow-lg' : 'bg-slate-800 text-slate-400'}`}>🔲 BLOQUES</button>
+                        <input type="text" placeholder="Buscar reportes..." value={reportSearch} onChange={e => setReportSearch(e.target.value)} className="flex-1 bg-black/40 border border-slate-700 p-2 rounded-lg text-xs text-white outline-none focus:border-cyan-500 transition-all" />
+                        <button onClick={() => setShowReportModal(item.id)} className="bg-cyan-500/20 text-cyan-400 px-4 py-2 rounded-lg text-[10px] font-bold border border-cyan-500/30 hover:bg-cyan-500/30 transition-all">+ NUEVO REPORTE</button>
+                      </div>
+                      <div className={reportViewMode === 'grid' ? "grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4" : "space-y-3"}>
+                        {(employeeReports[item.id] || []).filter(r => !reportSearch || r.report_name.toLowerCase().includes(reportSearch.toLowerCase())).map(r => (
+                          <div key={r.id} className="group bg-gradient-to-br from-slate-900 to-black p-5 border border-slate-800 rounded-xl hover:border-cyan-500/40 transition-all shadow-lg hover:shadow-cyan-500/10">
+                            <div className="flex flex-col gap-3">
+                              <div className="flex-1">
+                                <p className="text-sm text-white font-bold group-hover:text-cyan-400 transition-colors mb-1">{r.report_name}</p>
+                                <p className="text-[10px] text-slate-500">{new Date(r.created_at).toLocaleDateString('es-MX', { day: '2-digit', month: 'short', year: 'numeric' })}</p>
+                              </div>
+                              <div className="flex gap-2">
+                                <a href={r.file_path} target="_blank" rel="noreferrer" className="flex-1 bg-cyan-500 text-white px-4 py-2.5 rounded-lg text-xs font-bold text-center hover:bg-cyan-400 transition-all shadow-lg hover:shadow-cyan-500/50">📄 VER REPORTE</a>
+                              </div>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {activeTab === 'notas' && (
+                    <div className="relative">
+                      <textarea value={empNotes[item.id]?.content || ''} onChange={e => handleNoteChange(item.id, e.target.value)} placeholder="Notas privadas de administración..." className="w-full h-32 bg-black/40 border border-amber-500/20 rounded-xl p-4 text-[11px] text-slate-300 outline-none focus:border-amber-500/40 shadow-inner" />
+                      <div className="absolute bottom-3 right-4 text-[8px] text-slate-600 font-bold uppercase">{empNoteSaving[item.id] ? 'Sincronizando...' : 'Auto-guardado'}</div>
+                    </div>
                   )}
                 </div>
-              </div>
-              <svg
-                className={`h-5 w-5 text-cyan-400/50 transition-transform ${expandedItems[item.id] ? 'rotate-180' : ''}`}
-                fill="none"
-                viewBox="0 0 24 24"
-                stroke="currentColor"
-              >
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-              </svg>
+              )}
             </div>
-            
-            {expandedItems[item.id] && (
-              <div className="border-t border-cyan-500/10 bg-[#030b18]/60">
-                <div className="p-3 sm:p-4">
-                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                    {/* Photo & Info Section */}
-                    <div className="lg:col-span-1">
-                    <h4 className="text-sm font-medium text-cyan-500/50 mb-3">Información del Empleado</h4>
-                    <div className="rounded-lg border border-cyan-500/10 bg-[#040c1a]/70 p-3 sm:p-4">
-                      {/* Photos Row: Profile LEFT, ID RIGHT */}
-                      <div className="flex items-start justify-center gap-4 mb-3">
-                        {/* Profile Photo - LEFT */}
-                        <div className="flex-1 text-center">
-                          <p className="text-[10px] text-cyan-500/40 mb-1">Foto Perfil</p>
-                          <div className="w-full aspect-square max-w-[140px] mx-auto rounded-lg border border-cyan-500/10 bg-[#030b18]/60 flex items-center justify-center overflow-hidden">
-                            {item.photo ? (
-                              <img src={item.photo} alt={item.name} onClick={() => setImagePreview(item.photo)} className="w-full h-full object-cover cursor-pointer hover:opacity-80 transition-opacity" />
-                            ) : (
-                              <svg className="h-8 w-8 text-cyan-500/20" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
-                              </svg>
-                            )}
-                          </div>
-                          {isAdmin && (
-                            <label className="mt-2 cursor-pointer rounded border border-cyan-500/20 bg-cyan-500/8 px-3 py-1 text-[10px] text-cyan-400 transition-all hover:bg-cyan-500/15 inline-block">
-                              <input type="file" accept="image/*" onChange={(e) => handlePhotoUpload(item.id, e.target.files[0], 'profile')} className="hidden" />
-                              Subir Foto
-                            </label>
-                          )}
-                        </div>
+          );
+        })}
+      </div>
 
-                        {/* ID Photo - RIGHT */}
-                        <div className="flex-1 text-center">
-                          <p className="text-[10px] text-cyan-500/60 mb-1">Identificación</p>
-                          <div className="w-full aspect-[3/2] max-w-[210px] mx-auto rounded-lg border border-cyan-500/15 bg-[#030b18]/60 flex items-center justify-center overflow-hidden">
-                            {item.id_photo ? (
-                              <img src={item.id_photo} alt="ID" onClick={() => setImagePreview(item.id_photo)} className="w-full h-full object-cover cursor-pointer hover:opacity-80 transition-opacity" />
-                            ) : (
-                              <svg className="h-8 w-8 text-cyan-500/20" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1} d="M10 6H5a2 2 0 00-2 2v9a2 2 0 002 2h14a2 2 0 002-2V8a2 2 0 00-2-2h-5m-4 0V5a2 2 0 114 0v1m-4 0a2 2 0 104 0" />
-                              </svg>
-                            )}
-                          </div>
-                          {isAdmin && (
-                            <label className="mt-2 cursor-pointer rounded border border-cyan-500/20 bg-cyan-500/8 px-3 py-1 text-[10px] text-cyan-400 transition-all hover:bg-cyan-500/15 inline-block">
-                              <input type="file" accept="image/*" onChange={(e) => handlePhotoUpload(item.id, e.target.files[0], 'id')} className="hidden" />
-                              Subir ID
-                            </label>
-                          )}
-                        </div>
+      {/* LISTA INACTIVA (HISTORIAL DE BAJAS) */}
+      {inactiveList.length > 0 && (
+        <div className="mt-10 space-y-3">
+          <h2 className="text-slate-600 text-[9px] font-black uppercase tracking-[0.2em] px-2 flex items-center gap-3"><span className="h-px bg-slate-800 flex-1" /> HISTORIAL DE BAJAS <span className="h-px bg-slate-800 flex-1" /></h2>
+          {inactiveList.map((item) => {
+            const expanded = expandedItems[item.id];
+            const activeTab = empTabs[item.id] || 'nomina';
+
+            return (
+              <div key={item.id} className="bg-[#040c1a] border border-red-900/20 rounded-2xl overflow-hidden transition-all shadow-xl opacity-60 hover:opacity-100">
+                <div onClick={() => setExpandedItems(p => ({...p, [item.id]: !expanded}))} className="p-4 flex justify-between items-center cursor-pointer hover:bg-white/5 transition-colors">
+                  <div className="flex items-center gap-4">
+                    <span className="w-2 h-2 rounded-full bg-red-700" />
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <h3 className="text-white font-medium text-sm">{item.name}</h3>
+                        <span className="text-xs bg-red-900/30 text-red-400 px-2 py-0.5 rounded-full border border-red-900/40">Baja</span>
                       </div>
-                    </div>
-                    </div>
-
-                  {/* Expediente Section */}
-                  <div className="col-span-1 md:col-span-2 lg:col-span-2">
-                    <div className="flex items-center justify-between mb-3">
-                      <h4 className="text-sm font-medium text-cyan-400/70">Expediente</h4>
-                      {isAdmin && !editingReport[item.id] && (
-                        <button
-                          onClick={() => handleReportEdit(item.id, '_editing', true)}
-                          className="rounded-lg border border-cyan-500/20 bg-cyan-500/8 px-3 py-1 text-xs text-cyan-400 transition-all hover:bg-cyan-500/15"
-                        >
-                          Editar
-                        </button>
-                      )}
-                    </div>
-                    <div className="space-y-4">
-                      {/* Section 1: Información Personal */}
-                      <div className="rounded-lg border border-cyan-500/15 bg-[#060d1f]/60 p-3 sm:p-4">
-                        <h5 className="text-xs font-medium text-cyan-500/50 mb-3 pb-2 border-b border-cyan-500/10">Información Personal</h5>
-                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
-                          {[
-                            { label: 'Nombre', field: 'name', value: item.name },
-                            { label: 'Edad', field: 'age', value: item.age, type: 'number' },
-                            { label: 'Estado Civil', field: 'estado_civil', value: item.estado_civil },
-                            { label: 'Teléfono', field: 'phone', value: item.phone },
-                            { label: 'Dirección', field: 'address', value: item.address },
-                            { label: 'Idiomas', field: 'idiomas', value: item.idiomas },
-                            { label: 'Fecha Ingreso', field: 'start_date', value: item.start_date, type: 'date' },
-                          ].map(({ label, field, value, type }) => (
-                            <div key={field}>
-                              <label className="block text-[10px] text-cyan-500/60 mb-1">{label}</label>
-                              {isAdmin && editingReport[item.id] ? (
-                                <input
-                                  type={type || 'text'}
-                                  value={editingReport[item.id][field] !== undefined ? editingReport[item.id][field] : (value || '')}
-                                  onChange={(e) => handleReportEdit(item.id, field, e.target.value)}
-                                  className="w-full rounded border border-cyan-500/15 bg-[#030b18]/60 px-2 py-1.5 text-xs text-slate-200 focus:border-cyan-400/40 focus:outline-none"
-                                />
-                              ) : (
-                                <div
-                                  onClick={isAdmin ? () => handleReportEdit(item.id, field, value || '') : undefined}
-                                  className={`w-full rounded border border-cyan-500/10 bg-[#040c1a]/50 px-2 py-1.5 text-xs text-slate-300 ${isAdmin ? 'cursor-pointer hover:border-cyan-500/20' : ''}`}
-                                >
-                                  {value || '-'}
-                                </div>
-                              )}
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-
-                      {/* Section 2: Información Laboral */}
-                      <div className="rounded-lg border border-cyan-500/15 bg-[#060d1f]/60 p-3 sm:p-4">
-                        <h5 className="text-xs font-medium text-cyan-500/50 mb-3 pb-2 border-b border-cyan-500/10">Información Laboral</h5>
-                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
-                          {[{ label: 'No. Empleado', field: 'employee_number', value: item.employee_number }].map(({ label, field, value }) => (
-                            <div key={field}>
-                              <label className="block text-[10px] text-cyan-500/60 mb-1">{label}</label>
-                              {isAdmin && editingReport[item.id] ? (
-                                <input
-                                  type="text"
-                                  value={editingReport[item.id][field] !== undefined ? editingReport[item.id][field] : (value || '')}
-                                  onChange={(e) => handleReportEdit(item.id, field, e.target.value)}
-                                  placeholder="Ej: EMP-001"
-                                  className="w-full rounded border border-cyan-500/15 bg-[#030b18]/60 px-2 py-1.5 text-xs text-slate-200 focus:border-cyan-400/40 focus:outline-none"
-                                />
-                              ) : (
-                                <div
-                                  onClick={isAdmin ? () => handleReportEdit(item.id, field, value || '') : undefined}
-                                  className={`w-full rounded border border-cyan-500/10 bg-[#040c1a]/50 px-2 py-1.5 text-xs text-slate-300 ${isAdmin ? 'cursor-pointer hover:border-cyan-500/20' : ''}`}
-                                >
-                                  {value || '-'}
-                                </div>
-                              )}
-                            </div>
-                          ))}
-                          {[
-                            { label: 'Área / Puesto', field: 'position', value: item.position },
-                            { label: 'Accesos (sistema, llaves, cámaras)', field: 'accesos', value: item.accesos },
-                            { label: 'Sueldo Actual', field: 'sueldo', value: item.sueldo, type: 'number' },
-                            { label: 'Prestaciones / Costo', field: 'prestaciones', value: item.prestaciones },
-                            { label: 'Estado', field: 'status', value: item.status, isSelect: true },
-                          ].map(({ label, field, value, type, isSelect }) => (
-                            <div key={field}>
-                              <label className="block text-[10px] text-cyan-500/60 mb-1">{label}</label>
-                              {isAdmin && editingReport[item.id] ? (
-                                isSelect ? (
-                                  <select
-                                    value={editingReport[item.id][field] !== undefined ? editingReport[item.id][field] : (value || 'active')}
-                                    onChange={(e) => handleReportEdit(item.id, field, e.target.value)}
-                                    className="w-full rounded border border-cyan-500/15 bg-[#030b18]/60 px-2 py-1.5 text-xs text-slate-200 focus:border-cyan-400/40 focus:outline-none"
-                                  >
-                                    <option value="active">Activo</option>
-                                    <option value="eventual">Eventual</option>
-                                    <option value="vacation">Vacaciones</option>
-                                    <option value="inactive">Inactivo</option>
-                                  </select>
-                                ) : (
-                                  <input
-                                    type={type || 'text'}
-                                    value={editingReport[item.id][field] !== undefined ? editingReport[item.id][field] : (value || '')}
-                                    onChange={(e) => handleReportEdit(item.id, field, e.target.value)}
-                                    className="w-full rounded border border-cyan-500/15 bg-[#030b18]/60 px-2 py-1.5 text-xs text-slate-200 focus:border-cyan-400/40 focus:outline-none"
-                                  />
-                                )
-                              ) : (
-                                <div
-                                  onClick={isAdmin ? () => handleReportEdit(item.id, field, value || '') : undefined}
-                                  className={`w-full rounded border border-cyan-500/10 bg-[#040c1a]/50 px-2 py-1.5 text-xs text-slate-300 ${isAdmin ? 'cursor-pointer hover:border-cyan-500/20' : ''}`}
-                                >
-                                  {field === 'sueldo' && value ? `$${parseFloat(value).toLocaleString()}` : (value || '-')}
-                                </div>
-                              )}
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-
-                      {/* Section 3: Emergencia / Médico */}
-                      <div className="rounded-lg border border-cyan-500/15 bg-[#060d1f]/60 p-3 sm:p-4">
-                        <h5 className="text-xs font-medium text-cyan-500/50 mb-3 pb-2 border-b border-cyan-500/10">Emergencia / Información Médica</h5>
-                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
-                          {[
-                            { label: 'Contacto de Emergencia', field: 'emergency_contact', value: item.emergency_contact },
-                            { label: 'Tipo de Sangre', field: 'tipo_sangre', value: item.tipo_sangre },
-                            { label: 'Alergias', field: 'alergias', value: item.alergias },
-                            { label: 'Enfermedades', field: 'enfermedades', value: item.enfermedades },
-                          ].map(({ label, field, value }) => (
-                            <div key={field}>
-                              <label className="block text-[10px] text-cyan-500/60 mb-1">{label}</label>
-                              {isAdmin && editingReport[item.id] ? (
-                                <input
-                                  type="text"
-                                  value={editingReport[item.id][field] !== undefined ? editingReport[item.id][field] : (value || '')}
-                                  onChange={(e) => handleReportEdit(item.id, field, e.target.value)}
-                                  className="w-full rounded border border-cyan-500/15 bg-[#030b18]/60 px-2 py-1.5 text-xs text-slate-200 focus:border-cyan-400/40 focus:outline-none"
-                                />
-                              ) : (
-                                <div
-                                  onClick={isAdmin ? () => handleReportEdit(item.id, field, value || '') : undefined}
-                                  className={`w-full rounded border border-cyan-500/10 bg-[#040c1a]/50 px-2 py-1.5 text-xs text-slate-300 ${isAdmin ? 'cursor-pointer hover:border-cyan-500/20' : ''}`}
-                                >
-                                  {value || '-'}
-                                </div>
-                              )}
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-
-                      {isAdmin && editingReport[item.id] && (
-                        <button
-                          onClick={() => saveReportChanges(item.id)}
-                          className="w-full rounded-lg border border-cyan-500/25 bg-cyan-500/10 px-4 py-2.5 text-sm text-cyan-400 transition-all hover:bg-cyan-500/20 font-medium"
-                        >
-                          Guardar Cambios
-                        </button>
-                      )}
+                      <p className="text-[9px] text-slate-500 uppercase tracking-widest">{item.position} · Diario: ${formatMoney(item.daily_salary || 0)}</p>
                     </div>
                   </div>
+                  <div className="text-right flex items-center gap-4">
+                    {isAdmin && <button onClick={(e) => { e.stopPropagation(); handleDeleteEmployee(item.id, item.name); }} className="text-[8px] text-red-900 font-black hover:text-red-500 px-2 py-1 rounded border border-red-900/20 hover:border-red-500/30">ELIMINAR</button>}
+                    <span className={`text-slate-600 transition-transform ${expanded ? 'rotate-180' : ''}`}>▼</span>
+                  </div>
                 </div>
-              </div>
 
-                {/* Individual Employee Map */}
-                {item.address && (
-                  <div className="mt-4 px-3 sm:px-4 pb-3">
-                    <h4 className="text-sm font-medium text-cyan-400/70 mb-2">Ubicación</h4>
-                    {empCoords[item.id] ? (
-                      <LocationMap
-                        markers={[{ lat: empCoords[item.id][0], lng: empCoords[item.id][1], color: 'green', popup: `<b>${item.name}</b><br/><small>${item.address}</small>` }]}
-                        height={200}
-                        zoom={14}
-                      />
-                    ) : (
-                      <div className="h-[200px] rounded-xl border border-cyan-500/20 bg-[#030b18]/60 flex items-center justify-center">
-                        <p className="text-xs text-slate-500">{geoLoading ? 'Geocodificando dirección...' : 'No se pudo localizar la dirección'}</p>
+                {expanded && (
+                  <div className="p-5 border-t border-slate-800/60 bg-black/20">
+                    <div className="flex gap-2 mb-5 border-b border-slate-800 pb-px">
+                      {['info', 'nomina', 'reportes', 'notas'].map(t => (
+                        <button key={t} onClick={() => {
+                          setEmpTabs(p => ({...p, [item.id]: t}));
+                          if(t === 'reportes') loadReports(item.id);
+                          if(t === 'notas') loadNotes(item.id);
+                        }} className={`px-4 py-2 text-[9px] font-black uppercase tracking-tighter transition-all ${activeTab === t ? 'text-cyan-400 border-b-2 border-cyan-400' : 'text-slate-500 hover:text-slate-300'}`}>
+                          {t === 'info' ? 'Expediente' : t === 'nomina' ? 'Liquidación' : t}
+                        </button>
+                      ))}
+                    </div>
+
+                    {activeTab === 'nomina' && (
+                      <div className="space-y-6 animate-in slide-in-from-bottom-2 duration-300">
+                        <div className="bg-red-500/5 border border-red-500/20 p-6 rounded-2xl">
+                          <div className="flex justify-between items-center mb-6">
+                            <h4 className="text-red-400 text-xs font-black uppercase tracking-widest">Resumen de Liquidación</h4>
+                            <span className="text-[10px] text-slate-500 font-mono">Antigüedad: {(() => {
+                              const inicio = item.hire_date || item.start_date;
+                              if(!inicio) return 'No definida';
+                              const anios = Math.max(0, (new Date() - new Date(inicio)) / (1000 * 60 * 60 * 24 * 365.25));
+                              const aniosE = Math.floor(anios);
+                              return `${aniosE} años ${Math.round((anios - aniosE) * 12)} meses`;
+                            })()}</span>
+                          </div>
+                          
+                          {(() => {
+                            const salario = parseFloat(editingReport[item.id]?.daily_salary ?? item.daily_salary ?? 0);
+                            const inicio = item.hire_date || item.start_date;
+                            const aniosEnteros = inicio ? Math.floor(Math.max(0, (new Date() - new Date(inicio)) / (1000 * 60 * 60 * 24 * 365.25))) : 0;
+                            
+                            const base_tresMeses = salario * 90;
+                            const base_veinteDias = salario * 20 * aniosEnteros;
+                            const base_vacaciones = aniosEnteros >= 1 ? salario * (6 + Math.floor((aniosEnteros - 1) / 2) * 2) : 0;
+                            const base_prima = base_vacaciones * 0.25;
+                            const base_aguinaldo = salario * 15;
+
+                            const getVal = (field, baseVal) => {
+                              const edited = editingReport[item.id]?.[field];
+                              if (edited !== undefined && edited !== '') return parseFloat(edited) || 0;
+                              if (edited === '') return 0;
+                              const dbVal = item[field];
+                              if (dbVal !== undefined && dbVal !== null && dbVal !== '') return parseFloat(dbVal) || 0;
+                              return baseVal;
+                            };
+
+                            const d_3m = getVal('liquid_tres_meses', base_tresMeses);
+                            const d_20d = getVal('liquid_veinte_dias', base_veinteDias);
+                            const d_vac = getVal('liquid_vacaciones', base_vacaciones);
+                            const d_prima = getVal('liquid_prima_vacacional', base_prima);
+                            const d_agui = getVal('liquid_aguinaldo', base_aguinaldo);
+                            const totalDespido = d_3m + d_20d + d_vac + d_prima + d_agui;
+
+                            const r_vac = getVal('renuncia_vacaciones', base_vacaciones);
+                            const r_prima = getVal('renuncia_prima_vacacional', base_prima);
+                            const r_agui = getVal('renuncia_aguinaldo', base_aguinaldo);
+                            const totalRenuncia = r_vac + r_prima + r_agui;
+
+                            return (
+                              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                                {/* BLOQUE DESPIDO */}
+                                <div className="bg-red-950/30 rounded-xl p-4 border border-red-900/20 space-y-3">
+                                  <p className="text-[10px] text-red-400 font-black uppercase tracking-widest mb-4">Por Despido (Art. 50 LFT)</p>
+                                  <div className="flex justify-between items-center text-[10px]">
+                                    <span className="text-slate-400">3 meses de salario</span>
+                                    <input type="number" value={editingReport[item.id]?.liquid_tres_meses ?? item.liquid_tres_meses ?? ''} onChange={e => handleReportEdit(item.id, 'liquid_tres_meses', e.target.value)} className="bg-black/40 border border-slate-600 text-white w-24 px-2 py-1 rounded outline-none focus:border-red-400 text-right" placeholder={base_tresMeses.toFixed(2)} />
+                                  </div>
+                                  <div className="flex justify-between items-center text-[10px]">
+                                    <span className="text-slate-400">20 días × año</span>
+                                    <input type="number" value={editingReport[item.id]?.liquid_veinte_dias ?? item.liquid_veinte_dias ?? ''} onChange={e => handleReportEdit(item.id, 'liquid_veinte_dias', e.target.value)} className="bg-black/40 border border-slate-600 text-white w-24 px-2 py-1 rounded outline-none focus:border-red-400 text-right" placeholder={base_veinteDias.toFixed(2)} />
+                                  </div>
+                                  <div className="flex justify-between items-center text-[10px]">
+                                    <span className="text-slate-400">Vacaciones proporcionales</span>
+                                    <input type="number" value={editingReport[item.id]?.liquid_vacaciones ?? item.liquid_vacaciones ?? ''} onChange={e => handleReportEdit(item.id, 'liquid_vacaciones', e.target.value)} className="bg-black/40 border border-slate-600 text-white w-24 px-2 py-1 rounded outline-none focus:border-red-400 text-right" placeholder={base_vacaciones.toFixed(2)} />
+                                  </div>
+                                  <div className="flex justify-between items-center text-[10px]">
+                                    <span className="text-slate-400">Prima vacacional (25%)</span>
+                                    <input type="number" value={editingReport[item.id]?.liquid_prima_vacacional ?? item.liquid_prima_vacacional ?? ''} onChange={e => handleReportEdit(item.id, 'liquid_prima_vacacional', e.target.value)} className="bg-black/40 border border-slate-600 text-white w-24 px-2 py-1 rounded outline-none focus:border-red-400 text-right" placeholder={base_prima.toFixed(2)} />
+                                  </div>
+                                  <div className="flex justify-between items-center text-[10px]">
+                                    <span className="text-slate-400">Aguinaldo (15 días)</span>
+                                    <input type="number" value={editingReport[item.id]?.liquid_aguinaldo ?? item.liquid_aguinaldo ?? ''} onChange={e => handleReportEdit(item.id, 'liquid_aguinaldo', e.target.value)} className="bg-black/40 border border-slate-600 text-white w-24 px-2 py-1 rounded outline-none focus:border-red-400 text-right" placeholder={base_aguinaldo.toFixed(2)} />
+                                  </div>
+                                  <div className="flex justify-between text-xs font-black border-t border-red-900/30 pt-3 mt-2">
+                                    <span className="text-red-300">TOTAL DESPIDO</span>
+                                    <span className="text-red-300 text-lg">${formatMoney(totalDespido)}</span>
+                                  </div>
+                                </div>
+
+                                {/* BLOQUE RENUNCIA */}
+                                <div className="bg-orange-950/20 rounded-xl p-4 border border-orange-900/20 space-y-3">
+                                  <p className="text-[10px] text-orange-400 font-black uppercase tracking-widest mb-4">Por Renuncia (Art. 48 LFT)</p>
+                                  <div className="flex justify-between items-center text-[10px]">
+                                    <span className="text-slate-400">Vacaciones proporcionales</span>
+                                    <input type="number" value={editingReport[item.id]?.renuncia_vacaciones ?? item.renuncia_vacaciones ?? ''} onChange={e => handleReportEdit(item.id, 'renuncia_vacaciones', e.target.value)} className="bg-black/40 border border-slate-600 text-white w-24 px-2 py-1 rounded outline-none focus:border-orange-400 text-right" placeholder={base_vacaciones.toFixed(2)} />
+                                  </div>
+                                  <div className="flex justify-between items-center text-[10px]">
+                                    <span className="text-slate-400">Prima vacacional (25%)</span>
+                                    <input type="number" value={editingReport[item.id]?.renuncia_prima_vacacional ?? item.renuncia_prima_vacacional ?? ''} onChange={e => handleReportEdit(item.id, 'renuncia_prima_vacacional', e.target.value)} className="bg-black/40 border border-slate-600 text-white w-24 px-2 py-1 rounded outline-none focus:border-orange-400 text-right" placeholder={base_prima.toFixed(2)} />
+                                  </div>
+                                  <div className="flex justify-between items-center text-[10px]">
+                                    <span className="text-slate-400">Aguinaldo (15 días)</span>
+                                    <input type="number" value={editingReport[item.id]?.renuncia_aguinaldo ?? item.renuncia_aguinaldo ?? ''} onChange={e => handleReportEdit(item.id, 'renuncia_aguinaldo', e.target.value)} className="bg-black/40 border border-slate-600 text-white w-24 px-2 py-1 rounded outline-none focus:border-orange-400 text-right" placeholder={base_aguinaldo.toFixed(2)} />
+                                  </div>
+                                  <div className="flex justify-between text-xs font-black border-t border-orange-900/30 pt-3 mt-2">
+                                    <span className="text-orange-300">TOTAL RENUNCIA</span>
+                                    <span className="text-orange-300 text-lg">${formatMoney(totalRenuncia)}</span>
+                                  </div>
+                                </div>
+                              </div>
+                            );
+                          })()}
+                          <button onClick={() => saveReportChanges(item.id)} className="w-full mt-6 bg-red-600 text-white py-4 rounded-2xl font-black text-xs uppercase tracking-widest shadow-xl shadow-red-900/20 hover:bg-red-500 transition-all">ACTUALIZAR HISTORIAL EN BASE DE DATOS</button>
+                        </div>
+                      </div>
+                    )}
+
+                    {activeTab === 'info' && (
+                      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 animate-in slide-in-from-bottom-2 duration-300">
+                        <div className="space-y-5">
+                          <div className="bg-black/20 p-4 rounded-xl border border-slate-800 space-y-3">
+                            <p className="text-[8px] text-cyan-500/50 font-bold uppercase tracking-widest">Datos Generales (Ex-Empleado)</p>
+                            <div className="grid grid-cols-1 gap-3">
+                              <div>
+                                <label className="text-[8px] text-slate-500 font-bold uppercase">Nombre Completo</label>
+                                <input type="text" value={editingReport[item.id]?.name ?? item.name ?? ''} onChange={e => handleReportEdit(item.id, 'name', e.target.value)} className="bg-black/30 border-b border-slate-700 text-white w-full py-1.5 outline-none focus:border-cyan-500 text-xs transition-colors" />
+                              </div>
+                              <div className="grid grid-cols-2 gap-3">
+                                <div>
+                                  <label className="text-[8px] text-slate-500 font-bold uppercase">Puesto</label>
+                                  <input type="text" value={editingReport[item.id]?.position ?? item.position ?? ''} onChange={e => handleReportEdit(item.id, 'position', e.target.value)} className="bg-black/30 border-b border-slate-700 text-white w-full py-1.5 outline-none focus:border-cyan-500 text-xs" />
+                                </div>
+                                <div>
+                                  <label className="text-[8px] text-slate-500 font-bold uppercase">Estatus</label>
+                                  <select value={editingReport[item.id]?.status ?? item.status ?? ''} onChange={e => handleReportEdit(item.id, 'status', e.target.value)} className="bg-black/30 border-b border-slate-700 text-white w-full py-1.5 outline-none focus:border-cyan-500 text-xs">
+                                    <option value="inactive">BAJA</option>
+                                    <option value="active">REINGRESAR COMO ACTIVO</option>
+                                  </select>
+                                </div>
+                              </div>
+                              <div className="grid grid-cols-2 gap-3">
+                                <div>
+                                  <label className="text-[8px] text-slate-500 font-bold uppercase">Sueldo Diario</label>
+                                  <input type="number" value={editingReport[item.id]?.daily_salary ?? item.daily_salary ?? ''} onChange={e => handleReportEdit(item.id, 'daily_salary', e.target.value)} className="bg-black/30 border-b border-slate-700 text-white w-full py-1.5 outline-none focus:border-cyan-500 text-xs" />
+                                </div>
+                                <div>
+                                  <label className="text-[8px] text-slate-500 font-bold uppercase">Fecha Contratación</label>
+                                  <input type="date" value={editingReport[item.id]?.hire_date ?? item.hire_date ?? ''} onChange={e => handleReportEdit(item.id, 'hire_date', e.target.value)} className="bg-black/30 border-b border-slate-700 text-white w-full py-1.5 outline-none focus:border-cyan-500 text-xs" />
+                                </div>
+                              </div>
+                            </div>
+                            <button onClick={() => saveReportChanges(item.id)} className="w-full bg-cyan-500/10 text-cyan-400 py-3 rounded-xl text-[10px] font-bold border border-cyan-500/20 mt-4">GUARDAR EXPEDIENTE</button>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+
+                    {activeTab === 'reportes' && (
+                      <div className="space-y-4">
+                        <div className="flex gap-2 items-center bg-black/20 p-3 rounded-xl border border-slate-800">
+                          <input type="text" placeholder="Buscar reportes..." value={reportSearch} onChange={e => setReportSearch(e.target.value)} className="flex-1 bg-black/40 border border-slate-700 p-2 rounded-lg text-xs text-white outline-none focus:border-cyan-500 transition-all" />
+                          <button onClick={() => setShowReportModal(item.id)} className="bg-cyan-500/20 text-cyan-400 px-4 py-2 rounded-lg text-[10px] font-bold border border-cyan-500/30 hover:bg-cyan-500/30 transition-all">+ NUEVO REPORTE</button>
+                        </div>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                          {(employeeReports[item.id] || []).filter(r => !reportSearch || r.report_name.toLowerCase().includes(reportSearch.toLowerCase())).map(r => (
+                            <div key={r.id} className="group bg-gradient-to-br from-slate-900 to-black p-5 border border-slate-800 rounded-xl hover:border-cyan-500/40 transition-all shadow-lg hover:shadow-cyan-500/10">
+                              <div className="flex flex-col gap-3">
+                                <div className="flex-1">
+                                  <p className="text-sm text-white font-bold group-hover:text-cyan-400 transition-colors mb-1">{r.report_name}</p>
+                                  <p className="text-[10px] text-slate-500">{new Date(r.created_at).toLocaleDateString('es-MX', { day: '2-digit', month: 'short', year: 'numeric' })}</p>
+                                </div>
+                                <div className="flex gap-2">
+                                  <a href={r.file_path} target="_blank" rel="noreferrer" className="flex-1 bg-cyan-500 text-white px-4 py-2.5 rounded-lg text-xs font-bold text-center hover:bg-cyan-400 transition-all">📄 VER REPORTE</a>
+                                </div>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {activeTab === 'notas' && (
+                      <div className="relative">
+                        <textarea value={empNotes[item.id]?.content || ''} onChange={e => handleNoteChange(item.id, e.target.value)} placeholder="Notas privadas..." className="w-full h-32 bg-black/40 border border-amber-500/20 rounded-xl p-4 text-[11px] text-slate-300 outline-none focus:border-amber-500/40 shadow-inner" />
+                        <div className="absolute bottom-3 right-4 text-[8px] text-slate-600 font-bold uppercase">{empNoteSaving[item.id] ? 'Sincronizando...' : 'Auto-guardado'}</div>
                       </div>
                     )}
                   </div>
                 )}
-
-                {/* Reportes | Notas tabs */}
-                <div className="mt-6 pt-6 border-t border-cyan-500/10">
-                  {/* Tab bar */}
-                  <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
-                    <div className="flex rounded-lg overflow-hidden border border-slate-700/40">
-                      <button
-                        onClick={() => { setEmpTabs(p => ({ ...p, [item.id]: 'reportes' })); stopNoteRefresh(item.id); }}
-                        className={`px-3 py-1.5 text-[10px] transition-all ${(empTabs[item.id] || 'reportes') === 'reportes' ? 'bg-cyan-500/15 text-cyan-400' : 'bg-[#040c1a]/60 text-slate-500 hover:text-slate-300'}`}
-                      >
-                        Reportes ({(employeeReports[item.id] || []).length})
-                      </button>
-                      {isAdmin && (
-                        <button
-                          onClick={() => { setEmpTabs(p => ({ ...p, [item.id]: 'notas' })); loadEmpNote(item.id); startNoteRefresh(item.id); }}
-                          className={`px-3 py-1.5 text-[10px] transition-all ${(empTabs[item.id] || 'reportes') === 'notas' ? 'bg-amber-500/15 text-amber-400' : 'bg-[#040c1a]/60 text-slate-500 hover:text-slate-300'}`}
-                        >
-                          Nota
-                        </button>
-                      )}
-                    </div>
-                    <div className="flex gap-2">
-                      {(empTabs[item.id] || 'reportes') === 'reportes' && (
-                        <>
-                          <div className="flex rounded-lg overflow-hidden border border-cyan-500/20">
-                            <button onClick={() => setReportViewMode('list')} className={`px-2 py-1 text-[10px] ${reportViewMode === 'list' ? 'bg-cyan-500/15 text-cyan-400' : 'bg-[#040c1a]/60 text-slate-500'}`}>Lista</button>
-                            <button onClick={() => setReportViewMode('grid')} className={`px-2 py-1 text-[10px] ${reportViewMode === 'grid' ? 'bg-cyan-500/15 text-cyan-400' : 'bg-[#040c1a]/60 text-slate-500'}`}>Bloques</button>
-                          </div>
-                          {isAdmin && (
-                            <button onClick={() => setShowReportModal(item.id)} className="rounded-lg border border-cyan-500/20 bg-cyan-500/8 px-3 py-1.5 text-xs text-cyan-400 transition-all hover:bg-cyan-500/15">+ Nuevo</button>
-                          )}
-                        </>
-                      )}
-                    </div>
-                  </div>
-
-                  {/* Nota tab — single auto-saving textarea */}
-                  {(empTabs[item.id] || 'reportes') === 'notas' && isAdmin && (
-                    <div className="relative rounded-xl border border-amber-500/15 bg-[#060d1f]/60 overflow-hidden">
-                      {empNotes[item.id] === undefined ? (
-                        <div className="flex items-center justify-center h-40">
-                          <div className="h-4 w-4 rounded-full border border-amber-400/20 border-t-amber-400 animate-spin" />
-                        </div>
-                      ) : (
-                        <textarea
-                          value={empNotes[item.id]?.content ?? ''}
-                          onChange={e => handleNoteChange(item.id, e.target.value)}
-                          placeholder="Escribe una nota libre…"
-                          className="w-full h-52 resize-none bg-transparent px-4 pt-4 pb-7 text-sm text-slate-300 placeholder-slate-700 outline-none leading-relaxed"
-                        />
-                      )}
-                      <div className="absolute bottom-2 right-3 flex items-center gap-2">
-                        {empNoteSaving[item.id]
-                          ? <span className="text-[9px] text-amber-400/50 animate-pulse">Guardando…</span>
-                          : <span className="text-[9px] text-slate-700">Auto-guardado</span>}
-                      </div>
-                    </div>
-                  )}
-
-                  {/* Reportes tab: search */}
-                  {(empTabs[item.id] || 'reportes') === 'reportes' && employeeReports[item.id] && employeeReports[item.id].length > 0 && (
-                    <div className="mb-3">
-                      <input
-                        type="text"
-                        value={reportSearch}
-                        onChange={(e) => setReportSearch(e.target.value)}
-                        placeholder="Buscar por nombre o fecha..."
-                        className="w-full rounded border border-cyan-500/15 bg-[#030b18]/60 px-3 py-1.5 text-xs text-slate-200 focus:border-cyan-400/40 focus:outline-none placeholder:text-slate-600"
-                      />
-                    </div>
-                  )}
-
-                  {/* Reports Content */}
-                  <div className="rounded-lg border border-cyan-500/15 bg-[#060d1f]/60 p-3 max-h-80 overflow-y-auto">
-                    {(() => {
-                      const reports = (employeeReports[item.id] || [])
-                        .filter(r => {
-                          if (!reportSearch) return true;
-                          const q = reportSearch.toLowerCase();
-                          const dateStr = new Date(r.created_at).toLocaleDateString('es-MX', { timeZone: 'America/Hermosillo' });
-                          return r.report_name.toLowerCase().includes(q) || dateStr.includes(q) || (r.created_at || '').includes(q);
-                        })
-                        .sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
-
-                      if (!employeeReports[item.id]) {
-                        return <p className="text-xs text-slate-500 text-center py-4">Cargando reportes...</p>;
-                      }
-                      if (reports.length === 0 && employeeReports[item.id].length === 0) {
-                        return <p className="text-xs text-slate-500 text-center py-4">No hay reportes registrados</p>;
-                      }
-                      if (reports.length === 0) {
-                        return <p className="text-xs text-slate-500 text-center py-4">Sin resultados para &quot;{reportSearch}&quot;</p>;
-                      }
-
-                      if (reportViewMode === 'grid') {
-                        return (
-                          <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
-                            {reports.map((report) => (
-                              <div key={report.id} className="rounded-lg bg-[#040c1a]/50 border border-cyan-500/10 p-2 hover:border-cyan-500/20 transition-colors">
-                                {report.photo_path ? (
-                                  <img src={report.photo_path} alt="" onClick={() => setImagePreview(report.photo_path)} className="w-full h-20 object-cover rounded mb-2 cursor-pointer hover:opacity-80" />
-                                ) : report.file_path && /\.(jpg|jpeg|png|gif|webp)$/i.test(report.file_path) ? (
-                                  <img src={report.file_path} alt="" onClick={() => setImagePreview(report.file_path)} className="w-full h-20 object-cover rounded mb-2 cursor-pointer hover:opacity-80" />
-                                ) : (
-                                  <div className="w-full h-20 rounded mb-2 bg-[#040c1a]/60 flex items-center justify-center text-cyan-500/20 text-lg">
-                                    {report.report_type === 'file' ? '📄' : '📝'}
-                                  </div>
-                                )}
-                                <p className="text-[10px] font-medium text-slate-200 truncate">{report.report_name}</p>
-                                <p className="text-[10px] text-slate-500">{new Date(report.created_at).toLocaleDateString('es-MX', { timeZone: 'America/Hermosillo' })}</p>
-                                <div className="flex gap-1 mt-1 flex-wrap">
-                                  {report.file_path && <a href={report.file_path} target="_blank" rel="noopener noreferrer" className="text-cyan-400 text-[10px]">Descargar</a>}
-                                  <a href={`/admin/report/${report.id}`} className="text-cyan-400 text-[10px]">Ver Completo</a>
-                                  {isAdmin && <button onClick={() => handleDeleteReport(report.id, item.id)} className="text-red-400 text-[10px]">Eliminar</button>}
-                                </div>
-                              </div>
-                            ))}
-                          </div>
-                        );
-                      }
-
-                      return (
-                        <div className="space-y-2">
-                          {reports.map((report) => (
-                            <div key={report.id} className="flex items-start gap-3 p-2 sm:p-3 rounded bg-[#040c1a]/40 hover:bg-cyan-500/5 transition-colors">
-                              {(report.photo_path || (report.file_path && /\.(jpg|jpeg|png|gif|webp)$/i.test(report.file_path))) && (
-                                <img
-                                  src={report.photo_path || report.file_path}
-                                  alt=""
-                                  onClick={() => setImagePreview(report.photo_path || report.file_path)}
-                                  className="w-12 h-12 sm:w-16 sm:h-16 object-cover rounded border border-cyan-500/20 cursor-pointer hover:opacity-80 flex-shrink-0"
-                                />
-                              )}
-                              <div className="flex-1 min-w-0">
-                                <p className="text-xs sm:text-sm text-slate-200 font-medium truncate">{report.report_name}</p>
-                                <p className="text-[10px] sm:text-xs text-slate-500 mt-0.5">
-                                  {report.report_type === 'file' ? '📄' : '📝'} {new Date(report.created_at).toLocaleDateString('es-MX', { timeZone: 'America/Hermosillo', year: 'numeric', month: 'short', day: 'numeric' })} • {report.created_by_name || 'Admin'}
-                                </p>
-                                {report.report_type === 'text' && report.content && (
-                                  <p className="text-[10px] text-slate-500 mt-1 line-clamp-2" dangerouslySetInnerHTML={{ __html: report.content }} />
-                                )}
-                              </div>
-                              <div className="flex flex-col gap-1 flex-shrink-0">
-                                {report.file_path && <a href={report.file_path} target="_blank" rel="noopener noreferrer" className="text-cyan-400 hover:text-cyan-300 text-[10px]">Descargar</a>}
-                                <a href={`/admin/report/${report.id}`} className="text-cyan-400 hover:text-cyan-300 text-[10px]">
-                                  Ver Completo
-                                </a>
-                                {isAdmin && <button onClick={() => handleDeleteReport(report.id, item.id)} className="text-red-400 hover:text-red-300 text-[10px]">Eliminar</button>}
-                              </div>
-                            </div>
-                          ))}
-                        </div>
-                      );
-                    })()}
-                  </div>
-
-                  {showReportModal === item.id && (
-                    <div className="fixed inset-0 bg-[#030712]/90 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-                      <div className="bg-gradient-to-br from-[#040c1a] to-[#060f20] border border-cyan-500/20 rounded-xl p-6 max-w-md w-full max-h-[90vh] overflow-y-auto">
-                        <h3 className="text-lg font-light text-white mb-4">Nuevo Reporte</h3>
-                        
-                        <div className="mb-4">
-                          <label className="block text-sm text-cyan-400/70 mb-2">Tipo de Reporte</label>
-                          <div className="flex gap-2">
-                            <button
-                              onClick={() => setReportType('file')}
-                              className={`flex-1 px-4 py-2 rounded text-sm ${reportType === 'file' ? 'bg-cyan-500/15 text-cyan-400 border border-cyan-500/25' : 'bg-[#040c1a]/60 text-slate-400 border border-slate-700/30'}`}
-                            >
-                              Subir Archivo
-                            </button>
-                            <button
-                              onClick={() => setReportType('text')}
-                              className={`flex-1 px-4 py-2 rounded text-sm ${reportType === 'text' ? 'bg-cyan-500/15 text-cyan-400 border border-cyan-500/25' : 'bg-[#040c1a]/60 text-slate-400 border border-slate-700/30'}`}
-                            >
-                              Escribir Texto
-                            </button>
-                          </div>
-                        </div>
-
-                        <div className="space-y-3">
-                          <div>
-                            <label className="block text-sm text-cyan-400/70 mb-1">Nombre del Reporte</label>
-                            <input
-                              type="text"
-                              value={newReport.name}
-                              onChange={(e) => setNewReport({...newReport, name: e.target.value})}
-                              className="w-full rounded-lg border border-cyan-500/20 bg-[#030b18]/60 px-3 py-2 text-sm text-slate-200 focus:border-cyan-400/50 focus:outline-none focus:ring-1 focus:ring-cyan-500/15 placeholder:text-slate-700"
-                              placeholder="Ej: Reporte Mensual Enero"
-                            />
-                          </div>
-
-                          {reportType === 'file' ? (
-                            <div>
-                              <label className="block text-sm text-cyan-400/70 mb-1">Archivo (PDF, DOC, Imagen)</label>
-                              <input
-                                type="file"
-                                accept=".pdf,.doc,.docx,.jpg,.jpeg,.png,.gif"
-                                onChange={(e) => setNewReport({...newReport, file: e.target.files[0]})}
-                                className="w-full rounded border border-cyan-500/15 bg-[#030b18]/60 px-3 py-2 text-sm text-slate-200 focus:border-cyan-400/40 focus:outline-none file:mr-4 file:py-1 file:px-3 file:rounded file:border-0 file:bg-cyan-500/15 file:text-cyan-400 file:text-xs"
-                              />
-                            </div>
-                          ) : (
-                            <div>
-                              <label className="block text-sm text-cyan-400/70 mb-1">Contenido</label>
-                              <div className="quill-dark">
-                                <Suspense fallback={<div className="h-40 bg-[#040c1a]/60 rounded animate-pulse" />}>
-                                  <ReactQuill
-                                    theme="snow"
-                                    value={newReport.content}
-                                    onChange={(val) => setNewReport({...newReport, content: val})}
-                                    placeholder="Escribe el contenido del reporte aquí..."
-                                    style={{ background: 'rgba(4,12,26,0.6)', borderRadius: '0.5rem', color: '#cbd5e1' }}
-                                  />
-                                </Suspense>
-                              </div>
-                            </div>
-                          )}
-
-                          <div>
-                            <label className="block text-sm text-cyan-400/70 mb-1">Foto del Reporte (opcional)</label>
-                            <input
-                              type="file"
-                              accept="image/*"
-                              onChange={(e) => setNewReport({...newReport, photo: e.target.files[0]})}
-                              className="w-full rounded border border-cyan-500/15 bg-[#030b18]/60 px-3 py-2 text-sm text-slate-200 focus:border-cyan-400/40 focus:outline-none file:mr-4 file:py-1 file:px-3 file:rounded file:border-0 file:bg-cyan-500/15 file:text-cyan-400 file:text-xs"
-                            />
-                          </div>
-                        </div>
-
-                        <div className="flex gap-3 mt-6">
-                          <button
-                            onClick={() => handleUploadReport(item.id)}
-                            className="flex-1 rounded-lg border border-cyan-500/25 bg-cyan-500/10 px-4 py-2 text-sm text-cyan-400 transition-all hover:bg-cyan-500/20"
-                          >
-                            Guardar
-                          </button>
-                          <button
-                            onClick={() => {
-                              setShowReportModal(null);
-                              setNewReport({ name: '', content: '', file: null, photo: null });
-                            }}
-                            className="flex-1 rounded-lg bg-[#040c1a]/60 px-4 py-2 text-sm text-slate-400 transition-all hover:bg-[#030b18]/60"
-                          >
-                            Cancelar
-                          </button>
-                        </div>
-                      </div>
-                    </div>
-                  )}
-                </div>
               </div>
-            )}
-          </div>
-        ))}
-      </div>
-
-      {/* Section: Empleados Inactivos */}
-      {(() => {
-        const inactiveList = executiveReport.filter(item => {
-          if ((item.status || 'active') !== 'inactive') return false;
-          const genderMatch = filterGender === 'all' || (item.gender || '') === filterGender;
-          const age = parseInt(item.age);
-          const ageMatch = filterAge === 'all' || (filterAge === '18-35' && age >= 18 && age <= 35) || (filterAge === '36-54' && age >= 36 && age <= 54) || (filterAge === '55-80' && age >= 55 && age <= 80);
-          return genderMatch && (isNaN(age) ? filterAge === 'all' : ageMatch);
-        });
-        const totalInactive = executiveReport.filter(i => (i.status || 'active') === 'inactive').length;
-        if (totalInactive === 0) return null;
-        return (
-          <>
-            <div className="mt-8 mb-2 flex items-center gap-3">
-              <div className="flex items-center gap-2">
-                <span className="h-2.5 w-2.5 rounded-full bg-red-400" />
-                <h2 className="text-base sm:text-lg font-light text-slate-500">Empleados Inactivos</h2>
-              </div>
-              <span className="text-[10px] text-slate-600">{inactiveList.length} empleados</span>
-            </div>
-            <div className="space-y-3">
-              {inactiveList.map((item) => (
-                <div
-                  key={item.id}
-                  className="rounded-xl border border-red-500/15 bg-gradient-to-br from-[#040c1a] to-[#060f20] overflow-hidden shadow-xl shadow-red-500/5 transition-all opacity-80"
-                >
-                  <div
-                    onClick={() => toggleItem(item.id)}
-                    className="flex cursor-pointer items-center justify-between px-3 py-2 sm:p-4 transition-all hover:bg-red-500/5"
-                  >
-                    <div className="flex-1 min-w-0">
-                      <div className="flex flex-wrap items-center gap-2 mb-1">
-                        <span className="h-2 w-2 rounded-full flex-shrink-0 bg-red-400" title="Inactivo" />
-                        <h3 className="text-sm sm:text-base font-medium text-slate-400 truncate">{item.name}</h3>
-                        <span className="rounded-full bg-red-500/10 border border-red-500/20 px-2 py-0.5 text-xs text-red-400">
-                          {item.position || 'Sin posición'}
-                        </span>
-                      </div>
-                      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-500">
-                        {item.main_amount > 0 || item.secondary_amount > 0 ? (
-                          <span>
-                            ${formatMoney(item.main_amount)} / ${formatMoney(item.secondary_amount)}
-                          </span>
-                        ) : (
-                          <span>
-                            Inicio: {item.start_date || 'Pendiente'}
-                          </span>
-                        )}
-                      </div>
-                    </div>
-                    <svg
-                      className={`h-5 w-5 text-red-400/50 transition-transform ${expandedItems[item.id] ? 'rotate-180' : ''}`}
-                      fill="none"
-                      viewBox="0 0 24 24"
-                      stroke="currentColor"
-                    >
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-                    </svg>
-                  </div>
-                  
-                  {expandedItems[item.id] && (
-                    <div className="border-t border-red-500/10 bg-[#030b18]/60">
-                      <div className="p-3 sm:p-4">
-                        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                          {/* Photo & Info Section */}
-                          <div className="lg:col-span-1">
-                          <h4 className="text-sm font-medium text-red-500/50 mb-3">Información del Empleado</h4>
-                          <div className="rounded-lg border border-red-500/10 bg-[#040c1a]/70 p-3 sm:p-4">
-                            {/* Photos Row: Profile LEFT, ID RIGHT */}
-                            <div className="flex items-start justify-center gap-4 mb-3">
-                              {/* Profile Photo - LEFT */}
-                              <div className="flex-1 text-center">
-                                <p className="text-[10px] text-red-500/40 mb-1">Foto Perfil</p>
-                                <div className="w-full aspect-square max-w-[140px] mx-auto rounded-lg border border-red-500/10 bg-[#030b18]/60 flex items-center justify-center overflow-hidden">
-                                  {item.photo ? (
-                                    <img src={item.photo} alt={item.name} onClick={() => setImagePreview(item.photo)} className="w-full h-full object-cover cursor-pointer hover:opacity-80 transition-opacity" />
-                                  ) : (
-                                    <svg className="h-8 w-8 text-red-500/20" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
-                                    </svg>
-                                  )}
-                                </div>
-                                {isAdmin && (
-                                  <label className="mt-2 cursor-pointer rounded border border-red-500/20 bg-red-500/8 px-3 py-1 text-[10px] text-red-400 transition-all hover:bg-red-500/15 inline-block">
-                                    <input type="file" accept="image/*" onChange={(e) => handlePhotoUpload(item.id, e.target.files[0], 'profile')} className="hidden" />
-                                    Subir Foto
-                                  </label>
-                                )}
-                              </div>
-
-                              {/* ID Photo - RIGHT */}
-                              <div className="flex-1 text-center">
-                                <p className="text-[10px] text-red-500/60 mb-1">Identificación</p>
-                                <div className="w-full aspect-[3/2] max-w-[210px] mx-auto rounded-lg border border-red-500/15 bg-[#030b18]/60 flex items-center justify-center overflow-hidden">
-                                  {item.id_photo ? (
-                                    <img src={item.id_photo} alt="ID" onClick={() => setImagePreview(item.id_photo)} className="w-full h-full object-cover cursor-pointer hover:opacity-80 transition-opacity" />
-                                  ) : (
-                                    <svg className="h-8 w-8 text-red-500/20" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1} d="M10 6H5a2 2 0 00-2 2v9a2 2 0 002 2h14a2 2 0 002-2V8a2 2 0 00-2-2h-5m-4 0V5a2 2 0 114 0v1m-4 0a2 2 0 104 0" />
-                                    </svg>
-                                  )}
-                                </div>
-                                {isAdmin && (
-                                  <label className="mt-2 cursor-pointer rounded border border-red-500/20 bg-red-500/8 px-3 py-1 text-[10px] text-red-400 transition-all hover:bg-red-500/15 inline-block">
-                                    <input type="file" accept="image/*" onChange={(e) => handlePhotoUpload(item.id, e.target.files[0], 'id')} className="hidden" />
-                                    Subir ID
-                                  </label>
-                                )}
-                              </div>
-                            </div>
-                          </div>
-                          </div>
-
-                        {/* Expediente Section */}
-                        <div className="col-span-1 md:col-span-2 lg:col-span-2">
-                          <div className="flex items-center justify-between mb-3">
-                            <h4 className="text-sm font-medium text-red-400/70">Expediente</h4>
-                            {isAdmin && !editingReport[item.id] && (
-                              <button
-                                onClick={() => handleReportEdit(item.id, '_editing', true)}
-                                className="rounded-lg border border-red-500/20 bg-red-500/8 px-3 py-1 text-xs text-red-400 transition-all hover:bg-red-500/15"
-                              >
-                                Editar
-                              </button>
-                            )}
-                          </div>
-                          <div className="space-y-4">
-                            {/* Section 1: Información Personal */}
-                            <div className="rounded-lg border border-red-500/15 bg-[#060d1f]/60 p-3 sm:p-4">
-                              <h5 className="text-xs font-medium text-red-500/50 mb-3 pb-2 border-b border-red-500/10">Información Personal</h5>
-                              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
-                                {[
-                                  { label: 'Nombre', field: 'name', value: item.name },
-                                  { label: 'Edad', field: 'age', value: item.age, type: 'number' },
-                                  { label: 'Estado Civil', field: 'estado_civil', value: item.estado_civil },
-                                  { label: 'Teléfono', field: 'phone', value: item.phone },
-                                  { label: 'Dirección', field: 'address', value: item.address },
-                                  { label: 'Idiomas', field: 'idiomas', value: item.idiomas },
-                                  { label: 'Fecha Ingreso', field: 'start_date', value: item.start_date, type: 'date' },
-                                ].map(({ label, field, value, type }) => (
-                                  <div key={field}>
-                                    <label className="block text-[10px] text-red-500/60 mb-1">{label}</label>
-                                    {isAdmin && editingReport[item.id] ? (
-                                      <input
-                                        type={type || 'text'}
-                                        value={editingReport[item.id][field] !== undefined ? editingReport[item.id][field] : (value || '')}
-                                        onChange={(e) => handleReportEdit(item.id, field, e.target.value)}
-                                        className="w-full rounded border border-red-500/15 bg-[#030b18]/60 px-2 py-1.5 text-xs text-slate-200 focus:border-red-400/40 focus:outline-none"
-                                      />
-                                    ) : (
-                                      <div
-                                        onClick={isAdmin ? () => handleReportEdit(item.id, field, value || '') : undefined}
-                                        className={`w-full rounded border border-red-500/10 bg-[#040c1a]/50 px-2 py-1.5 text-xs text-slate-300 ${isAdmin ? 'cursor-pointer hover:border-red-500/20' : ''}`}
-                                      >
-                                        {value || '-'}
-                                      </div>
-                                    )}
-                                  </div>
-                                ))}
-                              </div>
-                            </div>
-
-                            {/* Section 2: Información Laboral */}
-                            <div className="rounded-lg border border-red-500/15 bg-[#060d1f]/60 p-3 sm:p-4">
-                              <h5 className="text-xs font-medium text-red-500/50 mb-3 pb-2 border-b border-red-500/10">Información Laboral</h5>
-                              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
-                                {[{ label: 'No. Empleado', field: 'employee_number', value: item.employee_number }].map(({ label, field, value }) => (
-                                  <div key={field}>
-                                    <label className="block text-[10px] text-red-500/60 mb-1">{label}</label>
-                                    {isAdmin && editingReport[item.id] ? (
-                                      <input
-                                        type="text"
-                                        value={editingReport[item.id][field] !== undefined ? editingReport[item.id][field] : (value || '')}
-                                        onChange={(e) => handleReportEdit(item.id, field, e.target.value)}
-                                        placeholder="Ej: EMP-001"
-                                        className="w-full rounded border border-red-500/15 bg-[#030b18]/60 px-2 py-1.5 text-xs text-slate-200 focus:border-red-400/40 focus:outline-none"
-                                      />
-                                    ) : (
-                                      <div
-                                        onClick={isAdmin ? () => handleReportEdit(item.id, field, value || '') : undefined}
-                                        className={`w-full rounded border border-red-500/10 bg-[#040c1a]/50 px-2 py-1.5 text-xs text-slate-300 ${isAdmin ? 'cursor-pointer hover:border-red-500/20' : ''}`}
-                                      >
-                                        {value || '-'}
-                                      </div>
-                                    )}
-                                  </div>
-                                ))}
-                                {[
-                                  { label: 'Área / Puesto', field: 'position', value: item.position },
-                                  { label: 'Accesos (sistema, llaves, cámaras)', field: 'accesos', value: item.accesos },
-                                  { label: 'Sueldo Actual', field: 'sueldo', value: item.sueldo, type: 'number' },
-                                  { label: 'Prestaciones / Costo', field: 'prestaciones', value: item.prestaciones },
-                                  { label: 'Estado', field: 'status', value: item.status, isSelect: true },
-                                ].map(({ label, field, value, type, isSelect }) => (
-                                  <div key={field}>
-                                    <label className="block text-[10px] text-red-500/60 mb-1">{label}</label>
-                                    {isAdmin && editingReport[item.id] ? (
-                                      isSelect ? (
-                                        <select
-                                          value={editingReport[item.id][field] !== undefined ? editingReport[item.id][field] : (value || 'active')}
-                                          onChange={(e) => handleReportEdit(item.id, field, e.target.value)}
-                                          className="w-full rounded border border-red-500/15 bg-[#030b18]/60 px-2 py-1.5 text-xs text-slate-200 focus:border-red-400/40 focus:outline-none"
-                                        >
-                                          <option value="active">Activo</option>
-                                          <option value="eventual">Eventual</option>
-                                          <option value="vacation">Vacaciones</option>
-                                          <option value="inactive">Inactivo</option>
-                                        </select>
-                                      ) : (
-                                        <input
-                                          type={type || 'text'}
-                                          value={editingReport[item.id][field] !== undefined ? editingReport[item.id][field] : (value || '')}
-                                          onChange={(e) => handleReportEdit(item.id, field, e.target.value)}
-                                          className="w-full rounded border border-red-500/15 bg-[#030b18]/60 px-2 py-1.5 text-xs text-slate-200 focus:border-red-400/40 focus:outline-none"
-                                        />
-                                      )
-                                    ) : (
-                                      <div
-                                        onClick={isAdmin ? () => handleReportEdit(item.id, field, value || '') : undefined}
-                                        className={`w-full rounded border border-red-500/10 bg-[#040c1a]/50 px-2 py-1.5 text-xs text-slate-300 ${isAdmin ? 'cursor-pointer hover:border-red-500/20' : ''}`}
-                                      >
-                                        {field === 'sueldo' && value ? `$${parseFloat(value).toLocaleString()}` : (value || '-')}
-                                      </div>
-                                    )}
-                                  </div>
-                                ))}
-                              </div>
-                            </div>
-
-                            {/* Section 3: Emergencia / Médico */}
-                            <div className="rounded-lg border border-red-500/15 bg-[#060d1f]/60 p-3 sm:p-4">
-                              <h5 className="text-xs font-medium text-red-500/50 mb-3 pb-2 border-b border-red-500/10">Emergencia / Información Médica</h5>
-                              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
-                                {[
-                                  { label: 'Contacto de Emergencia', field: 'emergency_contact', value: item.emergency_contact },
-                                  { label: 'Tipo de Sangre', field: 'tipo_sangre', value: item.tipo_sangre },
-                                  { label: 'Alergias', field: 'alergias', value: item.alergias },
-                                  { label: 'Enfermedades', field: 'enfermedades', value: item.enfermedades },
-                                ].map(({ label, field, value }) => (
-                                  <div key={field}>
-                                    <label className="block text-[10px] text-red-500/60 mb-1">{label}</label>
-                                    {isAdmin && editingReport[item.id] ? (
-                                      <input
-                                        type="text"
-                                        value={editingReport[item.id][field] !== undefined ? editingReport[item.id][field] : (value || '')}
-                                        onChange={(e) => handleReportEdit(item.id, field, e.target.value)}
-                                        className="w-full rounded border border-red-500/15 bg-[#030b18]/60 px-2 py-1.5 text-xs text-slate-200 focus:border-red-400/40 focus:outline-none"
-                                      />
-                                    ) : (
-                                      <div
-                                        onClick={isAdmin ? () => handleReportEdit(item.id, field, value || '') : undefined}
-                                        className={`w-full rounded border border-red-500/10 bg-[#040c1a]/50 px-2 py-1.5 text-xs text-slate-300 ${isAdmin ? 'cursor-pointer hover:border-red-500/20' : ''}`}
-                                      >
-                                        {value || '-'}
-                                      </div>
-                                    )}
-                                  </div>
-                                ))}
-                              </div>
-                            </div>
-
-                            {isAdmin && editingReport[item.id] && (
-                              <button
-                                onClick={() => saveReportChanges(item.id)}
-                                className="w-full rounded-lg border border-red-500/25 bg-red-500/10 px-4 py-2.5 text-sm text-red-400 transition-all hover:bg-red-500/20 font-medium"
-                              >
-                                Guardar Cambios
-                              </button>
-                            )}
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-
-                      {/* Individual Employee Map */}
-                      {item.address && (
-                        <div className="mt-4 px-3 sm:px-4 pb-3">
-                          <h4 className="text-sm font-medium text-red-400/70 mb-2">Ubicación</h4>
-                          {empCoords[item.id] ? (
-                            <LocationMap
-                              markers={[{ lat: empCoords[item.id][0], lng: empCoords[item.id][1], color: 'red', popup: `<b>${item.name}</b><br/><small>${item.address}</small>` }]}
-                              height={200}
-                              zoom={14}
-                            />
-                          ) : (
-                            <div className="h-[200px] rounded-xl border border-red-500/20 bg-[#030b18]/60 flex items-center justify-center">
-                              <p className="text-xs text-slate-500">{geoLoading ? 'Geocodificando dirección...' : 'No se pudo localizar la dirección'}</p>
-                            </div>
-                          )}
-                        </div>
-                      )}
-
-                      {/* Reportes | Notas tabs */}
-                      <div className="mt-6 pt-6 border-t border-red-500/10">
-                        {/* Tab bar */}
-                        <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
-                          <div className="flex rounded-lg overflow-hidden border border-slate-700/40">
-                            <button
-                              onClick={() => { setEmpTabs(p => ({ ...p, [item.id]: 'reportes' })); stopNoteRefresh(item.id); if (!employeeReports[item.id]) loadReports(item.id); }}
-                              className={`px-3 py-1.5 text-[10px] transition-all ${(empTabs[item.id] || 'reportes') === 'reportes' ? 'bg-red-500/15 text-red-400' : 'bg-[#040c1a]/60 text-slate-500 hover:text-slate-300'}`}
-                            >
-                              Reportes ({(employeeReports[item.id] || []).length})
-                            </button>
-                            {isAdmin && (
-                              <button
-                                onClick={() => { setEmpTabs(p => ({ ...p, [item.id]: 'notas' })); loadEmpNote(item.id); startNoteRefresh(item.id); }}
-                                className={`px-3 py-1.5 text-[10px] transition-all ${(empTabs[item.id] || 'reportes') === 'notas' ? 'bg-amber-500/15 text-amber-400' : 'bg-[#040c1a]/60 text-slate-500 hover:text-slate-300'}`}
-                              >
-                                Nota
-                              </button>
-                            )}
-                          </div>
-                          <div className="flex gap-2">
-                            {(empTabs[item.id] || 'reportes') === 'reportes' && (
-                              <>
-                                <div className="flex rounded-lg overflow-hidden border border-red-500/20">
-                                  <button onClick={() => setReportViewMode('list')} className={`px-2 py-1 text-[10px] ${reportViewMode === 'list' ? 'bg-red-500/15 text-red-400' : 'bg-[#040c1a]/60 text-slate-500'}`}>Lista</button>
-                                  <button onClick={() => setReportViewMode('grid')} className={`px-2 py-1 text-[10px] ${reportViewMode === 'grid' ? 'bg-red-500/15 text-red-400' : 'bg-[#040c1a]/60 text-slate-500'}`}>Bloques</button>
-                                </div>
-                                {isAdmin && (
-                                  <button onClick={() => setShowReportModal(item.id)} className="rounded-lg border border-red-500/20 bg-red-500/8 px-3 py-1.5 text-xs text-red-400 transition-all hover:bg-red-500/15">+ Nuevo</button>
-                                )}
-                              </>
-                            )}
-                          </div>
-                        </div>
-
-                        {/* Content based on active tab */}
-                        {(empTabs[item.id] || 'reportes') === 'notas' && isAdmin ? (
-                          <div className="relative">
-                            <textarea
-                              value={empNotes[item.id]?.content || ''}
-                              onChange={(e) => handleNoteChange(item.id, e.target.value)}
-                              placeholder="Escribe notas sobre este empleado..."
-                              className="w-full h-40 rounded-lg border border-amber-500/20 bg-[#030b18]/60 px-3 py-2 text-sm text-slate-200 placeholder-slate-700 focus:border-amber-400/50 focus:outline-none resize-none"
-                            />
-                            {empNoteSaving[item.id] && (
-                              <div className="absolute top-2 right-2 text-[10px] text-amber-400 animate-pulse">Guardando...</div>
-                            )}
-                          </div>
-                        ) : (
-                          <div className="space-y-2">
-                            {(employeeReports[item.id] || []).length === 0 ? (
-                              <p className="text-xs text-slate-600 py-4 text-center">Sin reportes aún</p>
-                            ) : reportViewMode === 'list' ? (
-                              (employeeReports[item.id] || []).filter(r => r.report_name?.toLowerCase().includes(reportSearch.toLowerCase())).map(report => (
-                                <div key={report.id} className="flex items-center justify-between rounded-lg border border-red-500/10 bg-[#040c1a]/60 px-3 py-2">
-                                  <div className="flex-1 min-w-0">
-                                    <p className="text-sm text-slate-300 truncate">{report.report_name}</p>
-                                    <p className="text-[10px] text-slate-600">{new Date(report.created_at).toLocaleDateString('es-MX')}</p>
-                                  </div>
-                                  <div className="flex items-center gap-2">
-                                    {report.file_path && (
-                                      <a href={report.file_path} target="_blank" rel="noopener noreferrer" className="text-xs text-red-400 hover:text-red-300">Ver</a>
-                                    )}
-                                    {isAdmin && (
-                                      <button onClick={() => handleDeleteReport(report.id, item.id)} className="text-xs text-red-500/50 hover:text-red-400">Eliminar</button>
-                                    )}
-                                  </div>
-                                </div>
-                              ))
-                            ) : (
-                              <div className="grid grid-cols-2 gap-2">
-                                {(employeeReports[item.id] || []).filter(r => r.report_name?.toLowerCase().includes(reportSearch.toLowerCase())).map(report => (
-                                  <div key={report.id} className="rounded-lg border border-red-500/10 bg-[#040c1a]/60 p-3">
-                                    <p className="text-sm text-slate-300 truncate mb-1">{report.report_name}</p>
-                                    <p className="text-[10px] text-slate-600 mb-2">{new Date(report.created_at).toLocaleDateString('es-MX')}</p>
-                                    <div className="flex gap-2">
-                                      {report.file_path && (
-                                        <a href={report.file_path} target="_blank" rel="noopener noreferrer" className="text-xs text-red-400 hover:text-red-300">Ver</a>
-                                      )}
-                                      {isAdmin && (
-                                        <button onClick={() => handleDeleteReport(report.id, item.id)} className="text-xs text-red-500/50 hover:text-red-400">Eliminar</button>
-                                      )}
-                                    </div>
-                                  </div>
-                                ))}
-                              </div>
-                            )}
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  )}
-                </div>
-              ))}
-            </div>
-          </>
-        );
-      })()}
-
-      {/* General Map - All Employees */}
-      <div className="mt-6 rounded-2xl border border-cyan-500/15 bg-gradient-to-br from-[#040c1a] to-[#060f20] p-4 sm:p-6 shadow-lg shadow-cyan-500/5">
-        <h2 className="mb-3 text-lg sm:text-xl font-light text-white">Mapa General de Empleados</h2>
-        <div className="flex flex-wrap items-center gap-3 mb-3 text-xs text-slate-400">
-          <div className="flex items-center gap-1.5">
-            <span className="h-3 w-3 rounded-full bg-green-500 inline-block" />
-            <span>Activo</span>
-          </div>
-          <div className="flex items-center gap-1.5">
-            <span className="h-3 w-3 rounded-full bg-blue-500 inline-block" />
-            <span>Eventual</span>
-          </div>
-          <div className="flex items-center gap-1.5">
-            <span className="h-3 w-3 rounded-full bg-orange-500 inline-block" />
-            <span>Vacaciones</span>
-          </div>
-          <div className="flex items-center gap-1.5">
-            <span className="h-3 w-3 rounded-full bg-red-500 inline-block" />
-            <span>Inactivo</span>
-          </div>
-          <span className="ml-2">{allEmpMarkers.length > 0 ? `${allEmpMarkers.length} empleado${allEmpMarkers.length !== 1 ? 's' : ''} con dirección registrada` : 'Agrega direcciones a los empleados para verlos en el mapa'}</span>
+            );
+          })}
         </div>
+      )}
+
+      {/* MAPA GENERAL DE COBERTURA */}
+      <div className="bg-[#0b1120] border border-slate-800 rounded-3xl p-6 shadow-2xl mt-10">
+        <h3 className="text-white text-sm font-black mb-5 tracking-widest flex items-center gap-3 uppercase"><span className="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-pulse" /> Mapa de Cobertura de Personal</h3>
         {geoLoading ? (
-          <div className="h-[400px] rounded-xl border border-cyan-500/20 bg-[#030b18]/60 flex items-center justify-center">
-            <p className="text-xs text-slate-500">Geocodificando direcciones...</p>
-          </div>
-        ) : allEmpMarkers.length > 0 ? (
-          <LocationMap markers={allEmpMarkers} height={400} zoom={11} />
+            <div className="h-60 flex flex-col items-center justify-center text-[10px] text-slate-600 animate-pulse font-black uppercase">Calculando coordenadas...</div>
         ) : (
-          <div className="h-[400px] rounded-xl border border-cyan-500/20 bg-[#030b18]/60 flex items-center justify-center">
-            <p className="text-xs text-slate-500">Sin direcciones registradas</p>
-          </div>
+            <div className="rounded-2xl overflow-hidden border border-slate-800 grayscale shadow-inner">
+                <LocationMap markers={allEmpMarkers} height={450} zoom={11} />
+            </div>
         )}
       </div>
+      </>)}
+      {/* END VIEW personal */}
 
-
-      {/* Image Preview Lightbox */}
-      {imagePreview && (
-        <div className="fixed inset-0 bg-[#030712]/90 backdrop-blur-sm flex items-center justify-center z-[60] p-4" onClick={() => setImagePreview(null)}>
-          <div className="relative max-w-4xl max-h-[90vh]">
-            <button onClick={() => setImagePreview(null)} className="absolute -top-8 right-0 text-white/60 text-sm hover:text-cyan-400 transition-colors">Cerrar</button>
-            <img src={imagePreview} alt="Preview" className="max-w-full max-h-[85vh] object-contain rounded-lg" />
+      {/* VIEW HORARIO: SEMANA ACTUAL POR DÍA */}
+      {viewMode === 'horario' && (
+        <div className="space-y-4">
+          <div className="flex items-center justify-between bg-[#040c1a] p-4 rounded-2xl border border-slate-800">
+            <div>
+              <h2 className="text-white text-sm font-black uppercase tracking-widest">Horario Semanal</h2>
+              <p className="text-[10px] text-slate-500 mt-1">{(() => {
+                const ref = new Date(); ref.setDate(ref.getDate() + scheduleWeekOffset * 7);
+                const day = ref.getDay();
+                const diffToMonday = (day + 6) % 7;
+                const monday = new Date(ref); monday.setDate(ref.getDate() - diffToMonday);
+                const sunday = new Date(monday); sunday.setDate(monday.getDate() + 6);
+                return `${monday.toLocaleDateString('es-MX',{day:'2-digit',month:'short'})} — ${sunday.toLocaleDateString('es-MX',{day:'2-digit',month:'short',year:'numeric'})}`;
+              })()}</p>
+            </div>
+            <div className="flex gap-2">
+              <button onClick={() => setScheduleWeekOffset(p => p - 1)} className="px-3 py-2 rounded-lg bg-slate-800 text-slate-300 text-xs font-bold hover:bg-cyan-500 hover:text-black">← Anterior</button>
+              <button onClick={() => setScheduleWeekOffset(0)} className="px-3 py-2 rounded-lg bg-cyan-500/10 border border-cyan-500/30 text-cyan-400 text-xs font-bold">Actual</button>
+              <button onClick={() => setScheduleWeekOffset(p => p + 1)} className="px-3 py-2 rounded-lg bg-slate-800 text-slate-300 text-xs font-bold hover:bg-cyan-500 hover:text-black">Siguiente →</button>
+            </div>
           </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-7 gap-3">
+            {['Lunes','Martes','Miércoles','Jueves','Viernes','Sábado','Domingo'].map((dayName, dIdx) => {
+              const today = new Date();
+              const todayIdx = getWeekIndexFromJsDay(today.getDay());
+              const isToday = scheduleWeekOffset === 0 && todayIdx === dIdx;
+              const employeesForDay = activeList.filter(emp => {
+                const sch = getScheduleForItem(emp)?.[dIdx];
+                return sch && !sch.is_day_off && (sch.entry || sch.exit);
+              });
+              return (
+                <div key={dIdx} className={`bg-[#040c1a] p-3 rounded-2xl border ${isToday ? 'border-cyan-500/60 shadow-lg shadow-cyan-500/10' : 'border-slate-800'}`}>
+                  <div className="flex items-center justify-between mb-3 border-b border-slate-800 pb-2">
+                    <p className={`text-[10px] font-black uppercase tracking-widest ${isToday ? 'text-cyan-400' : 'text-slate-500'}`}>{dayName}</p>
+                    <span className="text-[9px] text-slate-600 font-mono">{employeesForDay.length}</span>
+                  </div>
+                  <div className="space-y-2 max-h-96 overflow-y-auto">
+                    {employeesForDay.length === 0 && (
+                      <p className="text-[9px] text-slate-700 text-center py-6">Nadie programado</p>
+                    )}
+                    {employeesForDay.map(emp => {
+                      const sch = getScheduleForItem(emp)[dIdx] || {};
+                      const att = isToday ? getAttendanceForItem(emp) : null;
+                      const isWorkingNow = att?.clock_in && !att?.clock_out;
+                      const isLate = isToday && !att?.clock_in && sch.entry && (() => {
+                        const [eH, eM] = sch.entry.split(':').map(Number);
+                        const eT = new Date(); eT.setHours(eH, eM, 0, 0);
+                        return today > eT;
+                      })();
+                      return (
+                        <button key={emp.id} onClick={() => { setViewMode('personal'); setExpandedItems(p => ({...p, [emp.id]: true})); setEmpTabs(p => ({...p, [emp.id]: 'horario'})); }} className={`w-full text-left bg-black/30 hover:bg-cyan-500/10 border hover:border-cyan-500/30 p-2.5 rounded-xl transition-all ${isLate ? 'border-red-500/40 bg-red-500/5' : 'border-white/[0.03]'}`}>
+                          <div className="flex items-center gap-2">
+                            <span className={`w-1.5 h-1.5 rounded-full ${isWorkingNow ? 'bg-green-500 animate-pulse' : isLate ? 'bg-red-500 animate-pulse' : 'bg-slate-600'}`} />
+                            <p className="text-[11px] text-white font-bold truncate flex-1">{emp.name}</p>
+                          </div>
+                          <p className="text-[9px] text-slate-500 mt-1 ml-3.5 truncate">{emp.position}</p>
+                          <p className="text-[9px] text-cyan-400 font-mono mt-1 ml-3.5">{sch.entry || '--:--'} — {sch.exit || '--:--'}</p>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+          <div className="text-center text-[10px] text-slate-600 pt-2">Haz clic en un empleado para editar su horario en la vista Personal.</div>
+        </div>
+      )}
+
+      {/* VIEW NOMINA: RESUMEN DE PAGO SEMANAL */}
+      {viewMode === 'nomina' && (
+        <div className="space-y-3">
+          <div className="bg-[#040c1a] p-4 rounded-2xl border border-slate-800">
+            <h2 className="text-white text-sm font-black uppercase tracking-widest">Nómina Semanal</h2>
+            <p className="text-[10px] text-slate-500 mt-1">Resumen rápido de pago para todos los colaboradores activos</p>
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+            {activeList.map(emp => {
+              const payroll = calculatePayroll(empAttendance[emp.id] || [], emp);
+              return (
+                <div key={emp.id} className="bg-[#040c1a] border border-slate-800 hover:border-cyan-500/30 p-4 rounded-2xl transition-all">
+                  <div className="flex items-center gap-3 mb-3">
+                    <div className="w-10 h-10 rounded-full bg-slate-800 overflow-hidden flex-shrink-0">
+                      {emp.photo ? <img src={emp.photo} className="w-full h-full object-cover" alt="" /> : <div className="h-full flex items-center justify-center opacity-30 text-sm">👤</div>}
+                    </div>
+                    <div className="min-w-0">
+                      <p className="text-white text-xs font-bold truncate">{emp.name}</p>
+                      <p className="text-[9px] text-slate-500 uppercase">{emp.position}</p>
+                    </div>
+                  </div>
+                  <div className="space-y-1.5">
+                    <div className="flex justify-between text-[10px]"><span className="text-slate-500">Sueldo base (7d)</span><span className="text-white font-mono">${formatMoney(payroll.baseWeekly)}</span></div>
+                    <div className="flex justify-between text-[10px]"><span className="text-red-400">Faltas ({payroll.absences})</span><span className="text-red-400 font-mono">-${formatMoney(payroll.deduction)}</span></div>
+                    <div className="flex justify-between text-[10px]"><span className="text-cyan-400">Extras</span><span className="text-cyan-400 font-mono">+${formatMoney(payroll.extraPay)}</span></div>
+                    <div className="flex justify-between pt-2 border-t border-slate-800 text-xs font-black"><span className="text-white">Neto</span><span className="text-emerald-400 font-mono">${formatMoney(payroll.netPay)}</span></div>
+                  </div>
+                  <button onClick={() => { setViewMode('personal'); setExpandedItems(p => ({...p, [emp.id]: true})); setEmpTabs(p => ({...p, [emp.id]: 'nomina'})); loadAttendance(emp.id, emp.employee_number, emp.name); }} className="w-full mt-3 bg-cyan-500/10 text-cyan-400 py-2 rounded-lg text-[9px] font-black border border-cyan-500/20 hover:bg-cyan-500/20 uppercase tracking-widest">Ver detalle</button>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* MODAL ARCHIVOS */}
+      {showReportModal && (
+        <div className="fixed inset-0 bg-black/90 z-[9000] flex items-center justify-center p-4 backdrop-blur-md">
+          <div className="bg-[#040c1a] border border-cyan-500/30 p-8 rounded-3xl w-full max-w-md shadow-2xl animate-in zoom-in-95 duration-200">
+            <h3 className="text-white text-xl mb-6 font-black uppercase tracking-tighter">Subir al Expediente</h3>
+            <div className="space-y-4">
+              <input type="text" placeholder="Título del Documento" value={newReport.name} onChange={e => setNewReport({...newReport, name: e.target.value})} className="w-full bg-black/60 border border-slate-800 text-white px-4 py-3 rounded-xl text-sm outline-none focus:border-cyan-500" />
+              <div className="flex gap-2 p-1 bg-black/40 rounded-xl border border-slate-800">
+                <button onClick={() => setReportType('file')} className={`flex-1 py-2 rounded-lg text-[10px] font-black ${reportType === 'file' ? 'bg-cyan-500 text-black shadow-lg' : 'text-slate-500'}`}>ARCHIVO</button>
+                <button onClick={() => setReportType('text')} className={`flex-1 py-2 rounded-lg text-[10px] font-black ${reportType === 'text' ? 'bg-cyan-500 text-black shadow-lg' : 'text-slate-500'}`}>TEXTO</button>
+              </div>
+              {reportType === 'file' ? (
+                <input type="file" onChange={e => setNewReport({...newReport, file: e.target.files[0]})} className="text-[10px] text-slate-400 file:bg-cyan-500/10 file:text-cyan-400 file:border-none file:px-3 file:py-1 file:rounded-lg file:mr-4 font-bold cursor-pointer" />
+              ) : (
+                <Suspense fallback={<div className="h-32 bg-black/40 rounded-xl" />}>
+                  <div className="bg-white rounded-xl overflow-hidden text-black min-h-[200px]">
+                    <ReactQuill theme="snow" value={newReport.content} onChange={val => setNewReport({...newReport, content: val})} />
+                  </div>
+                </Suspense>
+              )}
+            </div>
+            <div className="flex gap-3 mt-8">
+              <button onClick={() => handleUploadReport(showReportModal)} className="flex-[2] bg-cyan-500 text-black py-3.5 rounded-2xl text-xs font-black hover:scale-105 transition-all">SUBIR ARCHIVO</button>
+              <button onClick={() => setShowReportModal(null)} className="flex-1 bg-slate-800 text-slate-400 py-3.5 rounded-2xl text-xs font-bold hover:bg-slate-700">CANCELAR</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {imagePreview && (
+        <div className="fixed inset-0 bg-black/95 z-[9999] flex items-center justify-center p-4" onClick={() => setImagePreview(null)}>
+          <img src={imagePreview} className="max-w-full max-h-full object-contain rounded-2xl shadow-2xl border border-white/5" alt="Preview" />
+          <button className="absolute top-6 right-6 text-white text-xl">✕</button>
         </div>
       )}
     </div>
