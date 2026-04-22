@@ -557,7 +557,7 @@ export default function Sales() {
   const chartData = isHourlyRange ? (data.hourly || []) : (data.daily || []);
 
   return (
-    <div className="min-h-screen bg-[#030712] text-slate-200 p-4 lg:p-6 space-y-5 font-sans overflow-x-hidden">
+    <div className="min-h-screen bg-[#030712] text-slate-200 p-3 sm:p-4 lg:p-6 space-y-4 sm:space-y-5 font-sans overflow-x-hidden">
       
       {/* ── HEADER ── */}
       <div className="bg-[#0b1120] border border-slate-800 rounded-2xl p-5 lg:p-6">
@@ -801,8 +801,8 @@ export default function Sales() {
       </div>
 
       {compareEnabled && comparison && viewMode !== 'shift_close' && (
-        <div className="bg-[#0b1120] border border-cyan-500/20 rounded-2xl p-4 md:p-5">
-          <div className="flex items-center justify-between flex-wrap gap-3">
+        <div className="bg-[#0b1120] border border-cyan-500/20 rounded-2xl p-3 sm:p-4 md:p-5">
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
             <div>
               <p className="text-cyan-400 text-xs font-black uppercase tracking-widest">
                 📊 Comparativo de períodos {customCompareMode ? '(Personalizado)' : '(Automático)'}
@@ -829,7 +829,7 @@ export default function Sales() {
             </div>
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mt-4">
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-3 mt-4">
             {/* Periodo 1 */}
             <div className="bg-cyan-500/10 border border-cyan-500/30 rounded-xl p-4">
               <p className="text-cyan-400 text-xs font-bold uppercase mb-2">
@@ -891,7 +891,7 @@ export default function Sales() {
           </div>
 
           {/* Métricas adicionales */}
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mt-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 mt-3">
             <div className="bg-black/20 border border-slate-800 rounded-xl p-3">
               <p className="text-slate-500 text-[11px]">Venta total</p>
               <p className="text-white font-black text-lg">{formatCurrency(comparison.current?.total || 0)}</p>
@@ -912,7 +912,7 @@ export default function Sales() {
       )}
 
       {/* ── KPIs ── (solo en vista General) */}
-      {viewMode === 'overview' && <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+      {viewMode === 'overview' && <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
         <KPICard icon="🧾" label="Tickets cerrados" value={stats.checks} sub="Cuentas cobradas en el período" accent="#06b6d4" border="border-cyan-500/25" isCurrency={false} fmt={formatCurrency} />
         <KPICard icon="💵" label="Ticket promedio" value={avgTicket} sub={`Promedio sobre ${stats.checks} tickets`} accent="#a78bfa" border="border-violet-500/25" isCurrency={true} fmt={formatCurrency} />
         <KPICard icon="👥" label="Comensales" value={stats.covers} sub="Personas atendidas" accent="#818cf8" border="border-indigo-500/25" isCurrency={false} fmt={formatCurrency} />
@@ -927,9 +927,9 @@ export default function Sales() {
         {/* ── VISTA GENERAL ── */}
         {viewMode === 'overview' && (
           <motion.div key="ov" initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} className="space-y-5">
-            <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 lg:gap-5">
               {/* Gráfica Horaria */}
-              <div className="lg:col-span-2 bg-[#0b1120] border border-slate-800 p-5 rounded-2xl">
+              <div className="lg:col-span-2 bg-[#0b1120] border border-slate-800 p-4 sm:p-5 rounded-2xl">
                 <SectionHeader icon="📈" title={isHourlyRange ? 'Ventas por hora' : 'Ventas por día'} desc={isHourlyRange ? 'Cuánto se vendió en cada franja horaria del día' : 'Resumen diario dentro del período seleccionado'} />
                 <div className="h-64">
                   <ResponsiveContainer width="100%" height="100%">
@@ -948,7 +948,7 @@ export default function Sales() {
               </div>
 
               {/* Métodos de Pago */}
-              <div className="bg-[#0b1120] border border-slate-800 p-5 rounded-2xl flex flex-col">
+              <div className="bg-[#0b1120] border border-slate-800 p-4 sm:p-5 rounded-2xl flex flex-col">
                 <SectionHeader icon="💳" title="Métodos de pago" desc="Cómo pagaron los clientes" />
                 <ResponsiveContainer width="100%" height={170}>
                   <PieChart>
@@ -975,7 +975,7 @@ export default function Sales() {
             </div>
 
             {/* Propinas + Hora pico + Mesas */}
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 sm:gap-4">
               <div className="bg-[#0b1120] border border-emerald-500/20 p-5 rounded-2xl">
                 <SectionHeader icon="💚" title="Propinas" desc="Cobradas en este período" />
                 <div className="space-y-2">
@@ -1049,7 +1049,7 @@ export default function Sales() {
         {/* ── TICKETS ── */}
         {viewMode === 'tickets' && (
           <motion.div key="nt" initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="bg-[#0b1120] border border-slate-800 rounded-2xl overflow-hidden">
-            <div className="p-5 border-b border-slate-800 flex items-center justify-between flex-wrap gap-3">
+            <div className="p-4 sm:p-5 border-b border-slate-800 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
               <div>
                 <h3 className="text-white font-bold flex items-center gap-2">📋 Lista de Tickets</h3>
                 <p className="text-slate-500 text-xs mt-0.5">{tickets.length} tickets · {selectedRangeLabel}</p>
@@ -1061,24 +1061,24 @@ export default function Sales() {
               </div>
             </div>
             <div className="overflow-x-auto">
-              <table className="w-full text-left">
+              <table className="w-full text-left text-xs sm:text-sm">
                 <thead className="bg-black/30 text-[10px] text-slate-500 font-black uppercase tracking-wider">
                   <tr>
-                    <th className="px-5 py-3">Folio</th>
-                    <th className="px-5 py-3">Estado</th>
-                    <th className="px-5 py-3">Mesa</th>
-                    <th className="px-5 py-3">Mesero</th>
-                    <th className="px-5 py-3 text-right">Subtotal</th>
-                    <th className="px-5 py-3 text-right">Propina</th>
-                    <th className="px-5 py-3 text-right">Total cobrado</th>
-                    <th className="px-3 py-3 text-center">Productos</th>
+                    <th className="px-3 sm:px-5 py-3">Folio</th>
+                    <th className="px-3 sm:px-5 py-3 hidden sm:table-cell">Estado</th>
+                    <th className="px-3 sm:px-5 py-3">Mesa</th>
+                    <th className="px-3 sm:px-5 py-3">Mesero</th>
+                    <th className="px-3 sm:px-5 py-3 text-right hidden sm:table-cell">Subtotal</th>
+                    <th className="px-3 sm:px-5 py-3 text-right">Propina</th>
+                    <th className="px-3 sm:px-5 py-3 text-right">Total</th>
+                    <th className="px-3 py-3 text-center">🍽️</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-800/40">
                   {tickets.map((t, i) => (
                     <tr key={i} className={`hover:bg-white/[0.02] transition-colors ${t.status === 'canceled' ? 'opacity-40' : ''}`}>
-                      <td className="px-5 py-3.5 font-mono text-cyan-400 font-bold">#{t.folio}</td>
-                      <td className="px-5 py-3.5">
+                      <td className="px-3 sm:px-5 py-3.5 font-mono text-cyan-400 font-bold">#{t.folio}</td>
+                      <td className="px-3 sm:px-5 py-3.5 hidden sm:table-cell">
                         <span className={`inline-flex items-center gap-1 px-2.5 py-1 text-[10px] font-bold uppercase rounded-lg border ${
                           t.status === 'canceled' ? 'bg-red-500/10 text-red-400 border-red-500/20' :
                           t.status === 'open'     ? 'bg-orange-500/10 text-orange-400 border-orange-500/20' :
@@ -1086,17 +1086,17 @@ export default function Sales() {
                           {t.status === 'closed' ? '✓ Cobrado' : t.status === 'open' ? '● Abierto' : '✕ Cancelado'}
                         </span>
                       </td>
-                      <td className="px-5 py-3.5 text-slate-300 font-medium">Mesa {t.table_number || '--'}</td>
-                      <td className="px-5 py-3.5 text-slate-300 text-sm font-bold uppercase tracking-wide">{t.waiter_name || '--'}</td>
-                      <td className="px-5 py-3.5 text-right text-slate-500 font-mono text-sm">{formatCurrency(t.subtotal || t.total)}</td>
-                      <td className="px-5 py-3.5 text-right text-emerald-400 font-mono font-bold text-sm">{t.tip > 0 ? formatCurrency(t.tip) : <span className="text-slate-700">—</span>}</td>
-                      <td className={`px-5 py-3.5 text-right font-black text-base ${t.status === 'canceled' ? 'line-through text-slate-700' : 'text-white'}`}>{formatCurrency(t.total)}</td>
+                      <td className="px-3 sm:px-5 py-3.5 text-slate-300 font-medium text-xs sm:text-sm">Mesa {t.table_number || '--'}</td>
+                      <td className="px-3 sm:px-5 py-3.5 text-slate-300 text-xs sm:text-sm font-bold uppercase tracking-wide">{t.waiter_name || '--'}</td>
+                      <td className="px-3 sm:px-5 py-3.5 text-right text-slate-500 font-mono text-xs sm:text-sm hidden sm:table-cell">{formatCurrency(t.subtotal || t.total)}</td>
+                      <td className="px-3 sm:px-5 py-3.5 text-right text-emerald-400 font-mono font-bold text-xs sm:text-sm">{t.tip > 0 ? formatCurrency(t.tip) : <span className="text-slate-700">—</span>}</td>
+                      <td className={`px-3 sm:px-5 py-3.5 text-right font-black text-sm sm:text-base ${t.status === 'canceled' ? 'line-through text-slate-700' : 'text-white'}`}>{formatCurrency(t.total)}</td>
                       <td className="px-3 py-3.5 text-center">
                         <button
                           onClick={() => setSelectedTicket(t)}
-                          className="px-3 py-1.5 rounded-lg bg-cyan-500/10 border border-cyan-500/20 text-cyan-400 text-[10px] font-bold hover:bg-cyan-500/20 transition-all"
+                          className="px-2 py-1 rounded-lg bg-cyan-500/10 border border-cyan-500/20 text-cyan-400 text-[9px] sm:text-[10px] font-bold hover:bg-cyan-500/20 transition-all"
                         >
-                          🍽️ Ver
+                          🍽️
                         </button>
                       </td>
                     </tr>
@@ -1110,39 +1110,39 @@ export default function Sales() {
           </motion.div>
         )}
 
-        {/* ── MESEROS ── */}
+        {/* ?? MESEROS ?? */}
         {viewMode === 'waiters' && (
           <motion.div key="wt" initial={{ opacity: 0, scale: 0.98 }} animate={{ opacity: 1, scale: 1 }} className="space-y-4">
-            <div className="bg-[#0b1120] border border-slate-800 p-4 rounded-2xl flex items-center justify-between">
-              <div><p className="text-white font-bold flex items-center gap-2">🧑‍🍳 Desempeño por mesero</p>
+            <div className="bg-[#0b1120] border border-slate-800 p-3 sm:p-4 rounded-2xl flex items-center justify-between">
+              <div><p className="text-white font-bold flex items-center gap-2">?? Desempeño por mesero</p>
                 <p className="text-slate-500 text-xs mt-0.5">{data.waiters?.length || 0} meseros activos · {selectedRangeLabel}</p></div>
             </div>
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 sm:gap-4">
               {data.waiters?.map((w, i) => {
                 const topWaiter = data.waiters.reduce((a, b) => a.total > b.total ? a : b, {});
                 const isTop = w.name === topWaiter.name;
                 return (
-                  <div key={i} className={`bg-[#0b1120] border rounded-2xl p-5 hover:border-cyan-500/40 transition-all group relative ${isTop ? 'border-amber-500/35' : 'border-slate-800'}`}>
-                    {isTop && <span className="absolute top-4 right-4 text-xs font-bold text-amber-400 bg-amber-500/10 border border-amber-500/20 px-2 py-0.5 rounded-full">⭐ Top</span>}
+                  <div key={i} className={`bg-[#0b1120] border rounded-2xl p-4 sm:p-5 hover:border-cyan-500/40 transition-all group relative ${isTop ? 'border-amber-500/35' : 'border-slate-800'}`}>
+                    {isTop && <span className="absolute top-4 right-4 text-xs font-bold text-amber-400 bg-amber-500/10 border border-amber-500/20 px-2 py-0.5 rounded-full">? Top</span>}
                     <div className="flex items-center gap-3 mb-4">
-                      <div className="w-11 h-11 rounded-xl flex items-center justify-center text-lg font-black bg-cyan-500/15 border border-cyan-500/25 text-cyan-400 group-hover:bg-cyan-500 group-hover:text-black transition-all shrink-0">
+                      <div className="w-10 h-10 sm:w-11 sm:h-11 rounded-xl flex items-center justify-center text-lg font-black bg-cyan-500/15 border border-cyan-500/25 text-cyan-400 group-hover:bg-cyan-500 group-hover:text-black transition-all shrink-0">
                         {w.name.charAt(0).toUpperCase()}
                       </div>
                       <div><h4 className="text-white font-bold">{w.name}</h4>
                         <p className="text-slate-500 text-xs">{w.checks} tickets atendidos</p></div>
                     </div>
                     <div className="space-y-3">
-                      <div className="flex justify-between items-center p-3 bg-black/20 rounded-xl">
+                      <div className="flex justify-between items-center p-2.5 sm:p-3 bg-black/20 rounded-xl">
                         <span className="text-slate-400 text-xs font-bold uppercase">Ventas totales</span>
-                        <span className="text-white font-black text-xl">{formatCurrency(w.total)}</span>
+                        <span className="text-white font-black text-lg sm:text-xl">{formatCurrency(w.total)}</span>
                       </div>
                       <div className="grid grid-cols-2 gap-2">
-                        <div className="p-2.5 bg-emerald-500/5 border border-emerald-500/15 rounded-xl text-center">
-                          <p className="text-emerald-400 font-black text-base">{formatCurrency(w.tips)}</p>
+                        <div className="p-2 sm:p-2.5 bg-emerald-500/5 border border-emerald-500/15 rounded-xl text-center">
+                          <p className="text-emerald-400 font-black text-sm sm:text-base">{formatCurrency(w.tips)}</p>
                           <p className="text-slate-600 text-[10px] uppercase mt-0.5">Propinas</p>
                         </div>
-                        <div className="p-2.5 bg-cyan-500/5 border border-cyan-500/15 rounded-xl text-center">
-                          <p className="text-cyan-400 font-black text-base">{formatCurrency(w.total / (w.checks || 1))}</p>
+                        <div className="p-2 sm:p-2.5 bg-cyan-500/5 border border-cyan-500/15 rounded-xl text-center">
+                          <p className="text-cyan-400 font-black text-sm sm:text-base">{formatCurrency(w.total / (w.checks || 1))}</p>
                           <p className="text-slate-600 text-[10px] uppercase mt-0.5">Prom/ticket</p>
                         </div>
                       </div>
@@ -1152,7 +1152,7 @@ export default function Sales() {
               })}
               {(!data.waiters || data.waiters.length === 0) && (
                 <div className="col-span-3 text-center py-16 bg-[#0b1120] rounded-2xl border border-slate-800">
-                  <p className="text-4xl mb-3">👥</p><p className="text-slate-500 text-sm">Sin datos de meseros</p>
+                  <p className="text-4xl mb-3">?</p><p className="text-slate-500 text-sm">Sin datos de meseros</p>
                 </div>
               )}
             </div>
