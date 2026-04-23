@@ -22,6 +22,24 @@ php nombre-del-script.php
 - Sincronizador: `C:\Sincronizador\softrestaurant-sync\`
 - Scripts de exploración se colocan en esa misma carpeta.
 
+### Confirmaciones operativas (abril 2026)
+- ✅ Se puede ejecutar `ALTER TABLE` directamente en phpMyAdmin para migraciones de sincronización (`sr_sales`, `sr_sale_items`, `sr_cash_movements`, etc.).
+- ✅ Antes de aplicar cambios estructurales, preparar SQL reversible y ejecutar en ventana controlada (para evitar impacto en dashboard en vivo).
+
+### Entorno real (arquitectura vigente)
+- 🌐 Hosting web/API: Hostinger (entorno compartido, acceso por `public_html` + phpMyAdmin del hosting).
+- 🗄️ SQL Server SoftRestaurant: corre en CPU local/servidor local del negocio.
+- 🔄 Sincronizador SoftRestaurant: script PHP ejecutado en CPU local (no en Hostinger), enviando datos por HTTP a `/api/softrestaurant/sync.php`.
+- 🧰 Build/deploy frontend: normalmente desde entorno local con `npm run build`.
+- ℹ️ Node.js no está garantizado en el servidor compartido; el build se realiza localmente y luego se suben artefactos.
+
+### Migraciones SQL Sync (v1.6)
+- Si phpMyAdmin muestra `#1061 - Duplicate key name ...` durante `ALTER TABLE ... ADD UNIQUE KEY`, **no es un fallo de datos**, significa que el índice ya existe.
+- Para evitar bloqueos en despliegue, usar SQL idempotente:
+  - validar existencia del índice en `information_schema.statistics`
+  - ejecutar `ALTER TABLE` solo cuando no exista.
+- Script recomendado: `database/sync-v1.6.0-dedup.sql` (idempotente).
+
 ---
 
 ## 🆕 Historial de Cambios Funcionando (22 de abril de 2026)

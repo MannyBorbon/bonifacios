@@ -389,7 +389,11 @@ function syncSales($conn, $sales) {
             if ($status === 'canceled') $status = 'cancelled';
             if (!in_array($status, ['open', 'closed', 'cancelled'])) $status = 'open';
 
-            $srId        = $conn->escape_string($sale['sr_ticket_id']   ?? '');
+            $rawSrId     = trim((string)($sale['sr_ticket_id'] ?? $sale['folio'] ?? $sale['ticket_number'] ?? ''));
+            if ($rawSrId === '') {
+                throw new Exception('sr_ticket_id vacío');
+            }
+            $srId        = $conn->escape_string($rawSrId);
             $ticketNum   = $conn->escape_string($sale['ticket_number']  ?? '');
             $folio       = $conn->escape_string($sale['folio']          ?? $sale['ticket_number'] ?? '');
             $saleDate    = $conn->escape_string($sale['sale_date']      ?? '');
@@ -465,13 +469,14 @@ function syncSales($conn, $sales) {
             $insertId     = $conn->insert_id;
 
             if (!empty($sale['items'])) {
-                $saleId = $insertId > 0 ? $insertId : getLocalSaleId($conn, $sale['sr_ticket_id']);
-                syncSaleItems($conn, $saleId, $sale['items'], $sale['sr_ticket_id']);
+                $saleId = $insertId > 0 ? $insertId : getLocalSaleId($conn, $rawSrId);
+                syncSaleItems($conn, $saleId, $sale['items'], $rawSrId);
             }
 
-            if ($affectedRows > 0) {
-                $insertId > 0 ? $inserted++ : $updated++;
-            } else {
+            // MySQL: affected_rows 1=insert, 2=update, 0=sin cambios
+            if ($affectedRows === 1 && $insertId > 0) {
+                $inserted++;
+            } elseif ($affectedRows >= 0) {
                 $updated++;
             }
 
@@ -557,7 +562,17 @@ function syncCashMovements($conn, $movements) {
     foreach ($movements as $m) {
         try {
             // Normalizar campos (compatible con v1 y v2 del sender)
-            $movementId    = $m['movement_id'] ?? $m['sr_movement_id'] ?? uniqid('mov_');
+            $movementId    = trim((string)($m['movement_id'] ?? $m['sr_movement_id'] ?? ''));
+            if ($movementId === '') {
+                // Evitar IDs no determinísticos que generan duplicación.
+                $movementId = md5(json_encode([
+                    $m['movement_datetime'] ?? '',
+                    $m['folio_movto'] ?? '',
+                    $m['amount'] ?? 0,
+                    $m['concept'] ?? '',
+                    $m['shift_id'] ?? '',
+                ]));
+            }
             $folioMovto    = $m['folio_movto'] ?? $m['sr_movement_id'] ?? '';
             $movementType  = $m['movement_type'] ?? 'other';
             $tipoOriginal  = intval($m['tipo_original'] ?? 0);
@@ -592,9 +607,8 @@ function syncCashMovements($conn, $movements) {
             );
             $stmt->execute();
             
-            if ($stmt->affected_rows > 0) {
-                $stmt->insert_id > 0 ? $inserted++ : $updated++;
-            }
+            if ($stmt->affected_rows === 1 && $stmt->insert_id > 0) $inserted++;
+            else $updated++;
         } catch (Exception $e) {
             $failed++;
         }
@@ -737,9 +751,39 @@ function syncTicketItems($conn, $tickets) {
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     ");
 
+    // Compatible con ambos formatos:
+    // A) [{folio:'', items:[...]}]
+    // B) [{sr_ticket_id:'', product_name:'', quantity:...}, ...]
+    $normalizedTickets = [];
     foreach ($tickets as $t) {
-        $folio = $conn->real_escape_string($t['folio'] ?? '');
-        if (!$folio) continue;
+        $isFlatRow = isset($t['sr_ticket_id']) && !isset($t['items']);
+        if ($isFlatRow) {
+            $folio = trim((string)($t['folio'] ?? $t['sr_ticket_id'] ?? $t['ticket_number'] ?? ''));
+            if ($folio === '') continue;
+            if (!isset($normalizedTickets[$folio])) {
+                $normalizedTickets[$folio] = ['folio' => $folio, 'items' => []];
+            }
+            $normalizedTickets[$folio]['items'][] = [
+                'product_id'   => $t['product_id']   ?? '',
+                'product_name' => $t['product_name'] ?? '',
+                'category'     => $t['category']     ?? '',
+                'qty'          => $t['qty']          ?? $t['quantity'] ?? 1,
+                'unit_price'   => $t['unit_price']   ?? 0,
+                'subtotal'     => $t['subtotal']     ?? 0,
+                'discount'     => $t['discount']     ?? 0,
+                'notes'        => $t['notes']        ?? '',
+            ];
+            continue;
+        }
+
+        $folio = trim((string)($t['folio'] ?? ''));
+        if ($folio === '') continue;
+        $normalizedTickets[$folio] = $t;
+    }
+
+    foreach ($normalizedTickets as $t) {
+        $folio = trim((string)($t['folio'] ?? ''));
+        if ($folio === '') continue;
         try {
             $stmtDel->bind_param('s', $folio);
             $stmtDel->execute();
@@ -756,6 +800,7 @@ function syncTicketItems($conn, $tickets) {
                 $stmtIns->execute();
                 $inserted++;
             }
+            $updated++;
         } catch (Exception $e) { $failed++; }
     }
     return [$inserted, $updated, $failed];
@@ -816,7 +861,8 @@ function syncShifts($conn, $shifts) {
                 $efectivo, $tarjeta, $vales, $credito, $company
             );
             $stmt->execute();
-            $stmt->affected_rows > 0 ? ($stmt->insert_id > 0 ? $inserted++ : $updated++) : null;
+            if ($stmt->affected_rows === 1 && $stmt->insert_id > 0) $inserted++;
+            else $updated++;
         } catch (Exception $e) {
             $failed++;
         }
@@ -854,9 +900,8 @@ function syncCancellationsData($conn, $cancellations) {
             $stmtInsert->bind_param('sdsss', $ticketNumber, $amount, $userName, $reason, $cancelDate);
             $stmtInsert->execute();
 
-            if ($stmtInsert->affected_rows > 0) {
-                $stmtInsert->insert_id > 0 ? $inserted++ : $updated++;
-            }
+            if ($stmtInsert->affected_rows === 1 && $stmtInsert->insert_id > 0) $inserted++;
+            else $updated++;
 
             // Marcar como cancelado en sr_sales para que salga de conteos abiertos
             $stmtMarkCancelled->bind_param('s', $ticketNumber);

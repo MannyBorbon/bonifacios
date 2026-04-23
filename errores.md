@@ -7,6 +7,20 @@
 
 ## 🔴 Errores resueltos (histórico)
 
+### 0. SQL de migración Sync v1.6 falló con `#1061 Duplicate key name`
+- **Síntoma:** En phpMyAdmin, al ejecutar:
+  - `ALTER TABLE sr_sales ADD UNIQUE KEY uq_sr_sales_ticket (sr_ticket_id);`
+  aparece: `#1061 - Duplicate key name 'uq_sr_sales_ticket'`.
+- **Causa raíz:** El índice ya existía previamente en la tabla. El script no era idempotente y volvió a intentar crearlo.
+- **Fix aplicado:**
+  - Se ajustó el SQL de migración para validar en `information_schema.statistics` si el índice existe antes de ejecutar `ALTER TABLE`.
+  - Se dejó script idempotente para:
+    - `uq_sr_sales_ticket`
+    - `uq_sr_cash_movements_movement`
+    - `uq_sr_cancellations_ticket_date`
+    - `idx_sr_ticket_items_folio`
+- **Estado:** ✅ Resuelto.
+
 ### 1. `/api/email/send.php` → 500 Internal Server Error
 - **Síntoma:** `POST https://bonifaciossancarlos.com/api/email/send.php 500` desde `Inbox.jsx`.
 - **Causa raíz:** Apostrofes sin escapar en dos puntos del archivo:
