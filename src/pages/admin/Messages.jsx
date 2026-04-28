@@ -335,6 +335,10 @@ function Messages() {
   const [uploading, setUploading] = useState(null);
   const [showNewChat, setShowNewChat] = useState(false);
   const [videoCall, setVideoCall] = useState(false);
+  const [showSupport, setShowSupport] = useState(false);
+  const [supportTickets, setSupportTickets] = useState([]);
+  const [ticketTitle, setTicketTitle] = useState('');
+  const [ticketCategory, setTicketCategory] = useState('general');
   const [showSidebar, setShowSidebar] = useState(true);
   const [loadingMsgs, setLoadingMsgs] = useState(false);
   const [recording, setRecording] = useState(false);
@@ -412,7 +416,17 @@ function Messages() {
     } catch { /* silent */ }
   }, []);
 
-  useEffect(() => { loadConversations(); loadUsers(); loadAllUsers(); }, [loadConversations, loadUsers, loadAllUsers]);
+  const loadSupportTickets = useCallback(async () => {
+    try {
+      const res = await fetch(`${import.meta.env.VITE_API_URL}/support/tickets.php`, { credentials: 'include' });
+      const data = await res.json();
+      if (data.success) setSupportTickets(data.tickets || []);
+    } catch {
+      setSupportTickets([]);
+    }
+  }, []);
+
+  useEffect(() => { loadConversations(); loadUsers(); loadAllUsers(); loadSupportTickets(); }, [loadConversations, loadUsers, loadAllUsers, loadSupportTickets]);
 
   // Poll online status every 30 seconds
   useEffect(() => {
@@ -573,6 +587,32 @@ function Messages() {
 
   const totalUnread = conversations.reduce((s, c) => s + (parseInt(c.unread_count) || 0), 0);
 
+  const createSupportTicket = async () => {
+    if (!ticketTitle.trim()) return;
+    try {
+      const payload = {
+        title: ticketTitle.trim(),
+        category: ticketCategory,
+        priority: 'normal',
+        conversation_id: activeConv?.conversation_id || null
+      };
+      const res = await fetch(`${import.meta.env.VITE_API_URL}/support/tickets.php`, {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      const data = await res.json();
+      if (data.success) {
+        setTicketTitle('');
+        setTicketCategory('general');
+        loadSupportTickets();
+      }
+    } catch {
+      // silent
+    }
+  };
+
   const avatar = (c) => {
     if (c?.other_avatar) return <img src={c.other_avatar} alt="" className="w-full h-full object-cover" />;
     return <span className="text-cyan-400 font-semibold text-sm">{(c?.other_name || '?')[0].toUpperCase()}</span>;
@@ -725,6 +765,15 @@ function Messages() {
                   <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" /></svg>
                 )}
               </button>
+              <button
+                onClick={() => setShowSupport(true)}
+                title="Soporte técnico"
+                className="rounded-full p-2 text-amber-400/60 hover:text-amber-300 hover:bg-amber-500/10 transition-all"
+              >
+                <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M18.364 5.636l-1.414 1.414m0 0A9 9 0 003 12v1m13.95-5.95A9 9 0 0121 12v1m-4.05-5.95L12 12m0 0v9m0-9L7.05 7.05" />
+                </svg>
+              </button>
             </div>
 
             {videoCall && <JitsiMeeting
@@ -845,6 +894,50 @@ function Messages() {
                   </div>
                   <svg className="h-4 w-4 text-cyan-500/20" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" /></svg>
                 </button>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+      {showSupport && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4" onClick={() => setShowSupport(false)}>
+          <div className="w-full max-w-xl rounded-2xl border border-amber-500/20 bg-gradient-to-br from-[#040c1a] to-[#060f20] shadow-2xl overflow-hidden" onClick={(e) => e.stopPropagation()}>
+            <div className="px-5 py-4 border-b border-amber-500/10 flex items-center justify-between">
+              <h3 className="text-base font-light text-white">Tickets de soporte</h3>
+              <button onClick={() => setShowSupport(false)} className="text-slate-500 hover:text-slate-200 transition-colors">
+                <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
+              </button>
+            </div>
+            <div className="p-4 border-b border-amber-500/10">
+              <div className="flex gap-2">
+                <input
+                  value={ticketTitle}
+                  onChange={(e) => setTicketTitle(e.target.value)}
+                  placeholder="Describe el problema técnico..."
+                  className="flex-1 rounded-xl border border-slate-700/60 bg-[#030b18] px-3 py-2 text-sm text-slate-200"
+                />
+                <select value={ticketCategory} onChange={(e) => setTicketCategory(e.target.value)} className="rounded-xl border border-slate-700/60 bg-[#030b18] px-2 py-2 text-xs text-slate-200">
+                  <option value="general">General</option>
+                  <option value="sistema">Sistema</option>
+                  <option value="pagos">Pagos</option>
+                  <option value="reservaciones">Reservaciones</option>
+                </select>
+                <button onClick={createSupportTicket} className="rounded-xl border border-amber-500/25 bg-amber-500/10 px-3 py-2 text-xs text-amber-300">
+                  Crear
+                </button>
+              </div>
+            </div>
+            <div className="max-h-80 overflow-y-auto p-3 space-y-2">
+              {supportTickets.length === 0 ? (
+                <p className="text-xs text-slate-600 text-center py-6">Sin tickets registrados</p>
+              ) : supportTickets.map((t) => (
+                <div key={t.id} className="rounded-xl border border-slate-700/50 bg-[#030b18]/70 p-3">
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="text-sm text-slate-200">{t.title}</p>
+                    <span className="text-[10px] text-amber-300/80 uppercase">{t.status}</span>
+                  </div>
+                  <p className="text-[10px] text-slate-500 mt-1">{t.creator_name || 'Usuario'} · {fmtFull(t.created_at)}</p>
+                </div>
               ))}
             </div>
           </div>

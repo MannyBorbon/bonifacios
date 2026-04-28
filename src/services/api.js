@@ -146,4 +146,12 @@ export const calendarAPI = {
   deleteEvent: (id) => api.post('/calendar/events.php', { action: 'delete', id }),
 };
 
+export const reservationsAPI = {
+  submit: (data) => api.post('/reservations/submit.php', data),
+  availability: (date, time) => api.get('/reservations/availability.php', { params: { date, time } }),
+  list: (params = {}) => api.get('/reservations/list.php', { params }),
+  get: (id) => api.get(`/reservations/get.php?id=${id}`),
+  updateStatus: (data) => api.post('/reservations/update-status.php', data),
+};
+
 export default api;

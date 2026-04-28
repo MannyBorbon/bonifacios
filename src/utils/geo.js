@@ -10,7 +10,10 @@ export function parseIpCoords(ipLocation) {
 // Tries multiple strategies to maximize results for Mexican addresses
 const geocodeCache = {};
 let lastRequestTime = 0;
-async function nominatimSearch(query) {
+let geocodeBlockedUntil = 0;
+async function nominatimSearch(query, noCache = false) {
+  if (Date.now() < geocodeBlockedUntil) return null;
+  let timer = null;
   try {
     // Rate limit: wait at least 1100ms between requests
     const now = Date.now();
@@ -19,15 +22,28 @@ async function nominatimSearch(query) {
       await new Promise(r => setTimeout(r, 1100 - elapsed));
     }
     lastRequestTime = Date.now();
-    const res = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(query)}&limit=1&countrycodes=mx`, {
-      headers: { 'Accept-Language': 'es' }
+    const controller = new AbortController();
+    timer = setTimeout(() => controller.abort(), 7000);
+    const apiBase = import.meta.env.VITE_API_URL || '/api';
+    const url = `${apiBase}/applications/geocode.php?q=${encodeURIComponent(query)}${noCache ? '&nocache=1' : ''}`;
+    const res = await fetch(url, {
+      headers: { 'Accept-Language': 'es' },
+      signal: controller.signal,
+      credentials: 'include',
     });
-    const data = await res.json();
-    if (data && data.length > 0) {
-      return [parseFloat(data[0].lat), parseFloat(data[0].lon)];
+    clearTimeout(timer);
+    if (res.status === 429) {
+      geocodeBlockedUntil = Date.now() + 60 * 1000;
+      return null;
+    }
+    const data = await res.json().catch(() => null);
+    if (data?.success && Array.isArray(data.coords) && data.coords.length === 2) {
+      return [parseFloat(data.coords[0]), parseFloat(data.coords[1])];
     }
   } catch (e) {
     console.error('Geocode error:', e);
+  } finally {
+    if (timer) clearTimeout(timer);
   }
   return null;
 }
@@ -106,8 +122,17 @@ function extractCity(addr) {
 
 export async function geocodeAddress(address) {
   if (!address) return null;
+  // Accept direct coordinates input: "lat, lng"
+  const coordMatch = String(address).trim().match(/^\s*(-?\d{1,2}(?:\.\d+)?)\s*,\s*(-?\d{1,3}(?:\.\d+)?)\s*$/);
+  if (coordMatch) {
+    const lat = parseFloat(coordMatch[1]);
+    const lng = parseFloat(coordMatch[2]);
+    if (!Number.isNaN(lat) && !Number.isNaN(lng) && lat >= -90 && lat <= 90 && lng >= -180 && lng <= 180) {
+      return [lat, lng];
+    }
+  }
   const key = address.trim().toLowerCase();
-  if (geocodeCache[key]) return geocodeCache[key];
+  if (Object.prototype.hasOwnProperty.call(geocodeCache, key)) return geocodeCache[key];
   // Try 1: full address as-is
   let coords = await nominatimSearch(address);
   // Try 2: simplified address
@@ -140,7 +165,11 @@ export async function geocodeAddress(address) {
       coords = await nominatimSearch(words.slice(-3).join(' ') + ', Mexico');
     }
   }
-  if (coords) geocodeCache[key] = coords;
+  // If every strategy failed, retry once bypassing server cache.
+  if (!coords) {
+    coords = await nominatimSearch(address, true);
+  }
+  geocodeCache[key] = coords || null;
   if (!coords) console.warn('[geo] Could not geocode:', address);
   return coords;
 }

@@ -254,10 +254,18 @@ function getTipsByWaiter($pdo, $start, $end) {
 }
 
 function getStatusCondition($statusFilter) {
-    if ($statusFilter === 'open') return "AND status = 'open'";
-    if ($statusFilter === 'closed') return "AND status = 'closed'";
-    // 'all' = open + closed (excluye cancelled)
-    return "AND status IN ('open', 'closed')";
+    // Normalizar variantes reales que llegan desde sincronización
+    // open: open, abierto, pending
+    // closed: closed, cerrado, cobrado, pagado, paid
+    // cancelled: cancelled, canceled, cancelado
+    if ($statusFilter === 'open') {
+        return "AND LOWER(COALESCE(status,'')) IN ('open','abierto','pending')";
+    }
+    if ($statusFilter === 'closed') {
+        return "AND LOWER(COALESCE(status,'')) IN ('closed','cerrado','cobrado','pagado','paid')";
+    }
+    // 'all' = abiertos + cerrados (excluye cancelados)
+    return "AND LOWER(COALESCE(status,'')) NOT IN ('cancelled','canceled','cancelado')";
 }
 
 function getCancellations($pdo, $start = null, $end = null, $limit = 50) {
@@ -294,16 +302,35 @@ function getCancellations($pdo, $start = null, $end = null, $limit = 50) {
 }
 
 function getOpenStats($pdo, $todayStart, $todayEnd) {
+    $ticketKeyExpr = "COALESCE(
+        NULLIF(TRIM(REPLACE(CAST(sr_ticket_id AS CHAR), '#', '')), ''),
+        NULLIF(TRIM(REPLACE(CAST(folio AS CHAR), '#', '')), ''),
+        NULLIF(TRIM(REPLACE(CAST(ticket_number AS CHAR), '#', '')), '')
+    )";
     $sql = "SELECT COUNT(*) as total_checks, 
-                   COALESCE(SUM(total), 0) as total_sales,
-                   COALESCE(SUM(COALESCE(tip, 0)), 0) as total_tips,
-                   COALESCE(AVG(total), 0) as average_ticket, 
-                   COALESCE(SUM(covers), 0) as total_covers
-            FROM sr_sales 
-            WHERE status = 'open' 
-              AND sale_datetime BETWEEN ? AND ?";
+                   COALESCE(SUM(o.total), 0) as total_sales,
+                   COALESCE(SUM(COALESCE(o.tip, 0)), 0) as total_tips,
+                   COALESCE(AVG(o.total), 0) as average_ticket, 
+                   COALESCE(SUM(o.covers), 0) as total_covers
+            FROM sr_sales o
+            WHERE LOWER(COALESCE(o.status,'')) IN ('open','abierto','pending')
+              AND o.sale_datetime BETWEEN ? AND ?
+              AND (
+                ($ticketKeyExpr) IS NULL
+                OR NOT EXISTS (
+                  SELECT 1
+                  FROM sr_sales c
+                  WHERE LOWER(COALESCE(c.status,'')) IN ('closed','cerrado','cobrado','pagado','paid')
+                    AND c.sale_datetime BETWEEN ? AND ?
+                    AND COALESCE(
+                      NULLIF(TRIM(REPLACE(CAST(c.sr_ticket_id AS CHAR), '#', '')), ''),
+                      NULLIF(TRIM(REPLACE(CAST(c.folio AS CHAR), '#', '')), ''),
+                      NULLIF(TRIM(REPLACE(CAST(c.ticket_number AS CHAR), '#', '')), '')
+                    ) = ($ticketKeyExpr)
+                )
+              )";
     $stmt = $pdo->prepare($sql);
-    $stmt->execute([$todayStart, $todayEnd]);
+    $stmt->execute([$todayStart, $todayEnd, $todayStart, $todayEnd]);
     $result = $stmt->fetch(PDO::FETCH_ASSOC);
     return [
         'total' => floatval($result['total_sales']),
@@ -315,16 +342,35 @@ function getOpenStats($pdo, $todayStart, $todayEnd) {
 }
 
 function getHistoricalOpenStats($pdo, $todayStart) {
+    $ticketKeyExpr = "COALESCE(
+        NULLIF(TRIM(REPLACE(CAST(sr_ticket_id AS CHAR), '#', '')), ''),
+        NULLIF(TRIM(REPLACE(CAST(folio AS CHAR), '#', '')), ''),
+        NULLIF(TRIM(REPLACE(CAST(ticket_number AS CHAR), '#', '')), '')
+    )";
     $sql = "SELECT COUNT(*) as total_checks, 
-                   COALESCE(SUM(total), 0) as total_sales,
-                   COALESCE(SUM(COALESCE(tip, 0)), 0) as total_tips,
-                   COALESCE(AVG(total), 0) as average_ticket, 
-                   COALESCE(SUM(covers), 0) as total_covers
-            FROM sr_sales 
-            WHERE status = 'open' 
-              AND sale_datetime < ?";
+                   COALESCE(SUM(o.total), 0) as total_sales,
+                   COALESCE(SUM(COALESCE(o.tip, 0)), 0) as total_tips,
+                   COALESCE(AVG(o.total), 0) as average_ticket, 
+                   COALESCE(SUM(o.covers), 0) as total_covers
+            FROM sr_sales o
+            WHERE LOWER(COALESCE(o.status,'')) IN ('open','abierto','pending')
+              AND o.sale_datetime < ?
+              AND (
+                ($ticketKeyExpr) IS NULL
+                OR NOT EXISTS (
+                  SELECT 1
+                  FROM sr_sales c
+                  WHERE LOWER(COALESCE(c.status,'')) IN ('closed','cerrado','cobrado','pagado','paid')
+                    AND c.sale_datetime < ?
+                    AND COALESCE(
+                      NULLIF(TRIM(REPLACE(CAST(c.sr_ticket_id AS CHAR), '#', '')), ''),
+                      NULLIF(TRIM(REPLACE(CAST(c.folio AS CHAR), '#', '')), ''),
+                      NULLIF(TRIM(REPLACE(CAST(c.ticket_number AS CHAR), '#', '')), '')
+                    ) = ($ticketKeyExpr)
+                )
+              )";
     $stmt = $pdo->prepare($sql);
-    $stmt->execute([$todayStart]);
+    $stmt->execute([$todayStart, $todayStart]);
     $result = $stmt->fetch(PDO::FETCH_ASSOC);
     return [
         'total' => floatval($result['total_sales']),
@@ -554,24 +600,113 @@ function getDailySales($pdo, $start, $end, $statusFilter = 'closed') {
 function getTopProducts($pdo, $start, $end, $statusFilter = 'closed') {
     $cond = getStatusCondition($statusFilter);
     $statusCond = $cond ? str_replace('AND status', 'AND s.status', $cond) : '';
-    $sql = "SELECT 
-                si.product_name,
-                SUM(si.quantity) as total_qty,
-                COUNT(DISTINCT si.sr_ticket_id) as tickets,
-                SUM(si.subtotal) as total_sales
-            FROM sr_sale_items si
-            INNER JOIN sr_sales s ON si.sr_ticket_id = s.sr_ticket_id
-            WHERE s.sale_datetime BETWEEN ? AND ?
-              $statusCond
-              AND si.product_name IS NOT NULL
-              AND si.product_name != ''
-            GROUP BY si.product_name
-            ORDER BY total_qty DESC, total_sales DESC
-            LIMIT 10";
-    
-    $stmt = $pdo->prepare($sql);
-    $stmt->execute([$start, $end]);
-    $results = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    $results = [];
+
+    // Estrategia 1: fuente unificada (sr_sale_items + sr_ticket_items)
+    try {
+        $itemsSource = "
+            SELECT
+                sr_ticket_id AS ticket_ref,
+                product_name,
+                quantity AS qty,
+                subtotal AS sub
+            FROM sr_sale_items
+            WHERE product_name IS NOT NULL AND product_name != ''
+            UNION ALL
+            SELECT
+                t.folio AS ticket_ref,
+                t.product_name,
+                t.qty AS qty,
+                t.subtotal AS sub
+            FROM sr_ticket_items t
+            LEFT JOIN sr_sale_items s2
+                ON s2.sr_ticket_id = t.folio
+               AND s2.product_name = t.product_name
+               AND ABS(COALESCE(s2.subtotal, 0) - COALESCE(t.subtotal, 0)) < 0.01
+            WHERE s2.id IS NULL
+              AND t.product_name IS NOT NULL
+              AND t.product_name != ''
+        ";
+        $ticketJoinCond = "(
+            REPLACE(TRIM(CAST(si.ticket_ref AS CHAR)), '#', '') = REPLACE(TRIM(CAST(s.sr_ticket_id AS CHAR)), '#', '')
+            OR REPLACE(TRIM(CAST(si.ticket_ref AS CHAR)), '#', '') = REPLACE(TRIM(CAST(s.folio AS CHAR)), '#', '')
+            OR REPLACE(TRIM(CAST(si.ticket_ref AS CHAR)), '#', '') = REPLACE(TRIM(CAST(s.ticket_number AS CHAR)), '#', '')
+        )";
+        $sql = "SELECT 
+                    si.product_name,
+                    SUM(si.qty) as total_qty,
+                    COUNT(DISTINCT s.sr_ticket_id) as tickets,
+                    SUM(si.sub) as total_sales
+                FROM ($itemsSource) si
+                INNER JOIN sr_sales s ON $ticketJoinCond
+                WHERE s.sale_datetime BETWEEN ? AND ?
+                  $statusCond
+                  AND si.product_name IS NOT NULL
+                  AND si.product_name != ''
+                GROUP BY si.product_name
+                ORDER BY total_qty DESC, total_sales DESC
+                LIMIT 10";
+        $stmt = $pdo->prepare($sql);
+        $stmt->execute([$start, $end]);
+        $results = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    } catch (Exception $e) {
+        $results = [];
+    }
+
+    // Estrategia 2 (fallback): solo sr_sale_items
+    if (empty($results)) {
+        try {
+            $sql = "SELECT 
+                        si.product_name,
+                        SUM(si.quantity) as total_qty,
+                        COUNT(DISTINCT si.sr_ticket_id) as tickets,
+                        SUM(si.subtotal) as total_sales
+                    FROM sr_sale_items si
+                    INNER JOIN sr_sales s ON si.sr_ticket_id = s.sr_ticket_id
+                    WHERE s.sale_datetime BETWEEN ? AND ?
+                      $statusCond
+                      AND si.product_name IS NOT NULL
+                      AND si.product_name != ''
+                    GROUP BY si.product_name
+                    ORDER BY total_qty DESC, total_sales DESC
+                    LIMIT 10";
+            $stmt = $pdo->prepare($sql);
+            $stmt->execute([$start, $end]);
+            $results = $stmt->fetchAll(PDO::FETCH_ASSOC);
+        } catch (Exception $e) {
+            $results = [];
+        }
+    }
+
+    // Estrategia 3 (fallback final): solo sr_ticket_items
+    if (empty($results)) {
+        try {
+            $sql = "SELECT
+                        ti.product_name,
+                        SUM(ti.qty) as total_qty,
+                        COUNT(DISTINCT s.sr_ticket_id) as tickets,
+                        SUM(ti.subtotal) as total_sales
+                    FROM sr_ticket_items ti
+                    INNER JOIN sr_sales s
+                        ON (
+                            REPLACE(TRIM(CAST(ti.folio AS CHAR)), '#', '') = REPLACE(TRIM(CAST(s.folio AS CHAR)), '#', '')
+                            OR REPLACE(TRIM(CAST(ti.folio AS CHAR)), '#', '') = REPLACE(TRIM(CAST(s.ticket_number AS CHAR)), '#', '')
+                            OR REPLACE(TRIM(CAST(ti.folio AS CHAR)), '#', '') = REPLACE(TRIM(CAST(s.sr_ticket_id AS CHAR)), '#', '')
+                        )
+                    WHERE s.sale_datetime BETWEEN ? AND ?
+                      $statusCond
+                      AND ti.product_name IS NOT NULL
+                      AND ti.product_name != ''
+                    GROUP BY ti.product_name
+                    ORDER BY total_qty DESC, total_sales DESC
+                    LIMIT 10";
+            $stmt = $pdo->prepare($sql);
+            $stmt->execute([$start, $end]);
+            $results = $stmt->fetchAll(PDO::FETCH_ASSOC);
+        } catch (Exception $e) {
+            $results = [];
+        }
+    }
     
     // Calcular porcentaje sobre venta de top productos
     $totalSales = array_sum(array_map(fn($r) => floatval($r['total_sales'] ?? 0), $results));
@@ -679,17 +814,45 @@ function getPaymentMethods($pdo, $start, $end, $statusFilter = 'closed') {
 
 function getDetailedAnalytics($pdo, $start, $end, $statusFilter = 'closed') {
     $statusCond = getStatusCondition($statusFilter);
+    $itemsSource = "
+        SELECT
+            sr_ticket_id AS ticket_ref,
+            product_name,
+            quantity AS qty,
+            subtotal AS sub
+        FROM sr_sale_items
+        WHERE product_name IS NOT NULL AND product_name != ''
+        UNION ALL
+        SELECT
+            t.folio AS ticket_ref,
+            t.product_name,
+            t.qty AS qty,
+            t.subtotal AS sub
+        FROM sr_ticket_items t
+        LEFT JOIN sr_sale_items s
+            ON s.sr_ticket_id = t.folio
+           AND s.product_name = t.product_name
+           AND ABS(COALESCE(s.subtotal, 0) - COALESCE(t.subtotal, 0)) < 0.01
+        WHERE s.id IS NULL
+          AND t.product_name IS NOT NULL
+          AND t.product_name != ''
+    ";
+    $ticketJoinCond = "(
+        REPLACE(TRIM(CAST(i.ticket_ref AS CHAR)), '#', '') = REPLACE(TRIM(CAST(s.sr_ticket_id AS CHAR)), '#', '')
+        OR REPLACE(TRIM(CAST(i.ticket_ref AS CHAR)), '#', '') = REPLACE(TRIM(CAST(s.folio AS CHAR)), '#', '')
+        OR REPLACE(TRIM(CAST(i.ticket_ref AS CHAR)), '#', '') = REPLACE(TRIM(CAST(s.ticket_number AS CHAR)), '#', '')
+    )";
     
     // 1. Productos más y menos vendidos
     $topProducts = [];
     $bottomProducts = [];
     try {
         $sql = "SELECT i.product_name, 
-                       SUM(i.quantity) as total_qty,
-                       SUM(i.total) as total_sales,
-                       COUNT(DISTINCT i.sr_ticket_id) as tickets
-                FROM sr_sale_items i
-                INNER JOIN sr_sales s ON i.sr_ticket_id = s.sr_ticket_id
+                       SUM(i.qty) as total_qty,
+                       SUM(i.sub) as total_sales,
+                       COUNT(DISTINCT s.sr_ticket_id) as tickets
+                FROM ($itemsSource) i
+                INNER JOIN sr_sales s ON $ticketJoinCond
                 WHERE s.sale_datetime BETWEEN ? AND ?
                   $statusCond
                   AND i.product_name IS NOT NULL
@@ -702,11 +865,11 @@ function getDetailedAnalytics($pdo, $start, $end, $statusFilter = 'closed') {
         $topProducts = $stmt->fetchAll(PDO::FETCH_ASSOC);
         
         $sql2 = "SELECT i.product_name, 
-                        SUM(i.quantity) as total_qty,
-                        SUM(i.total) as total_sales,
-                        COUNT(DISTINCT i.sr_ticket_id) as tickets
-                 FROM sr_sale_items i
-                 INNER JOIN sr_sales s ON i.sr_ticket_id = s.sr_ticket_id
+                        SUM(i.qty) as total_qty,
+                        SUM(i.sub) as total_sales,
+                        COUNT(DISTINCT s.sr_ticket_id) as tickets
+                 FROM ($itemsSource) i
+                 INNER JOIN sr_sales s ON $ticketJoinCond
                  WHERE s.sale_datetime BETWEEN ? AND ?
                    $statusCond
                    AND i.product_name IS NOT NULL
@@ -726,10 +889,10 @@ function getDetailedAnalytics($pdo, $start, $end, $statusFilter = 'closed') {
     $bottomBeverages = [];
     try {
         $sql = "SELECT i.product_name, 
-                       SUM(i.quantity) as total_qty,
-                       SUM(i.total) as total_sales
-                FROM sr_sale_items i
-                INNER JOIN sr_sales s ON i.sr_ticket_id = s.sr_ticket_id
+                       SUM(i.qty) as total_qty,
+                       SUM(i.sub) as total_sales
+                FROM ($itemsSource) i
+                INNER JOIN sr_sales s ON $ticketJoinCond
                 WHERE s.sale_datetime BETWEEN ? AND ?
                   $statusCond
                   AND (i.product_name LIKE '%BEBIDA%' 
@@ -746,10 +909,10 @@ function getDetailedAnalytics($pdo, $start, $end, $statusFilter = 'closed') {
         $topBeverages = $stmt->fetchAll(PDO::FETCH_ASSOC);
         
         $sql2 = "SELECT i.product_name, 
-                        SUM(i.quantity) as total_qty,
-                        SUM(i.total) as total_sales
-                 FROM sr_sale_items i
-                 INNER JOIN sr_sales s ON i.sr_ticket_id = s.sr_ticket_id
+                        SUM(i.qty) as total_qty,
+                        SUM(i.sub) as total_sales
+                 FROM ($itemsSource) i
+                 INNER JOIN sr_sales s ON $ticketJoinCond
                  WHERE s.sale_datetime BETWEEN ? AND ?
                    $statusCond
                    AND (i.product_name LIKE '%BEBIDA%' 
@@ -905,9 +1068,9 @@ function getDetailedAnalytics($pdo, $start, $end, $statusFilter = 'closed') {
     $topByCategory = ['food' => null, 'beverage' => null, 'other' => null];
     try {
         // Bebidas
-        $sqlBev = "SELECT i.product_name, SUM(i.quantity) as total_qty, SUM(i.total) as total_sales
-                   FROM sr_sale_items i
-                   INNER JOIN sr_sales s ON i.sr_ticket_id = s.sr_ticket_id
+        $sqlBev = "SELECT i.product_name, SUM(i.qty) as total_qty, SUM(i.sub) as total_sales
+                   FROM ($itemsSource) i
+                   INNER JOIN sr_sales s ON $ticketJoinCond
                    WHERE s.sale_datetime BETWEEN ? AND ? $statusCond
                      AND (i.product_name LIKE '%CERVEZA%' OR i.product_name LIKE '%REFRESCO%'
                           OR i.product_name LIKE '%AGUA%' OR i.product_name LIKE '%VINO%'
@@ -923,9 +1086,9 @@ function getDetailedAnalytics($pdo, $start, $end, $statusFilter = 'closed') {
         $topByCategory['beverage'] = $stmtBev->fetch(PDO::FETCH_ASSOC) ?: null;
 
         // Alimentos (excluir bebidas)
-        $sqlFood = "SELECT i.product_name, SUM(i.quantity) as total_qty, SUM(i.total) as total_sales
-                    FROM sr_sale_items i
-                    INNER JOIN sr_sales s ON i.sr_ticket_id = s.sr_ticket_id
+        $sqlFood = "SELECT i.product_name, SUM(i.qty) as total_qty, SUM(i.sub) as total_sales
+                    FROM ($itemsSource) i
+                    INNER JOIN sr_sales s ON $ticketJoinCond
                     WHERE s.sale_datetime BETWEEN ? AND ? $statusCond
                       AND i.product_name IS NOT NULL AND i.product_name != ''
                       AND i.product_name NOT LIKE '%CERVEZA%' AND i.product_name NOT LIKE '%REFRESCO%'
@@ -960,6 +1123,11 @@ function getDetailedAnalytics($pdo, $start, $end, $statusFilter = 'closed') {
         'tips_breakdown' => $tipsBreakdown,
         'peak_hour' => $peakHour,
         'cancellations' => $periodCancellations,
-        'payment_breakdown' => $paymentBreakdown
+        'payment_breakdown' => $paymentBreakdown,
+        'debug' => [
+            'sql_top' => $sql,
+            'params' => [$start, $end],
+            'status_cond' => $statusCond
+        ]
     ];
 }

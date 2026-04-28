@@ -60,6 +60,58 @@ function Employees() {
     if (!raw) return '';
     return /^\d+$/.test(raw) ? String(parseInt(raw, 10)) : raw;
   };
+  const markerPalette = ['#22c55e', '#06b6d4', '#3b82f6', '#a855f7', '#f97316', '#ec4899', '#D4AF37', '#ef4444'];
+  const getMarkerColorForEmployee = (emp) => {
+    const seed = `${emp?.id || ''}-${emp?.name || ''}`;
+    let hash = 0;
+    for (let i = 0; i < seed.length; i += 1) hash = ((hash << 5) - hash) + seed.charCodeAt(i);
+    return markerPalette[Math.abs(hash) % markerPalette.length];
+  };
+  const normalizeAvatarUrl = (raw) => {
+    const value = String(raw || '').trim();
+    if (!value) return '';
+    if (/^https?:\/\//i.test(value)) return value;
+    // Legacy rows may store only filename: employee_*.jpg / id_*.jpeg
+    if (!value.includes('/') && /\.(png|jpe?g|gif|webp)$/i.test(value)) {
+      return `/api/uploads/employee-photos/${value}`;
+    }
+    if (/^\/\//.test(value)) {
+      try {
+        if (typeof window !== 'undefined' && window.location?.protocol) {
+          return `${window.location.protocol}${value}`;
+        }
+      } catch {
+        // ignore and fallback below
+      }
+      return `https:${value}`;
+    }
+    if (/^[\w.-]+\.[a-z]{2,}(\/|$)/i.test(value)) {
+      return `https://${value}`;
+    }
+    if (value.startsWith('/')) {
+      try {
+        if (typeof window !== 'undefined' && window.location?.origin) {
+          return new URL(value, window.location.origin).href;
+        }
+      } catch {
+        // ignore and fallback below
+      }
+      return value;
+    }
+    try {
+      if (typeof window !== 'undefined' && window.location?.origin) {
+        return new URL(value, window.location.origin).href;
+      }
+    } catch {
+      // ignore and return raw value
+    }
+    return value;
+  };
+  const getEmployeeAvatar = (emp) => {
+    const candidate = emp?.photo || emp?.profile_photo || emp?.avatar || '';
+    return normalizeAvatarUrl(candidate);
+  };
+  const getEmployeeIdPhoto = (emp) => normalizeAvatarUrl(emp?.id_photo || '');
 
   const getLocalDateYmd = () => {
     const now = new Date();
@@ -88,13 +140,51 @@ function Employees() {
     return scheduleDrafts[key] || scheduleDrafts[normalizeName(item?.name)] || {};
   };
 
+  const getAttendanceDateYmd = (att) => {
+    if (!att) return '';
+    const raw = att.attendance_date || att.date || att.clock_in || '';
+    return String(raw).slice(0, 10);
+  };
+
+  const isAttendanceToday = (att) => getAttendanceDateYmd(att) === getLocalDateYmd();
+
+  const isWorkingNowForItem = (item, attendance = null) => {
+    const att = attendance || getAttendanceForItem(item);
+    if (!att?.clock_in || att?.clock_out) return false;
+    if (!isAttendanceToday(att)) return false;
+
+    // Si hay horario de salida definido y ya pasó, no contar como "trabajando"
+    const now = new Date();
+    const todayIndex = getWeekIndexFromJsDay(now.getDay());
+    const sch = getScheduleForItem(item)?.[todayIndex];
+    if (sch?.exit) {
+      const [xH, xM] = sch.exit.split(':').map(Number);
+      const endT = new Date();
+      endT.setHours(xH, xM, 0, 0);
+      if (now > endT) return false;
+    }
+
+    return true;
+  };
+
   const updateScheduleDraft = (item, dayIndex, field, value) => {
     const key = getEmpKey(item);
     const nameKey = normalizeName(item?.name);
     setScheduleDrafts(prev => {
       const source = prev[key] || prev[nameKey] || {};
-      const next = { ...source, [dayIndex]: { ...(source[dayIndex] || {}), [field]: value } };
-      if (field === 'entry' || field === 'exit') next[dayIndex].is_day_off = !next[dayIndex].entry && !next[dayIndex].exit;
+      const current = { ...(source[dayIndex] || {}), day_type: (source[dayIndex]?.day_type || 'laboral') };
+      const next = { ...source, [dayIndex]: { ...current, [field]: value } };
+      if (field === 'day_type') {
+        if (value !== 'laboral') {
+          next[dayIndex].entry = '';
+          next[dayIndex].exit = '';
+        }
+        next[dayIndex].is_day_off = value !== 'laboral';
+      }
+      if (field === 'entry' || field === 'exit') {
+        next[dayIndex].is_day_off = !next[dayIndex].entry && !next[dayIndex].exit;
+        if (next[dayIndex].entry || next[dayIndex].exit) next[dayIndex].day_type = 'laboral';
+      }
       return { ...prev, [key]: next, [nameKey]: next };
     });
   };
@@ -141,8 +231,15 @@ function Employees() {
           const coords = await geocodeAddress(emp.address);
           if (coords) {
             coordsMap[emp.id] = coords;
-            const markerColor = emp.status === 'inactive' ? 'red' : 'green';
-            markers.push({ lat: coords[0], lng: coords[1], color: markerColor, label: emp.name, popup: `<b>${emp.name}</b><br/>${emp.address}` });
+            const markerColor = emp.status === 'inactive' ? '#ef4444' : getMarkerColorForEmployee(emp);
+            markers.push({
+              lat: coords[0],
+              lng: coords[1],
+              color: markerColor,
+              avatar: getEmployeeAvatar(emp),
+              label: emp.name,
+              popup: `<b>${emp.name}</b><br/>${emp.position || ''}<br/>${emp.address || ''}`
+            });
           }
         }
       }
@@ -179,6 +276,15 @@ function Employees() {
     } catch (error) { console.error('Error upload:', error); }
   };
 
+  const openImagePreview = (e, src) => {
+    if (e) {
+      e.preventDefault();
+      e.stopPropagation();
+    }
+    if (!src) return;
+    setImagePreview(src);
+  };
+
   const loadAttendance = async (empId, srId, name, offset = 0) => {
     setAttendanceLoading(p => ({ ...p, [empId]: true }));
     const dates = getPayrollDates(offset);
@@ -201,7 +307,12 @@ function Employees() {
         const empKey = normalizeEmployeeId(s.employee_id || '');
         const nameKey = normalizeName(s.employee_name);
         const day = Number(s.day_of_week);
-        const row = { entry: s.scheduled_start || '', exit: s.scheduled_end || '', is_day_off: Number(s.is_day_off) === 1 || (!s.scheduled_start && !s.scheduled_end) };
+        const row = {
+          entry: s.scheduled_start || '',
+          exit: s.scheduled_end || '',
+          is_day_off: Number(s.is_day_off) === 1 || (!s.scheduled_start && !s.scheduled_end),
+          day_type: s.day_type || (Number(s.is_day_off) === 1 ? 'descanso' : 'laboral')
+        };
         if (!Number.isNaN(day) && day >= 0 && day <= 6) {
           if (empKey) { if (!mapped[empKey]) mapped[empKey] = {}; mapped[empKey][day] = row; }
           if (nameKey) { if (!mapped[nameKey]) mapped[nameKey] = {}; mapped[nameKey][day] = row; }
@@ -237,7 +348,11 @@ function Employees() {
     setSavingSchedule(prev => ({ ...prev, [item.id]: true }));
     try {
       const schedules = Array.from({ length: 7 }, (_, day) => ({
-        day_of_week: day, start: draft[day]?.entry || null, end: draft[day]?.exit || null, is_day_off: draft[day]?.is_day_off || (!draft[day]?.entry && !draft[day]?.exit)
+        day_of_week: day,
+        start: draft[day]?.day_type === 'laboral' ? (draft[day]?.entry || null) : null,
+        end: draft[day]?.day_type === 'laboral' ? (draft[day]?.exit || null) : null,
+        is_day_off: draft[day]?.day_type === 'laboral' ? false : true,
+        day_type: draft[day]?.day_type || (draft[day]?.is_day_off ? 'descanso' : 'laboral')
       }));
       const res = await fetch(`${import.meta.env.VITE_API_URL}/employees/attendance-management.php`, {
         method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' },
@@ -293,7 +408,7 @@ function Employees() {
     noteTimers.current[id] = setTimeout(async () => {
       setEmpNoteSaving(p => ({ ...p, [id]: true }));
       try {
-        const existingNoteId = noteTimers.current[`note_id_${id}`];
+        const existingNoteId = noteTimers.current[`note_id_${id}`] || empNotes[id]?.id;
         const payload = existingNoteId 
           ? { action: 'update', id: existingNoteId, content, title: 'Nota de administración', color: 'default' }
           : { action: 'create', employee_id: id, content, title: 'Nota de administración', color: 'default' };
@@ -304,6 +419,7 @@ function Employees() {
       setEmpNoteSaving(p => ({ ...p, [id]: false }));
     }, 800);
   };
+
 
   const handleAddPerson = async () => {
     if (!newPerson.name || !newPerson.position) return alert('Nombre y puesto obligatorios');
@@ -339,14 +455,14 @@ function Employees() {
   const inactiveList = executiveReport.filter(i => i.status === 'inactive');
 
   return (
-    <div className="space-y-6 p-4 bg-[#030712] min-h-screen text-slate-300">
+    <div className="space-y-6 p-3 sm:p-4 bg-[#030712] min-h-screen text-slate-300">
       {/* HEADER */}
-      <div className="flex justify-between items-center bg-[#0b1120] p-6 rounded-2xl border border-slate-800 shadow-2xl">
-        <div>
-          <h1 className="text-3xl font-black text-white tracking-tighter">COLABORADORES</h1>
-          <p className="text-slate-500 text-xs mt-1 uppercase tracking-widest font-bold">Gestión de Expedientes y Liquidaciones</p>
+      <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-3 bg-[#0b1120] p-4 sm:p-6 rounded-2xl border border-slate-800 shadow-2xl">
+        <div className="min-w-0">
+          <h1 className="text-2xl sm:text-3xl font-black text-white tracking-tight leading-tight break-normal">COLABORADORES</h1>
+          <p className="text-slate-500 text-[11px] sm:text-xs mt-1 uppercase tracking-wider sm:tracking-widest font-bold break-normal">Gestion de Expedientes y Liquidaciones</p>
         </div>
-        {isAdmin && <button onClick={() => setShowAddForm(!showAddForm)} className="bg-cyan-500 text-black px-5 py-2.5 rounded-xl font-black text-xs hover:scale-105 transition-all shadow-lg shadow-cyan-500/20">+ NUEVO INGRESO</button>}
+        {isAdmin && <button onClick={() => setShowAddForm(!showAddForm)} className="bg-cyan-500 text-black px-4 sm:px-5 py-2.5 rounded-xl font-black text-xs hover:scale-105 transition-all shadow-lg shadow-cyan-500/20 self-start sm:self-auto">+ NUEVO INGRESO</button>}
       </div>
 
       {showAddForm && (
@@ -361,14 +477,14 @@ function Employees() {
       )}
 
       {/* MENU SUPERIOR: MODO DE VISTA */}
-      <div className="flex gap-2 bg-[#040c1a] p-2 rounded-2xl border border-slate-800">
+      <div className="grid grid-cols-3 gap-2 bg-[#040c1a] p-2 rounded-2xl border border-slate-800">
         {[
-          { id: 'personal', label: 'Personal', icon: '👥' },
-          { id: 'horario',  label: 'Horario',  icon: '📅' },
-          { id: 'nomina',   label: 'Nómina',   icon: '💰' },
+          { id: 'personal', label: 'Personal', icon: '' },
+          { id: 'horario',  label: 'Horario',  icon: '' },
+          { id: 'nomina',   label: 'Nomina',   icon: '' },
         ].map(v => (
-          <button key={v.id} onClick={() => setViewMode(v.id)} className={`flex-1 py-3 rounded-xl text-[11px] font-black uppercase tracking-widest transition-all ${viewMode === v.id ? 'bg-cyan-500 text-black shadow-lg shadow-cyan-500/20' : 'text-slate-400 hover:bg-white/5'}`}>
-            <span className="mr-2">{v.icon}</span>{v.label}
+          <button key={v.id} onClick={() => setViewMode(v.id)} className={`w-full py-2.5 sm:py-3 rounded-xl text-[10px] sm:text-[11px] font-black uppercase tracking-wider sm:tracking-widest transition-all ${viewMode === v.id ? 'bg-cyan-500 text-black shadow-lg shadow-cyan-500/20' : 'text-slate-400 hover:bg-white/5'}`}>
+            {v.label}
           </button>
         ))}
       </div>
@@ -389,17 +505,25 @@ function Employees() {
         {(() => {
           const now = new Date();
           const todayIndex = getWeekIndexFromJsDay(now.getDay());
-          const working = activeList.filter(item => { const att = getAttendanceForItem(item); return Boolean(att?.clock_in) && !att?.clock_out; }).length;
+          const working = activeList.filter(item => {
+            const att = getAttendanceForItem(item);
+            return isWorkingNowForItem(item, att);
+          }).length;
           const scheduled = activeList.filter(item => { const sch = getScheduleForItem(item)?.[todayIndex]; return sch && !sch.is_day_off; }).length;
           const late = activeList.filter(item => {
             const sch = getScheduleForItem(item)?.[todayIndex]; const att = getAttendanceForItem(item);
             if (!sch || sch.is_day_off || !sch.entry) return false;
-            if (att?.clock_in) return false;
+            if (isAttendanceToday(att) && att?.clock_in) return false;
             const [eH, eM] = sch.entry.split(':').map(Number);
             const eT = new Date(); eT.setHours(eH, eM, 0, 0);
             return now > eT;
           }).length;
-          const off = activeList.filter(item => { const sch = getScheduleForItem(item)?.[todayIndex]; const att = getAttendanceForItem(item); if (att?.clock_in) return false; return !sch || sch.is_day_off; }).length;
+          const off = activeList.filter(item => {
+            const sch = getScheduleForItem(item)?.[todayIndex];
+            const att = getAttendanceForItem(item);
+            if (isAttendanceToday(att) && att?.clock_in && !att?.clock_out) return false;
+            return !sch || sch.is_day_off;
+          }).length;
           
           return [
             { label: 'Trabajando', count: working, color: 'green', icon: 'ACT' },
@@ -432,23 +556,44 @@ function Employees() {
                  onDragEnd={handleDragEnd}
                  onDragOver={(e) => e.preventDefault()}
                  className={`bg-[#0b1120] border border-slate-800 rounded-2xl overflow-hidden shadow-xl transition-all ${dragging ? 'opacity-50' : ''}`}>
-              <div onClick={() => setExpandedItems(p => ({...p, [item.id]: !expanded}))} className="p-5 flex justify-between items-center cursor-pointer hover:bg-white/[0.02]">
-                <div className="flex items-center gap-4">
-                  <div className="w-12 h-12 rounded-full overflow-hidden border-2 border-slate-700 bg-slate-800">
-                    {item.photo ? <img src={item.photo} className="w-full h-full object-cover" alt="" /> : <div className="h-full flex items-center justify-center opacity-20">👤</div>}
+              <div onClick={() => setExpandedItems(p => ({...p, [item.id]: !expanded}))} className="p-3 sm:p-5 flex flex-col sm:flex-row sm:justify-between sm:items-center gap-3 cursor-pointer hover:bg-white/[0.02]">
+                <div className="flex items-center gap-3 sm:gap-4 min-w-0">
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      draggable={false}
+                      onMouseDown={(e) => e.stopPropagation()}
+                      onTouchStart={(e) => e.stopPropagation()}
+                      onDragStart={(e) => e.preventDefault()}
+                      onClick={(e) => openImagePreview(e, getEmployeeAvatar(item))}
+                      className="w-12 h-12 rounded-md overflow-hidden border border-slate-700 bg-slate-800 cursor-zoom-in"
+                    >
+                      {item.photo ? <img src={getEmployeeAvatar(item)} className="w-full h-full object-cover" alt="Perfil" /> : <div className="h-full flex items-center justify-center opacity-20">Perfil</div>}
+                    </button>
+                    <button
+                      type="button"
+                      draggable={false}
+                      onMouseDown={(e) => e.stopPropagation()}
+                      onTouchStart={(e) => e.stopPropagation()}
+                      onDragStart={(e) => e.preventDefault()}
+                      onClick={(e) => openImagePreview(e, getEmployeeIdPhoto(item))}
+                      className="w-12 h-12 rounded-md overflow-hidden border border-cyan-500/30 bg-slate-800 cursor-zoom-in"
+                    >
+                      {item.id_photo ? <img src={getEmployeeIdPhoto(item)} className="w-full h-full object-cover" alt="Identificacion" /> : <div className="h-full flex items-center justify-center opacity-20 text-[9px] px-1 text-center leading-tight">ID</div>}
+                    </button>
                   </div>
-                  <div>
-                    <h3 className="text-white font-bold text-base">{item.name}</h3>
-                    <div className="flex items-center gap-2 mt-0.5">
-                      <span className={`w-1.5 h-1.5 rounded-full ${attendance?.clock_in && !attendance?.clock_out ? 'bg-green-500 animate-pulse' : 'bg-slate-600'}`} />
-                      <p className="text-[10px] text-slate-500 font-bold uppercase tracking-wider">{item.position} • {attendance?.clock_in ? 'En Turno' : 'Fuera'}</p>
+                  <div className="min-w-0">
+                    <h3 className="text-white font-bold text-sm sm:text-base leading-tight truncate">{item.name}</h3>
+                    <div className="flex items-center gap-1.5 sm:gap-2 mt-0.5 min-w-0">
+                      <span className={`w-1.5 h-1.5 rounded-full ${isWorkingNowForItem(item, attendance) ? 'bg-green-500 animate-pulse' : 'bg-slate-600'}`} />
+                      <p className="text-[9px] sm:text-[10px] text-slate-500 font-bold uppercase tracking-wide leading-tight break-words">{item.position} • {isWorkingNowForItem(item, attendance) ? 'En Turno' : 'Fuera'}</p>
                     </div>
                   </div>
                 </div>
-                <div className="flex items-center gap-6">
+                <div className="w-full sm:w-auto flex items-center justify-between sm:justify-end gap-3 sm:gap-6">
                   <div className="text-right">
-                    <p className="text-[9px] text-slate-500 font-black uppercase">Neto Semanal</p>
-                    <p className="text-lg font-black text-emerald-400">${formatMoney(payroll.netPay)}</p>
+                    <p className="text-[8px] sm:text-[9px] text-slate-500 font-black uppercase">Neto Semanal</p>
+                    <p className="text-base sm:text-lg font-black text-emerald-400 leading-none">${formatMoney(payroll.netPay)}</p>
                   </div>
                   <span className={`text-slate-600 transform transition-transform ${expanded ? 'rotate-180' : ''}`}>▼</span>
                 </div>
@@ -631,9 +776,25 @@ function Employees() {
                               <input type="date" value={editingReport[item.id]?.hire_date ?? item.hire_date ?? ''} onChange={e => handleReportEdit(item.id, 'hire_date', e.target.value)} className="w-full bg-transparent border-b border-slate-700 text-white text-sm py-1 focus:border-cyan-500 outline-none" />
                             </div>
                           </div>
-                          <div className="bg-black/40 p-3 rounded-xl border border-slate-700 flex items-center gap-3">
-                            <label className="text-[9px] text-slate-500 font-black uppercase">Foto:</label>
-                            <input type="file" onChange={e => e.target.files[0] && handlePhotoUpload(item.id, e.target.files[0], 'profile')} className="text-[9px] text-cyan-400 flex-1" />
+                          <div className="bg-black/40 p-3 rounded-xl border border-slate-700 space-y-3">
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                              <div>
+                                <label className="text-[9px] text-slate-500 font-black uppercase mb-1 block">Foto perfil</label>
+                                <input type="file" onChange={e => e.target.files[0] && handlePhotoUpload(item.id, e.target.files[0], 'profile')} className="text-[9px] text-cyan-400 w-full" />
+                              </div>
+                              <div>
+                                <label className="text-[9px] text-slate-500 font-black uppercase mb-1 block">Identificación</label>
+                                <input type="file" onChange={e => e.target.files[0] && handlePhotoUpload(item.id, e.target.files[0], 'id')} className="text-[9px] text-cyan-400 w-full" />
+                              </div>
+                            </div>
+                            <div className="grid grid-cols-2 gap-3">
+                              <button type="button" onClick={() => item.photo && setImagePreview(getEmployeeAvatar(item))} className="aspect-square rounded-md border border-slate-700 bg-slate-900/60 overflow-hidden hover:border-cyan-500/40 transition-all">
+                                {item.photo ? <img src={getEmployeeAvatar(item)} alt="Perfil" className="w-full h-full object-cover" /> : <div className="h-full flex items-center justify-center text-[10px] text-slate-500">Sin perfil</div>}
+                              </button>
+                              <button type="button" onClick={() => item.id_photo && setImagePreview(getEmployeeIdPhoto(item))} className="aspect-square rounded-md border border-cyan-500/30 bg-slate-900/60 overflow-hidden hover:border-cyan-500/50 transition-all">
+                                {item.id_photo ? <img src={getEmployeeIdPhoto(item)} alt="Identificacion" className="w-full h-full object-cover" /> : <div className="h-full flex items-center justify-center text-[10px] text-slate-500">Sin ID</div>}
+                              </button>
+                            </div>
                           </div>
                         </div>
 
@@ -702,9 +863,24 @@ function Employees() {
                         <div className="bg-black/20 p-4 rounded-2xl border border-slate-800">
                           <p className="text-[10px] text-slate-400 font-black uppercase tracking-widest mb-3 border-b border-slate-800 pb-2">Ubicación</p>
                           <input type="text" placeholder="Dirección completa..." value={editingReport[item.id]?.address ?? item.address ?? ''} onChange={e => handleReportEdit(item.id, 'address', e.target.value)} className="w-full bg-black/40 border border-slate-700 p-2 rounded-lg text-white text-xs mb-3 outline-none focus:border-cyan-500" />
+                          {String(editingReport[item.id]?.address ?? item.address ?? '').trim() && (
+                            <p className="mb-3 text-[10px] text-amber-300/90">
+                              Se usara direccion aproximada, por favor corregir direccion.
+                            </p>
+                          )}
                           {empCoords[item.id] ? (
                             <div className="rounded-xl overflow-hidden border border-slate-700">
-                              <LocationMap markers={[{lat: empCoords[item.id][0], lng: empCoords[item.id][1], label: item.name, popup: `<b>${item.name}</b><br/>${item.address}`}]} height={220} />
+                              <LocationMap
+                                markers={[{
+                                  lat: empCoords[item.id][0],
+                                  lng: empCoords[item.id][1],
+                                  color: getMarkerColorForEmployee(item),
+                                  avatar: getEmployeeAvatar(item),
+                                  label: item.name,
+                                  popup: `<b>${item.name}</b><br/>${item.address}`
+                                }]}
+                                height={220}
+                              />
                             </div>
                           ) : (
                             <div className="h-40 flex flex-col items-center justify-center text-center rounded-xl border border-slate-800 bg-black/20">
@@ -725,8 +901,29 @@ function Employees() {
                             <div key={day} className="grid grid-cols-3 gap-3 items-center bg-black/30 p-2.5 rounded-xl border border-white/[0.03]">
                               <div className="text-[10px] font-bold text-slate-400">{day}</div>
                               <div className="flex gap-1.5 col-span-2">
-                                <input type="time" className="flex-1 bg-slate-900 border border-slate-700 text-white text-[10px] p-1.5 rounded-lg outline-none focus:border-purple-500" value={getScheduleDraftForItem(item)?.[dIdx]?.entry || ''} onChange={(e) => updateScheduleDraft(item, dIdx, 'entry', e.target.value)} />
-                                <input type="time" className="flex-1 bg-slate-900 border border-slate-700 text-white text-[10px] p-1.5 rounded-lg outline-none focus:border-purple-500" value={getScheduleDraftForItem(item)?.[dIdx]?.exit || ''} onChange={(e) => updateScheduleDraft(item, dIdx, 'exit', e.target.value)} />
+                                <select
+                                  className="w-[120px] bg-slate-900 border border-slate-700 text-white text-[10px] p-1.5 rounded-lg outline-none focus:border-purple-500"
+                                  value={getScheduleDraftForItem(item)?.[dIdx]?.day_type || 'laboral'}
+                                  onChange={(e) => updateScheduleDraft(item, dIdx, 'day_type', e.target.value)}
+                                >
+                                  <option value="laboral">Laboral</option>
+                                  <option value="descanso">Descanso</option>
+                                  <option value="enfermedad">Enfermedad</option>
+                                </select>
+                                <input
+                                  type="time"
+                                  disabled={(getScheduleDraftForItem(item)?.[dIdx]?.day_type || 'laboral') !== 'laboral'}
+                                  className="flex-1 bg-slate-900 border border-slate-700 text-white text-[10px] p-1.5 rounded-lg outline-none focus:border-purple-500 disabled:opacity-40"
+                                  value={getScheduleDraftForItem(item)?.[dIdx]?.entry || ''}
+                                  onChange={(e) => updateScheduleDraft(item, dIdx, 'entry', e.target.value)}
+                                />
+                                <input
+                                  type="time"
+                                  disabled={(getScheduleDraftForItem(item)?.[dIdx]?.day_type || 'laboral') !== 'laboral'}
+                                  className="flex-1 bg-slate-900 border border-slate-700 text-white text-[10px] p-1.5 rounded-lg outline-none focus:border-purple-500 disabled:opacity-40"
+                                  value={getScheduleDraftForItem(item)?.[dIdx]?.exit || ''}
+                                  onChange={(e) => updateScheduleDraft(item, dIdx, 'exit', e.target.value)}
+                                />
                               </div>
                             </div>
                           ))}
@@ -941,8 +1138,10 @@ function Employees() {
                                 <div>
                                   <label className="text-[8px] text-slate-500 font-bold uppercase">Estatus</label>
                                   <select value={editingReport[item.id]?.status ?? item.status ?? ''} onChange={e => handleReportEdit(item.id, 'status', e.target.value)} className="bg-black/30 border-b border-slate-700 text-white w-full py-1.5 outline-none focus:border-cyan-500 text-xs">
-                                    <option value="inactive">BAJA</option>
-                                    <option value="active">REINGRESAR COMO ACTIVO</option>
+                                    <option value="active">Activo</option>
+                                    <option value="vacaciones">Vacaciones</option>
+                                    <option value="eventual">Eventual</option>
+                                    <option value="inactive">Inactivo</option>
                                   </select>
                                 </div>
                               </div>
@@ -1007,7 +1206,7 @@ function Employees() {
         {geoLoading ? (
             <div className="h-60 flex flex-col items-center justify-center text-[10px] text-slate-600 animate-pulse font-black uppercase">Calculando coordenadas...</div>
         ) : (
-            <div className="rounded-2xl overflow-hidden border border-slate-800 grayscale shadow-inner">
+            <div className="rounded-2xl overflow-hidden border border-slate-800 shadow-inner">
                 <LocationMap markers={allEmpMarkers} height={450} zoom={11} />
             </div>
         )}
@@ -1058,7 +1257,7 @@ function Employees() {
                     {employeesForDay.map(emp => {
                       const sch = getScheduleForItem(emp)[dIdx] || {};
                       const att = isToday ? getAttendanceForItem(emp) : null;
-                      const isWorkingNow = att?.clock_in && !att?.clock_out;
+                      const isWorkingNow = isWorkingNowForItem(emp, att);
                       const isLate = isToday && !att?.clock_in && sch.entry && (() => {
                         const [eH, eM] = sch.entry.split(':').map(Number);
                         const eT = new Date(); eT.setHours(eH, eM, 0, 0);
@@ -1097,8 +1296,29 @@ function Employees() {
               return (
                 <div key={emp.id} className="bg-[#040c1a] border border-slate-800 hover:border-cyan-500/30 p-4 rounded-2xl transition-all">
                   <div className="flex items-center gap-3 mb-3">
-                    <div className="w-10 h-10 rounded-full bg-slate-800 overflow-hidden flex-shrink-0">
-                      {emp.photo ? <img src={emp.photo} className="w-full h-full object-cover" alt="" /> : <div className="h-full flex items-center justify-center opacity-30 text-sm">👤</div>}
+                    <div className="flex items-center gap-1.5 flex-shrink-0">
+                      <button
+                        type="button"
+                        draggable={false}
+                        onMouseDown={(e) => e.stopPropagation()}
+                        onTouchStart={(e) => e.stopPropagation()}
+                        onDragStart={(e) => e.preventDefault()}
+                        onClick={(e) => openImagePreview(e, getEmployeeAvatar(emp))}
+                        className="w-10 h-10 rounded-md bg-slate-800 overflow-hidden cursor-zoom-in"
+                      >
+                        {emp.photo ? <img src={getEmployeeAvatar(emp)} className="w-full h-full object-cover" alt="Perfil" /> : <div className="h-full flex items-center justify-center opacity-30 text-[9px]">Perfil</div>}
+                      </button>
+                      <button
+                        type="button"
+                        draggable={false}
+                        onMouseDown={(e) => e.stopPropagation()}
+                        onTouchStart={(e) => e.stopPropagation()}
+                        onDragStart={(e) => e.preventDefault()}
+                        onClick={(e) => openImagePreview(e, getEmployeeIdPhoto(emp))}
+                        className="w-10 h-10 rounded-md bg-slate-800 overflow-hidden border border-cyan-500/30 cursor-zoom-in"
+                      >
+                        {emp.id_photo ? <img src={getEmployeeIdPhoto(emp)} className="w-full h-full object-cover" alt="Identificacion" /> : <div className="h-full flex items-center justify-center opacity-30 text-[9px]">ID</div>}
+                      </button>
                     </div>
                     <div className="min-w-0">
                       <p className="text-white text-xs font-bold truncate">{emp.name}</p>

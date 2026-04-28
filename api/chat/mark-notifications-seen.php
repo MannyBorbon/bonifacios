@@ -4,6 +4,18 @@ $userId = requireAuth();
 
 $conn = getConnection();
 
+// Persist per-user seen markers to prevent bell counter from reappearing on reload
+$conn->query("
+    CREATE TABLE IF NOT EXISTS user_notification_state (
+        user_id INT PRIMARY KEY,
+        seen_chat_at DATETIME NULL,
+        seen_email_at DATETIME NULL,
+        seen_quotes_at DATETIME NULL,
+        seen_applications_at DATETIME NULL,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+    )
+");
+
 // Mark chat messages as read
 try {
     $stmt = $conn->prepare("
@@ -20,9 +32,24 @@ try {
     }
 } catch (Exception $e) {}
 
-// Mark emails as seen
+// Mark emails as seen (global inbox fallback)
+try { $conn->query("UPDATE email_inbox SET seen = 1 WHERE seen = 0"); } catch (Exception $e) {}
+
+// Save all markers as seen now for this user
 try {
-    $conn->query("UPDATE email_inbox SET seen = 1 WHERE seen = 0");
+    $stmtState = $conn->prepare("
+        INSERT INTO user_notification_state (user_id, seen_chat_at, seen_email_at, seen_quotes_at, seen_applications_at)
+        VALUES (?, NOW(), NOW(), NOW(), NOW())
+        ON DUPLICATE KEY UPDATE
+            seen_chat_at = NOW(),
+            seen_email_at = NOW(),
+            seen_quotes_at = NOW(),
+            seen_applications_at = NOW()
+    ");
+    if ($stmtState) {
+        $stmtState->bind_param("i", $userId);
+        $stmtState->execute();
+    }
 } catch (Exception $e) {}
 
 echo json_encode(['success' => true]);

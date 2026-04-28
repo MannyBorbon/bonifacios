@@ -16,19 +16,35 @@ const COLORS = {
   green: '#22c55e',
   amber: '#D4AF37',
   purple: '#a855f7',
+  cyan: '#06b6d4',
+  pink: '#ec4899',
+  orange: '#f97316',
 };
 
-function createIcon(color = 'blue') {
+function createIcon(color = 'blue', avatar = '') {
   const hex = COLORS[color] || color;
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="28" height="40" viewBox="0 0 28 40">
-    <path d="M14 0C6.268 0 0 6.268 0 14c0 10.5 14 26 14 26s14-15.5 14-26C28 6.268 21.732 0 14 0z" fill="${hex}" stroke="#fff" stroke-width="1.5"/>
-    <circle cx="14" cy="14" r="6" fill="#fff"/>
-  </svg>`;
-  return L.icon({
-    iconUrl: 'data:image/svg+xml;base64,' + btoa(svg),
-    iconSize: [28, 40],
-    iconAnchor: [14, 40],
-    popupAnchor: [0, -40],
+  const safeAvatar = String(avatar || '').replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  const avatarHtml = safeAvatar
+    ? `<div style="position:relative;width:28px;height:28px;">
+         <img src="${safeAvatar}" style="width:28px;height:28px;border-radius:9999px;object-fit:cover;display:block;" onerror="this.style.display='none';this.nextElementSibling.style.display='flex';" />
+         <div style="width:28px;height:28px;border-radius:9999px;background:#0b1120;color:#fff;font-size:10px;font-weight:700;display:none;align-items:center;justify-content:center;position:absolute;inset:0;">EMP</div>
+       </div>`
+    : `<div style="width:28px;height:28px;border-radius:9999px;background:#0b1120;color:#fff;font-size:10px;font-weight:700;display:flex;align-items:center;justify-content:center;">EMP</div>`;
+
+  const html = `
+    <div style="position:relative;width:36px;height:50px;">
+      <div style="position:absolute;left:50%;top:2px;transform:translateX(-50%);width:32px;height:32px;border-radius:9999px;border:2px solid ${hex};background:#0b1120;display:flex;align-items:center;justify-content:center;overflow:hidden;box-shadow:0 2px 10px rgba(0,0,0,.4);">
+        ${avatarHtml}
+      </div>
+      <div style="position:absolute;left:50%;bottom:0;transform:translateX(-50%);width:0;height:0;border-left:8px solid transparent;border-right:8px solid transparent;border-top:14px solid ${hex};"></div>
+    </div>`;
+
+  return L.divIcon({
+    className: 'employee-avatar-marker',
+    html,
+    iconSize: [36, 50],
+    iconAnchor: [18, 50],
+    popupAnchor: [0, -44],
   });
 }
 
@@ -77,22 +93,47 @@ function LocationMap({ markers = [], height = 300, zoom = 12, className = '' }) 
 
     const validMarkers = markers.filter(m => m.lat && m.lng && !isNaN(m.lat) && !isNaN(m.lng));
 
-    // Offset overlapping markers so they don't stack
-    const seen = {};
-    validMarkers.forEach(m => {
+    // Distribute overlapping markers in a circular pattern (instead of a diagonal line)
+    const groups = {};
+    validMarkers.forEach((m) => {
       const key = `${m.lat.toFixed(4)},${m.lng.toFixed(4)}`;
-      const count = seen[key] || 0;
-      seen[key] = count + 1;
-      const offsetLat = count * 0.0008;
-      const offsetLng = count * 0.0012;
-      const marker = L.marker([m.lat + offsetLat, m.lng + offsetLng], { icon: createIcon(m.color || 'blue') });
-      if (m.popup) marker.bindPopup(m.popup);
-      if (m.label) marker.bindTooltip(m.label, { permanent: false });
-      markersLayer.current.addLayer(marker);
+      if (!groups[key]) groups[key] = [];
+      groups[key].push(m);
+    });
+
+    const plottedPoints = [];
+    Object.entries(groups).forEach(([key, group]) => {
+      const [baseLat, baseLng] = key.split(',').map(Number);
+      const groupSize = group.length;
+      const baseAngle = Math.abs(key.split('').reduce((acc, ch) => acc + ch.charCodeAt(0), 0)) % 360;
+
+      group.forEach((m, idx) => {
+        let plotLat = baseLat;
+        let plotLng = baseLng;
+
+        if (groupSize > 1) {
+          // Ring layout in meters -> converted to degrees
+          const ringIndex = Math.floor((idx + 1) / 6);
+          const radiusMeters = 35 + (ringIndex * 18);
+          const angleDeg = baseAngle + ((idx * 360) / groupSize);
+          const angleRad = (angleDeg * Math.PI) / 180;
+          const latRad = (baseLat * Math.PI) / 180;
+          const metersPerDegLat = 111320;
+          const metersPerDegLng = Math.max(111320 * Math.cos(latRad), 1);
+          plotLat = baseLat + ((radiusMeters * Math.sin(angleRad)) / metersPerDegLat);
+          plotLng = baseLng + ((radiusMeters * Math.cos(angleRad)) / metersPerDegLng);
+        }
+
+        const marker = L.marker([plotLat, plotLng], { icon: createIcon(m.color || 'blue', m.avatar || '') });
+        plottedPoints.push([plotLat, plotLng]);
+        if (m.popup) marker.bindPopup(m.popup);
+        if (m.label) marker.bindTooltip(m.label, { permanent: false });
+        markersLayer.current.addLayer(marker);
+      });
     });
 
     if (validMarkers.length > 0) {
-      const bounds = L.latLngBounds(validMarkers.map(m => [m.lat, m.lng]));
+      const bounds = L.latLngBounds((plottedPoints.length ? plottedPoints : validMarkers.map(m => [m.lat, m.lng])));
       mapInstance.current.fitBounds(bounds, { padding: [40, 40], maxZoom: 14 });
     }
   }, [markers]);

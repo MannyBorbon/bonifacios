@@ -1,4 +1,4 @@
-﻿import { Link, useNavigate, Outlet, useLocation } from 'react-router-dom';
+import { Link, useNavigate, Outlet, useLocation } from 'react-router-dom';
 import { useState, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { authAPI } from '../services/api';
@@ -62,6 +62,17 @@ function AdminLayout() {
       setUser(parsedUser);
       setProfilePhoto(parsedUser.profile_photo);
     }
+
+    authAPI.getMe()
+      .then((res) => {
+        if (res?.data?.success && res.data.user) {
+          const mergedUser = { ...(JSON.parse(userData || '{}')), ...res.data.user };
+          setUser(mergedUser);
+          localStorage.setItem('user', JSON.stringify(mergedUser));
+          if (mergedUser.profile_photo) setProfilePhoto(mergedUser.profile_photo);
+        }
+      })
+      .catch(() => {});
 
     loadNotifications();
     const notifInterval = setInterval(loadNotifications, 15000);
@@ -186,13 +197,30 @@ function AdminLayout() {
 
   const isActive = (path) => location.pathname === path;
 
-  // Track page views + close mobile menu when route changes
+  // Close mobile menu when route changes
   useEffect(() => {
-    trackingService.trackPageView(location.pathname, document.title);
     if (prevPath.current !== location.pathname) { setMobileMenuOpen(false); prevPath.current = location.pathname; }
   }, [location]);
 
   const isAdministrador = user?.role === 'administrador';
+  const toBool = (v, fallback = true) => (v === undefined || v === null ? fallback : Boolean(v));
+  const canViewModule = (viewKey, legacyEditKey, legacyDeleteKey) => {
+    if (user?.[viewKey] !== undefined && user?.[viewKey] !== null) return Boolean(user[viewKey]);
+    return toBool(user?.[legacyEditKey], true) || toBool(user?.[legacyDeleteKey], true);
+  };
+  const canApplications = isAdministrador || canViewModule('can_view_applications', 'can_edit_applications', 'can_delete_applications');
+  const canEmployees = isAdministrador || canViewModule('can_view_employees', 'can_edit_employees', 'can_delete_employees');
+  const canQuotes = isAdministrador || canViewModule('can_view_quotes', 'can_edit_quotes', 'can_delete_quotes');
+  const canSales = isAdministrador || toBool(user?.can_view_sales, true);
+
+  const canAccessRoute = (path) => {
+    if (path === '/admin/applications') return canApplications;
+    if (path === '/admin/employees') return canEmployees;
+    if (path === '/admin/quotes') return canQuotes;
+    if (path === '/admin/sales') return canSales;
+    return true;
+  };
+  const disabledUiClass = (path) => canAccessRoute(path) ? '' : 'hidden';
 
   const handlePlayMusic = () => {
     audio.currentTime = 0;
@@ -219,16 +247,17 @@ function AdminLayout() {
             {/* Desktop nav links (hidden on mobile + tablet) */}
             <div className="hidden lg:flex gap-1">
               <Link to="/admin/dashboard" className={`whitespace-nowrap rounded-lg px-4 py-2 text-sm font-light transition-all ${isActive('/admin/dashboard') ? 'bg-cyan-500/15 text-cyan-400 border border-cyan-500/20' : 'text-slate-400 hover:bg-cyan-500/5 hover:text-cyan-300'}`}>Dashboard</Link>
-              <Link to="/admin/applications" className={`whitespace-nowrap rounded-lg px-4 py-2 text-sm font-light transition-all ${isActive('/admin/applications') ? 'bg-cyan-500/15 text-cyan-400 border border-cyan-500/20' : 'text-slate-400 hover:bg-cyan-500/5 hover:text-cyan-300'}`}>Solicitudes</Link>
-              <Link to="/admin/employees" className={`whitespace-nowrap rounded-lg px-4 py-2 text-sm font-light transition-all ${isActive('/admin/employees') ? 'bg-cyan-500/15 text-cyan-400 border border-cyan-500/20' : 'text-slate-400 hover:bg-cyan-500/5 hover:text-cyan-300'}`}>Personal</Link>
+              <Link to="/admin/applications" title={canAccessRoute('/admin/applications') ? '' : 'Funcion desactivada por permisos'} className={`whitespace-nowrap rounded-lg px-4 py-2 text-sm font-light transition-all ${isActive('/admin/applications') ? 'bg-cyan-500/15 text-cyan-400 border border-cyan-500/20' : 'text-slate-400 hover:bg-cyan-500/5 hover:text-cyan-300'} ${disabledUiClass('/admin/applications')}`}>Solicitudes</Link>
+              <Link to="/admin/employees" title={canAccessRoute('/admin/employees') ? '' : 'Funcion desactivada por permisos'} className={`whitespace-nowrap rounded-lg px-4 py-2 text-sm font-light transition-all ${isActive('/admin/employees') ? 'bg-cyan-500/15 text-cyan-400 border border-cyan-500/20' : 'text-slate-400 hover:bg-cyan-500/5 hover:text-cyan-300'} ${disabledUiClass('/admin/employees')}`}>Personal</Link>
               {isAdministrador && (
                 <>
                   <Link to="/admin/tracking" className={`whitespace-nowrap rounded-lg px-4 py-2 text-sm font-light transition-all ${isActive('/admin/tracking') ? 'bg-cyan-500/15 text-cyan-400 border border-cyan-500/20' : 'text-slate-400 hover:bg-cyan-500/5 hover:text-cyan-300'}`}>Tracking</Link>
                   <Link to="/admin/analytics" className={`whitespace-nowrap rounded-lg px-4 py-2 text-sm font-light transition-all ${isActive('/admin/analytics') ? 'bg-cyan-500/15 text-cyan-400 border border-cyan-500/20' : 'text-slate-400 hover:bg-cyan-500/5 hover:text-cyan-300'}`}>Estadísticas</Link>
                 </>
               )}
-              <Link to="/admin/quotes" className={`whitespace-nowrap rounded-lg px-4 py-2 text-sm font-light transition-all ${isActive('/admin/quotes') ? 'bg-cyan-500/15 text-cyan-400 border border-cyan-500/20' : 'text-slate-400 hover:bg-cyan-500/5 hover:text-cyan-300'}`}>Cotizaciones</Link>
-              <Link to="/admin/sales" className={`whitespace-nowrap rounded-lg px-4 py-2 text-sm font-light transition-all ${isActive('/admin/sales') ? 'bg-cyan-500/15 text-cyan-400 border border-cyan-500/20' : 'text-slate-400 hover:bg-cyan-500/5 hover:text-cyan-300'}`}>Ventas</Link>
+              <Link to="/admin/quotes" title={canAccessRoute('/admin/quotes') ? '' : 'Funcion desactivada por permisos'} className={`whitespace-nowrap rounded-lg px-4 py-2 text-sm font-light transition-all ${isActive('/admin/quotes') ? 'bg-cyan-500/15 text-cyan-400 border border-cyan-500/20' : 'text-slate-400 hover:bg-cyan-500/5 hover:text-cyan-300'} ${disabledUiClass('/admin/quotes')}`}>Cotizaciones</Link>
+              <Link to="/admin/sales" title={canAccessRoute('/admin/sales') ? '' : 'Funcion desactivada por permisos'} className={`whitespace-nowrap rounded-lg px-4 py-2 text-sm font-light transition-all ${isActive('/admin/sales') ? 'bg-cyan-500/15 text-cyan-400 border border-cyan-500/20' : 'text-slate-400 hover:bg-cyan-500/5 hover:text-cyan-300'} ${disabledUiClass('/admin/sales')}`}>Ventas</Link>
+              <Link to="/admin/reservations" className={`whitespace-nowrap rounded-lg px-4 py-2 text-sm font-light transition-all ${isActive('/admin/reservations') ? 'bg-cyan-500/15 text-cyan-400 border border-cyan-500/20' : 'text-slate-400 hover:bg-cyan-500/5 hover:text-cyan-300'}`}>Reservaciones</Link>
               <Link to="/admin/calendar" className={`whitespace-nowrap rounded-lg px-4 py-2 text-sm font-light transition-all ${isActive('/admin/calendar') ? 'bg-cyan-500/15 text-cyan-400 border border-cyan-500/20' : 'text-slate-400 hover:bg-cyan-500/5 hover:text-cyan-300'}`}>Agenda</Link>
               <Link to="/admin/meetings" className={`whitespace-nowrap rounded-lg px-4 py-2 text-sm font-light transition-all ${isActive('/admin/meetings') ? 'bg-cyan-500/15 text-cyan-400 border border-cyan-500/20' : 'text-slate-400 hover:bg-cyan-500/5 hover:text-cyan-300'}`}>Reuniones</Link>
               <Link to="/admin/messages" className={`whitespace-nowrap rounded-lg px-4 py-2 text-sm font-light transition-all ${isActive('/admin/messages') ? 'bg-cyan-500/15 text-cyan-400 border border-cyan-500/20' : 'text-slate-400 hover:bg-cyan-500/5 hover:text-cyan-300'}`}>Mensajes</Link>
@@ -413,11 +442,17 @@ function AdminLayout() {
                   ] : []),
                   { to: '/admin/quotes', label: 'Cotizaciones', icon: 'M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z' },
                   { to: '/admin/sales', label: 'Ventas', icon: 'M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z' },
+                  { to: '/admin/reservations', label: 'Reservaciones', icon: 'M8 7V3m8 4V3m-9 8h10m-3 8h5a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v5m0 0h5m-5 0v6a2 2 0 002 2h3' },
                   { to: '/admin/calendar', label: 'Agenda', icon: 'M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z' },
                   { to: '/admin/meetings', label: 'Reuniones', icon: 'M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z' },
                   { to: '/admin/messages', label: 'Mensajes', icon: 'M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z', badge: notifications.unread_chat > 0 ? notifications.unread_chat : null },
-                ].map(item => (
+                ].map(item => {
+                  const disabled = !canAccessRoute(item.to);
+                  if (disabled) return null;
+                  return (
                   <Link key={item.to} to={item.to}
+                    onClick={(e) => { if (disabled) e.preventDefault(); }}
+                    title={disabled ? 'Funcion desactivada por permisos' : ''}
                     className={`flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm transition-all ${
                       isActive(item.to)
                         ? 'bg-cyan-500/15 text-cyan-400 border border-cyan-500/15'
@@ -429,15 +464,18 @@ function AdminLayout() {
                     <span className="font-light">{item.label}</span>
                     {item.badge && <span className="ml-auto text-[10px] bg-blue-500 text-white rounded-full h-4 w-4 flex items-center justify-center font-bold">{item.badge > 9 ? '9+' : item.badge}</span>}
                   </Link>
-                ))}
+                  );
+                })}
               </div>
             </div>
           </div>
         </div>
       </nav>
 
-      <main className="relative z-10 mx-auto max-w-7xl px-3 sm:px-6 py-4 sm:py-8">
-        <Outlet />
+      <main className="admin-mobile-shell relative z-10 mx-auto max-w-7xl px-3 pb-20 sm:px-6 sm:py-8 overflow-x-hidden">
+        <div className="admin-mobile-content min-w-0">
+          <Outlet />
+        </div>
         
         {/* Floating music button - bottom left (invisible) */}
         {isAdministrador && (
@@ -452,6 +490,30 @@ function AdminLayout() {
           </button>
         )}
       </main>
+      <nav className="fixed bottom-0 left-0 right-0 z-40 border-t border-cyan-500/20 bg-[#030b18]/95 backdrop-blur-lg lg:hidden">
+        <div className="mx-auto grid max-w-7xl grid-cols-5 px-2 py-1">
+          {[
+            { to: '/admin/dashboard', label: 'Inicio', icon: 'M3 12l2-2 7-7 7 7m-2 2v8a1 1 0 01-1 1h-3m-6 0H6a1 1 0 01-1-1v-8' },
+            { to: '/admin/sales', label: 'Ventas', icon: 'M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8V7m0 9v1' },
+            { to: '/admin/reservations', label: 'Reservas', icon: 'M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z' },
+            { to: '/admin/messages', label: 'Mensajes', icon: 'M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z' },
+            { to: '/admin/calendar', label: 'Agenda', icon: 'M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z' },
+          ].filter((item) => canAccessRoute(item.to)).map((item) => (
+            <Link
+              key={item.to}
+              to={item.to}
+              className={`flex flex-col items-center justify-center rounded-lg py-1.5 text-[10px] transition-all ${
+                isActive(item.to) ? 'text-cyan-300 bg-cyan-500/10' : 'text-slate-400'
+              }`}
+            >
+              <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>
+                <path strokeLinecap="round" strokeLinejoin="round" d={item.icon} />
+              </svg>
+              <span className="mt-0.5">{item.label}</span>
+            </Link>
+          ))}
+        </div>
+      </nav>
     </div>
   );
 }

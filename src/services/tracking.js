@@ -283,13 +283,30 @@ class TrackingService {
   setupWindowCloseTracking() {
     if (typeof window === 'undefined') return;
 
-    window.addEventListener('beforeunload', () => {
+    const sendEndBeacon = () => {
       if (!this.sessionId) return;
-      // Only update last_activity so we know when the user left
-      navigator.sendBeacon(
-        `${import.meta.env.VITE_API_URL}/tracking/session/activity.php`,
-        JSON.stringify({ sessionId: this.sessionId })
-      );
+      const payload = JSON.stringify({ sessionId: this.sessionId, sessionToken: this.sessionToken });
+      navigator.sendBeacon(`${import.meta.env.VITE_API_URL}/tracking/session/end.php`, payload);
+    };
+
+    const sendActivityBeacon = () => {
+      if (!this.sessionId) return;
+      const payload = JSON.stringify({ sessionId: this.sessionId });
+      navigator.sendBeacon(`${import.meta.env.VITE_API_URL}/tracking/session/activity.php`, payload);
+    };
+
+    window.addEventListener('pagehide', () => {
+      sendEndBeacon();
+    });
+
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'hidden') {
+        sendActivityBeacon();
+      }
+    });
+
+    window.addEventListener('beforeunload', () => {
+      sendActivityBeacon();
     });
   }
 

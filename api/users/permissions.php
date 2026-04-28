@@ -12,12 +12,12 @@ $callerName = strtolower($caller['username'] ?? '');
 
 $VALID_TARGETS = ['francisco', 'santiago'];
 $VALID_PERMS   = [
+    'can_view_employees',
     'can_edit_employees',
-    'can_delete_employees',
+    'can_view_quotes',
     'can_edit_quotes',
-    'can_delete_quotes',
+    'can_view_applications',
     'can_edit_applications',
-    'can_delete_applications',
     'can_view_sales',
     'can_edit_sales',
 ];
@@ -31,7 +31,7 @@ try {
     }
     foreach ($VALID_PERMS as $perm) {
         if (!isset($existing[strtolower($perm)])) {
-            $default = ($perm === 'can_view_sales') ? 1 : 0;
+            $default = (strpos($perm, 'can_view_') === 0) ? 1 : 0;
             $conn->query("ALTER TABLE users ADD COLUMN `$perm` TINYINT(1) NOT NULL DEFAULT $default");
         }
     }
@@ -91,6 +91,26 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $stmt = $conn->prepare("UPDATE users SET `$perm` = ? WHERE LOWER(username) = ?");
     $stmt->bind_param("is", $val, $target);
     $stmt->execute();
+
+    // Reglas de dependencia:
+    // 1) Si activa "editar", activa automáticamente "ver" del mismo módulo.
+    // 2) Si desactiva "ver", desactiva automáticamente "editar" del mismo módulo.
+    if (strpos($perm, 'can_edit_') === 0 && $value) {
+        $viewPerm = 'can_view_' . substr($perm, strlen('can_edit_'));
+        if (in_array($viewPerm, $VALID_PERMS, true)) {
+            $stmt2 = $conn->prepare("UPDATE users SET `$viewPerm` = 1 WHERE LOWER(username) = ?");
+            $stmt2->bind_param("s", $target);
+            $stmt2->execute();
+        }
+    }
+    if (strpos($perm, 'can_view_') === 0 && !$value) {
+        $editPerm = 'can_edit_' . substr($perm, strlen('can_view_'));
+        if (in_array($editPerm, $VALID_PERMS, true)) {
+            $stmt3 = $conn->prepare("UPDATE users SET `$editPerm` = 0 WHERE LOWER(username) = ?");
+            $stmt3->bind_param("s", $target);
+            $stmt3->execute();
+        }
+    }
 
     echo json_encode(['success' => true, 'username' => $target, 'permission' => $perm, 'value' => $value]);
     $conn->close();

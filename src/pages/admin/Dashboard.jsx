@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { analyticsAPI, siteAnalyticsAPI, userStatusAPI, quotesAPI, userPermissionsAPI } from '../../services/api';
+import { analyticsAPI, siteAnalyticsAPI, userStatusAPI, quotesAPI, userPermissionsAPI, authAPI } from '../../services/api';
 import SalesWidget from '../../components/SalesWidget';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, AreaChart, Area } from 'recharts';
 import AdminDashboard from './AdminDashboard';
@@ -21,6 +21,36 @@ function ViewerDashboard() {
   const user = JSON.parse(localStorage.getItem('user') || '{}');
   const isAdmin = user.role === 'administrador';
   const isManuelOrMisael = ['manuel','misael'].includes(user.username?.toLowerCase());
+  const [myPerms, setMyPerms] = useState({
+    can_view_employees: user?.can_view_employees,
+    can_edit_employees: user?.can_edit_employees,
+    can_delete_employees: user?.can_delete_employees,
+    can_view_quotes: user?.can_view_quotes,
+    can_edit_quotes: user?.can_edit_quotes,
+    can_delete_quotes: user?.can_delete_quotes,
+    can_view_applications: user?.can_view_applications,
+    can_edit_applications: user?.can_edit_applications,
+    can_delete_applications: user?.can_delete_applications,
+    can_view_sales: user?.can_view_sales,
+  });
+
+  const boolWithDefault = (v, def = true) => (v === undefined || v === null ? def : Boolean(v));
+  const canApplications = isAdmin || (
+    myPerms.can_view_applications !== undefined && myPerms.can_view_applications !== null
+      ? Boolean(myPerms.can_view_applications)
+      : boolWithDefault(myPerms.can_edit_applications, true) || boolWithDefault(myPerms.can_delete_applications, true)
+  );
+  const canEmployees = isAdmin || (
+    myPerms.can_view_employees !== undefined && myPerms.can_view_employees !== null
+      ? Boolean(myPerms.can_view_employees)
+      : boolWithDefault(myPerms.can_edit_employees, true) || boolWithDefault(myPerms.can_delete_employees, true)
+  );
+  const canQuotes = isAdmin || (
+    myPerms.can_view_quotes !== undefined && myPerms.can_view_quotes !== null
+      ? Boolean(myPerms.can_view_quotes)
+      : boolWithDefault(myPerms.can_edit_quotes, true) || boolWithDefault(myPerms.can_delete_quotes, true)
+  );
+  const canSales = isAdmin || boolWithDefault(myPerms.can_view_sales, true);
 
   const DEUDA_TOTAL = 550000;
   const [aportaciones, setAportaciones] = useState([
@@ -76,7 +106,30 @@ function ViewerDashboard() {
   useEffect(() => {
     loadDashboard();
     if (isManuel || isMisael) { loadOnsiteStatus(); loadEditPerms(); }
+    loadMyPermissions();
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const loadMyPermissions = async () => {
+    try {
+      const res = await authAPI.getMe();
+      if (res?.data?.success && res.data.user) {
+        const merged = { ...user, ...res.data.user };
+        localStorage.setItem('user', JSON.stringify(merged));
+        setMyPerms({
+          can_view_employees: res.data.user.can_view_employees,
+          can_edit_employees: res.data.user.can_edit_employees,
+          can_delete_employees: res.data.user.can_delete_employees,
+          can_view_quotes: res.data.user.can_view_quotes,
+          can_edit_quotes: res.data.user.can_edit_quotes,
+          can_delete_quotes: res.data.user.can_delete_quotes,
+          can_view_applications: res.data.user.can_view_applications,
+          can_edit_applications: res.data.user.can_edit_applications,
+          can_delete_applications: res.data.user.can_delete_applications,
+          can_view_sales: res.data.user.can_view_sales,
+        });
+      }
+    } catch { /* silent */ }
+  };
 
   const loadEditPerms = async () => {
     try {
@@ -203,12 +256,27 @@ function ViewerDashboard() {
   const now = new Date();
   const timeStr = now.toLocaleTimeString('es-MX', { timeZone: 'America/Hermosillo', hour: '2-digit', minute: '2-digit' });
   const dateStr = now.toLocaleDateString('es-MX', { timeZone: 'America/Hermosillo', weekday: 'short', day: 'numeric', month: 'short' });
+  const blockedModuleClass = 'opacity-40 grayscale pointer-events-none cursor-not-allowed';
+  const moduleEnabledMap = {
+    '/admin/applications': canApplications,
+    '/admin/employees': canEmployees,
+    '/admin/quotes': canQuotes,
+    '/admin/sales': canSales,
+  };
+  const isModuleEnabled = (to) => (moduleEnabledMap[to] ?? true);
+
+  const ModuleLink = ({ to, enabled = true, className = '', children }) => {
+    if (!enabled) return null;
+    return <Link to={to} className={className}>{children}</Link>;
+  };
 
   return (
     <div className="space-y-4 p-1">
 
       {/* ── SALES WIDGET (visible para todos los viewers) ── */}
-      <SalesWidget />
+      <div className={!canSales ? blockedModuleClass : ''} title={!canSales ? 'Funcion desactivada por permisos' : ''}>
+        <SalesWidget />
+      </div>
 
       {/* ── ROW 1: Header + Hero Metric + Glowing Radar ── */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
@@ -265,15 +333,20 @@ function ViewerDashboard() {
               { label: 'Cotizaciones', to: '/admin/quotes' },
               ...(isAdmin ? [{ label: 'Analytics', to: '/admin/analytics' }, { label: 'Empleados', to: '/admin/employees' }] : []),
             ].map(item => (
-              <Link key={item.to} to={item.to} className="rounded-md border border-slate-700/50 bg-white/[0.02] px-2.5 py-1 text-[10px] text-slate-500 hover:border-cyan-500/30 hover:text-cyan-400 hover:bg-cyan-500/5 transition-all uppercase tracking-wider">
+              <ModuleLink
+                key={item.to}
+                to={item.to}
+                enabled={isModuleEnabled(item.to)}
+                className="rounded-md border border-slate-700/50 bg-white/[0.02] px-2.5 py-1 text-[10px] text-slate-500 hover:border-cyan-500/30 hover:text-cyan-400 hover:bg-cyan-500/5 transition-all uppercase tracking-wider"
+              >
                 {item.label}
-              </Link>
+              </ModuleLink>
             ))}
           </div>
         </div>
 
         {/* Center: Glowing Radar Element + Hero Metric → links to quotes */}
-        <Link to="/admin/quotes" className="group relative overflow-hidden rounded-2xl border border-cyan-500/20 bg-gradient-to-br from-[#040c1a] to-[#060f20] shadow-2xl shadow-cyan-500/10 flex flex-col items-center justify-center py-6 px-4 min-h-[240px] hover:border-cyan-400/40 hover:shadow-cyan-500/20 transition-all duration-500 cursor-pointer">
+        <ModuleLink to="/admin/quotes" enabled={canQuotes} className="group relative overflow-hidden rounded-2xl border border-cyan-500/20 bg-gradient-to-br from-[#040c1a] to-[#060f20] shadow-2xl shadow-cyan-500/10 flex flex-col items-center justify-center py-6 px-4 min-h-[240px] hover:border-cyan-400/40 hover:shadow-cyan-500/20 transition-all duration-500 cursor-pointer">
           {/* background glow */}
           <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
             <div className="w-48 h-48 rounded-full bg-cyan-500/5 blur-3xl group-hover:bg-cyan-500/10 transition-all duration-700" />
@@ -303,34 +376,34 @@ function ViewerDashboard() {
           </div>
           {/* Hero number */}
           <p className="text-[10px] uppercase tracking-[0.4em] text-cyan-500/50 mb-0.5">Total Cotizaciones</p>
-          <p className="text-5xl font-extralight text-white tabular-nums group-hover:text-cyan-100 transition-colors duration-300" style={{ textShadow: '0 0 30px rgba(34,211,238,0.3)' }}>
+          <p className="text-4xl sm:text-5xl font-extralight text-white tabular-nums break-all leading-tight group-hover:text-cyan-100 transition-colors duration-300" style={{ textShadow: '0 0 30px rgba(34,211,238,0.3)' }}>
             {quotesStats?.total_quotes || 0}
           </p>
           <div className="flex items-center gap-1.5 mt-2">
             <span className="h-1.5 w-1.5 rounded-full bg-cyan-400 animate-pulse" />
             <span className="text-[10px] text-cyan-400/50 tracking-widest uppercase group-hover:text-cyan-400/70 transition-colors">Ver Cotizaciones</span>
           </div>
-        </Link>
+        </ModuleLink>
 
         {/* Right: Stat stack */}
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-2">
           {[
-            { label: 'Pendientes', value: data?.stats.pendingApplications || 0, color: 'text-orange-400', border: 'border-orange-500/20', bg: 'bg-orange-500/5', to: '/admin/applications' },
+            { label: 'Pendientes', value: data?.stats.pendingApplications || 0, color: 'text-orange-400', border: 'border-orange-500/20', bg: 'bg-orange-500/5', to: '/admin/applications', enabled: canApplications },
             { label: 'Msj Sin Leer', value: unreadChat, color: 'text-green-400', border: 'border-green-500/20', bg: 'bg-green-500/5', to: '/admin/messages' },
-            { label: 'Solicitudes', value: data?.stats.totalApplications || 0, color: 'text-orange-400', border: 'border-orange-500/20', bg: 'bg-orange-500/5', to: '/admin/applications' },
+            { label: 'Solicitudes', value: data?.stats.totalApplications || 0, color: 'text-orange-400', border: 'border-orange-500/20', bg: 'bg-orange-500/5', to: '/admin/applications', enabled: canApplications },
             { label: 'Correos', value: inbox.filter(e => !e.seen).length, color: 'text-blue-400', border: 'border-blue-500/20', bg: 'bg-blue-500/5', to: '/admin/inbox' },
             ...(isAdmin ? [
               { label: 'Usuarios', value: data?.stats.totalUsers || 0, color: 'text-purple-400', border: 'border-purple-500/20', bg: 'bg-purple-500/5', to: '/admin/tracking' },
               { label: 'Visitantes Hoy', value: siteStats?.today_views || 0, color: 'text-teal-400', border: 'border-teal-500/20', bg: 'bg-teal-500/5', to: '/admin/analytics', sub: siteStats ? `${siteStats.active_now || 0} ahora` : null },
             ] : []),
           ].map((s, i) => (
-            <Link key={i} to={s.to} className="group">
+            <ModuleLink key={i} to={s.to} enabled={s.enabled ?? true} className="group">
               <div className={`rounded-xl border ${s.border} ${s.bg} p-3 sm:p-4 hover:scale-[1.03] transition-all duration-200 h-full`}>
                 <p className="text-[10px] uppercase tracking-widest text-slate-500 mb-1.5 leading-tight">{s.label}</p>
-                <p className={`text-2xl sm:text-3xl font-light tabular-nums ${s.color}`}>{s.value}</p>
+                <p className={`text-xl sm:text-3xl font-light tabular-nums break-all leading-tight ${s.color}`}>{s.value}</p>
                 {s.sub && <p className="text-[10px] text-slate-600 mt-0.5">{s.sub}</p>}
               </div>
-            </Link>
+            </ModuleLink>
           ))}
         </div>
       </div>
@@ -533,7 +606,7 @@ function ViewerDashboard() {
               <div key={i} className={`relative overflow-hidden rounded-2xl border ${k.border} bg-gradient-to-br ${k.bg} to-transparent p-5`}>
                 <div className="absolute top-0 left-0 right-0 h-px bg-gradient-to-r from-transparent via-white/5 to-transparent" />
                 <p className="text-[10px] uppercase tracking-widest text-slate-500 mb-2">{k.label}</p>
-                <p className={`text-3xl font-light tabular-nums ${k.color}`}>{k.value}</p>
+                <p className={`text-2xl sm:text-3xl font-light tabular-nums break-all leading-tight ${k.color}`}>{k.value}</p>
                 <div className="flex items-center gap-1.5 mt-2">
                   <span className={`h-1.5 w-1.5 rounded-full ${k.accent}`} />
                   <span className="text-[10px] text-slate-600">{k.desc}</span>

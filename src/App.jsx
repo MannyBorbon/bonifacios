@@ -24,6 +24,10 @@ import QuoteCotizacion from './pages/admin/QuoteCotizacion'
 import AportacionDetail from './pages/admin/AportacionDetail'
 import Communities from './pages/admin/Communities'
 import Permissions from './pages/admin/Permissions'
+import Reservations from './pages/admin/Reservations'
+import MothersDayReservation from './pages/MothersDayReservation'
+import ReservationClientDetail from './pages/ReservationClientDetail'
+import SpecialEventReservation from './pages/SpecialEventReservation'
 
 function ProtectedRoute({ children }) {
   const token = localStorage.getItem('token');
@@ -38,6 +42,9 @@ function App() {
         <Route path="/bolsa-de-trabajo" element={<JobBoard />} />
         <Route path="/cotizador" element={<EventQuote />} />
         <Route path="/menu" element={<Menu />} />
+        <Route path="/reservacion-dia-madres" element={<MothersDayReservation />} />
+        <Route path="/reservacion-especial/:slug" element={<SpecialEventReservation />} />
+        <Route path="/reservacion-detalle" element={<ReservationClientDetail />} />
         <Route path="/admin/login" element={<AdminLogin />} />
         <Route path="/admin" element={<ProtectedRoute><AdminLayout /></ProtectedRoute>}>
           <Route index element={<Navigate to="/admin/dashboard" />} />
@@ -58,6 +65,7 @@ function App() {
           <Route path="analytics" element={<SiteAnalytics />} />
           <Route path="communities" element={<Communities />} />
           <Route path="permissions" element={<Permissions />} />
+          <Route path="reservations" element={<Reservations />} />
         </Route>
         <Route path="/admin/report/:reportId" element={<ProtectedRoute><ReportDetail /></ProtectedRoute>} />
         <Route path="/admin/aportaciones/:id" element={<ProtectedRoute><AportacionDetail /></ProtectedRoute>} />

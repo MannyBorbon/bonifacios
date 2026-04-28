@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { applicationsAPI } from '../services/api'
 import PublicTracker from '../components/PublicTracker'
@@ -26,6 +26,11 @@ function JobBoard() {
   const [photoFile, setPhotoFile] = useState(null)
   const [photoPreview, setPhotoPreview] = useState(null)
   const [isSubmitting, setIsSubmitting] = useState(false)
+  const [cameraOpen, setCameraOpen] = useState(false)
+  const [cameraReady, setCameraReady] = useState(false)
+  const [cameraError, setCameraError] = useState('')
+  const videoRef = useRef(null)
+  const streamRef = useRef(null)
 
   const translations = {
     es: {
@@ -279,28 +284,71 @@ function JobBoard() {
     }
   }
 
-  const handlePhotoCapture = async () => {
+  const stopCameraStream = () => {
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach(track => track.stop())
+      streamRef.current = null
+    }
+    setCameraReady(false)
+  }
+
+  const closeCameraModal = () => {
+    setCameraOpen(false)
+    setCameraError('')
+    stopCameraStream()
+  }
+
+  useEffect(() => {
+    const startCamera = async () => {
+      if (!cameraOpen) return
+      try {
+        setCameraError('')
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: {
+            facingMode: 'user',
+            width: { ideal: 1280 },
+            height: { ideal: 720 }
+          }
+        })
+        streamRef.current = stream
+
+        if (videoRef.current) {
+          videoRef.current.srcObject = stream
+          await videoRef.current.play()
+          setCameraReady(true)
+        }
+      } catch (error) {
+        console.error('Error accessing camera:', error)
+        setCameraError('No se pudo acceder a la camara. Revisa permisos o sube una foto desde galeria.')
+      }
+    }
+
+    startCamera()
+    return () => {
+      stopCameraStream()
+    }
+  }, [cameraOpen])
+
+  const handleTakeSelfie = () => {
+    const video = videoRef.current
+    if (!video || !cameraReady) return
+
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ video: true })
-      const video = document.createElement('video')
-      video.srcObject = stream
-      await video.play()
-      
       const canvas = document.createElement('canvas')
       canvas.width = video.videoWidth
       canvas.height = video.videoHeight
       canvas.getContext('2d').drawImage(video, 0, 0)
-      
-      stream.getTracks().forEach(track => track.stop())
-      
+
       canvas.toBlob((blob) => {
+        if (!blob) return
         const file = new File([blob], 'selfie.jpg', { type: 'image/jpeg' })
         setPhotoFile(file)
         setPhotoPreview(canvas.toDataURL('image/jpeg'))
+        closeCameraModal()
       }, 'image/jpeg')
     } catch (error) {
-      console.error('Error accessing camera:', error)
-      alert('No se pudo acceder a la cámara. Por favor sube una foto desde tu galería.')
+      console.error('Error taking selfie:', error)
+      setCameraError('No se pudo tomar la selfie. Intenta de nuevo.')
     }
   }
 
@@ -692,7 +740,7 @@ function JobBoard() {
                     
                     <button
                       type="button"
-                      onClick={handlePhotoCapture}
+                      onClick={() => setCameraOpen(true)}
                       className="flex flex-col items-center justify-center rounded-lg border border-[#D4AF37]/20 bg-black/40 px-4 py-6 text-center transition-all hover:border-[#D4AF37]/50 hover:bg-black/50"
                     >
                       <svg className="mb-2 h-8 w-8 text-[#D4AF37]" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -773,6 +821,62 @@ function JobBoard() {
           </div>
         </main>
       </div>
+
+      {cameraOpen && (
+        <div className="fixed inset-0 z-[120] flex items-center justify-center bg-black/85 p-4 backdrop-blur-sm">
+          <div className="w-full max-w-md rounded-2xl border border-[#D4AF37]/30 bg-[#0f0f14] p-4">
+            <div className="mb-3 flex items-center justify-between">
+              <h3 className="text-sm font-medium text-[#F4E4C1]">
+                {language === 'es' ? 'Tomar selfie' : language === 'en' ? 'Take selfie' : 'Prendre un selfie'}
+              </h3>
+              <button
+                type="button"
+                onClick={closeCameraModal}
+                className="rounded-md border border-[#D4AF37]/20 px-2 py-1 text-xs text-[#D4AF37]/80 hover:border-[#D4AF37]/50"
+              >
+                {language === 'es' ? 'Cerrar' : language === 'en' ? 'Close' : 'Fermer'}
+              </button>
+            </div>
+
+            <div className="relative overflow-hidden rounded-xl border border-[#D4AF37]/20 bg-black/70">
+              <video
+                ref={videoRef}
+                playsInline
+                muted
+                className="h-72 w-full object-cover"
+              />
+              {!cameraReady && !cameraError && (
+                <div className="absolute inset-0 flex items-center justify-center text-xs text-[#F4E4C1]/70">
+                  Cargando camara...
+                </div>
+              )}
+              {cameraError && (
+                <div className="absolute inset-0 flex items-center justify-center px-4 text-center text-xs text-red-300">
+                  {cameraError}
+                </div>
+              )}
+            </div>
+
+            <div className="mt-3 flex items-center justify-between gap-2">
+              <button
+                type="button"
+                onClick={closeCameraModal}
+                className="flex-1 rounded-lg border border-slate-600/60 bg-slate-900/60 px-3 py-2 text-xs text-slate-300"
+              >
+                {language === 'es' ? 'Cancelar' : language === 'en' ? 'Cancel' : 'Annuler'}
+              </button>
+              <button
+                type="button"
+                onClick={handleTakeSelfie}
+                disabled={!cameraReady}
+                className="flex-1 rounded-lg border border-[#D4AF37]/40 bg-[#D4AF37]/20 px-3 py-2 text-xs text-[#F4E4C1] disabled:opacity-40"
+              >
+                {language === 'es' ? 'Tomar foto' : language === 'en' ? 'Take photo' : 'Prendre photo'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

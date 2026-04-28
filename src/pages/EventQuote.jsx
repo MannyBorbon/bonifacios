@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from 'react'
 import { Link } from 'react-router-dom'
 import PublicTracker from '../components/PublicTracker'
 
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001/api'
+const API_URL = import.meta.env.VITE_API_URL || '/api'
 
 function EventQuote() {
   const [categories, setCategories] = useState([])
@@ -11,19 +11,31 @@ function EventQuote() {
   const [cart, setCart] = useState({})
   const [contact, setContact] = useState({ name: '', phone: '', email: '', type: '', date: '', guests: '', notes: '' })
   const [showSummary, setShowSummary] = useState(false)
+  const [menuError, setMenuError] = useState('')
+  const [formError, setFormError] = useState('')
   const carouselRef = useRef(null)
 
   useEffect(() => {
-    fetch(`${API_URL}/menu/categories.php?type=event`)
+    const controller = new AbortController()
+
+    fetch(`${API_URL}/menu/categories.php?type=event`, { signal: controller.signal })
       .then(r => r.json())
       .then(data => {
         if (data.success && data.categories?.length) {
           setCategories(data.categories)
           setActiveCategory(data.categories[0].id)
+          return
+        }
+        setMenuError('No se encontraron productos disponibles para cotizar.')
+      })
+      .catch((err) => {
+        if (err.name !== 'AbortError') {
+          setMenuError('No fue posible cargar el catálogo de eventos. Intenta de nuevo.')
         }
       })
-      .catch(err => console.error('Error loading event products:', err))
       .finally(() => setLoadingMenu(false))
+    
+    return () => controller.abort()
   }, [])
 
   const phoneE164Mx = '526221738884'
@@ -49,10 +61,12 @@ function EventQuote() {
   }
 
   const setQty = (itemId, qty) => {
-    if (qty <= 0) {
+    const safeQty = Number.isFinite(qty) ? Math.max(0, Math.min(999, qty)) : 0
+
+    if (safeQty <= 0) {
       setCart(prev => { const u = { ...prev }; delete u[itemId]; return u })
     } else {
-      setCart(prev => ({ ...prev, [itemId]: { ...prev[itemId], qty } }))
+      setCart(prev => ({ ...prev, [itemId]: { ...prev[itemId], qty: safeQty } }))
     }
   }
 
@@ -69,7 +83,16 @@ function EventQuote() {
   }
 
   const handleSubmitWhatsApp = () => {
-    if (!contact.name || !contact.phone || !contact.type || !contact.date) return
+    if (!contact.name || !contact.phone || !contact.type || !contact.date) {
+      setFormError('Completa nombre, teléfono, tipo y fecha del evento.')
+      return
+    }
+    if (cartItems.length === 0) {
+      setFormError('Agrega al menos un producto antes de enviar la cotización.')
+      return
+    }
+    setFormError('')
+
     let msg = `🎉 *COTIZACIÓN DE EVENTO - Bonifacio's Restaurant*\n\n`
     msg += `👤 *Cliente:* ${contact.name}\n📞 *Tel:* ${contact.phone}\n📧 *Email:* ${contact.email || 'N/A'}\n🎊 *Tipo:* ${contact.type}\n📅 *Fecha:* ${contact.date}\n👥 *Invitados:* ${contact.guests || 'N/A'}\n\n`
     msg += `📋 *PRODUCTOS SELECCIONADOS:*\n`
@@ -118,6 +141,9 @@ function EventQuote() {
             Selecciona los productos y servicios para tu evento. El precio se calcula en tiempo real.
           </p>
           {loadingMenu && <p className="mt-4 text-xs text-[#D4AF37]/50 animate-pulse">Cargando productos...</p>}
+          {menuError && (
+            <p className="mt-4 text-xs text-red-400/90">{menuError}</p>
+          )}
           {!loadingMenu && categories.length === 0 && (
             <div className="mt-8 rounded-xl border border-[#D4AF37]/20 bg-black/40 p-8">
               <p className="text-sm text-[#F4E4C1]/40">No hay productos disponibles todavía.</p>
@@ -195,7 +221,9 @@ function EventQuote() {
                           <input
                             type="number"
                             value={inCart.qty}
-                            onChange={(e) => setQty(item.id, parseInt(e.target.value) || 0)}
+                            min={0}
+                            max={999}
+                            onChange={(e) => setQty(item.id, parseInt(e.target.value, 10) || 0)}
                             className="w-12 rounded-lg border border-[#D4AF37]/20 bg-black/40 px-2 py-1 text-center text-sm text-[#F4E4C1] focus:outline-none focus:border-[#D4AF37]/40"
                           />
                           <button
@@ -326,6 +354,9 @@ function EventQuote() {
                 </svg>
                 Enviar Cotización por WhatsApp
               </button>
+              {formError && (
+                <p className="mt-2 text-center text-[11px] text-red-400">{formError}</p>
+              )}
               <p className="mt-2 text-center text-[9px] text-[#F4E4C1]/25">Los precios son estimados y están sujetos a confirmación</p>
             </div>
           </div>

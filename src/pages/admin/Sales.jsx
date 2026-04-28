@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { XAxis, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, LabelList, BarChart, Bar, YAxis } from 'recharts';
 import { motion, AnimatePresence } from 'framer-motion';
 
@@ -20,14 +20,30 @@ function TicketItemsModal({ ticket, onClose, apiUrl }) {
 
   useEffect(() => {
     if (!ticket) return;
-    setLoading(true); setError(null);
-    fetch(`${apiUrl}/softrestaurant/ticket-items.php?folio=${encodeURIComponent(ticket.folio)}`, { credentials: 'include' })
-      .then(r => r.json())
-      .then(d => { setItems(d.items || []); })
-      .catch(() => setError('No se pudieron cargar los productos'))
-      .finally(() => setLoading(false));
-  }, [ticket]);
+    
+    const fetchItems = async () => {
+      setLoading(true);
+      setError(null);
+      try {
+        const folioParam = encodeURIComponent(ticket.folio);
+        const srIdParam = ticket.sr_ticket_id ? `&sr_ticket_id=${encodeURIComponent(ticket.sr_ticket_id)}` : '';
+        const url = `${apiUrl}/softrestaurant/ticket-items.php?folio=${folioParam}${srIdParam}`;
+        
+        console.log("Fetching items for ticket:", ticket.folio, "URL:", url);
+        const response = await fetch(url, { credentials: 'include' });
+        const data = await response.json();
+        setItems(data.items || []);
+      } catch (err) {
+        console.error('Error fetching ticket items:', err);
+        setError('Error al cargar los items del ticket');
+      } finally {
+        setLoading(false);
+      }
+    };
 
+    fetchItems();
+  }, [ticket, apiUrl]);
+      
   if (!ticket) return null;
   const fmt = (v) => new Intl.NumberFormat('es-MX', { style: 'currency', currency: 'MXN' }).format(v || 0);
   const statusColor = ticket.status === 'closed' ? 'text-emerald-400' : ticket.status === 'open' ? 'text-orange-400' : 'text-red-400';
@@ -123,25 +139,26 @@ function TicketItemsModal({ ticket, onClose, apiUrl }) {
 }
 
 const VIEW_CONFIG = {
-  overview:    { label: 'General',    icon: '📊', desc: 'Resumen de ventas y métricas' },
-  tickets:     { label: 'Tickets',    icon: '📋', desc: 'Lista detallada de tickets' },
-  waiters:     { label: 'Meseros',    icon: '🧑‍🍳', desc: 'Desempeño por mesero' },
-  products:    { label: 'Productos',  icon: '🍽️', desc: 'Los más y menos vendidos' },
-  tips:        { label: 'Propinas',   icon: '🤝', desc: 'Propinas por mesero' },
-  cash:        { label: 'Caja',       icon: '💰', desc: 'Movimientos de efectivo' },
-  shift_close: { label: 'Corte',      icon: '🧾', desc: 'Corte de caja del turno' },
-  audit:       { label: 'Auditoría',  icon: '🔍', desc: 'Cancelaciones y ajustes' },
+  overview:    { label: 'General',    icon: '', desc: 'Resumen de ventas y metricas' },
+  tickets:     { label: 'Tickets',    icon: '', desc: 'Lista detallada de tickets' },
+  waiters:     { label: 'Meseros',    icon: '', desc: 'Desempeno por mesero' },
+  products:    { label: 'Productos',  icon: '', desc: 'Los mas y menos vendidos' },
+  open_tables: { label: 'Mesas',     icon: '', desc: 'Mesas abiertas en tiempo real' },
+  tips:        { label: 'Propinas',   icon: '', desc: 'Propinas por mesero' },
+  cash:        { label: 'Caja',       icon: '', desc: 'Movimientos de efectivo' },
+  shift_close: { label: 'Corte',      icon: '', desc: 'Corte de caja del turno' },
+  audit:       { label: 'Cancelaciones',  icon: '', desc: 'Cancelaciones y ajustes' },
 };
 
 function KPICard({ icon, label, value, sub, accent, border, isCurrency, fmt }) {
   return (
-    <motion.div whileHover={{ y: -2 }} className={`bg-[#0b1120] border ${border} p-4 rounded-2xl flex flex-col gap-2`}>
+    <motion.div whileHover={{ y: -2 }} className={`bg-[#0b1120] border ${border} p-3 sm:p-4 rounded-2xl flex flex-col gap-2 overflow-hidden`}>
       <div className="flex items-center justify-between">
-        <span className="text-xl">{icon}</span>
-        <span className="text-[9px] font-black uppercase tracking-widest px-2 py-0.5 rounded-full border" style={{ color: accent, borderColor: `${accent}40`, backgroundColor: `${accent}15` }}>{label}</span>
+        <span className="text-lg sm:text-xl">{icon}</span>
+        <span className="text-[8px] sm:text-[9px] font-black uppercase tracking-widest px-1.5 sm:px-2 py-0.5 rounded-full border whitespace-nowrap" style={{ color: accent, borderColor: `${accent}40`, backgroundColor: `${accent}15` }}>{label}</span>
       </div>
-      <p className="text-2xl lg:text-3xl font-black leading-none mt-1" style={{ color: accent }}>{isCurrency ? fmt(value) : (value ?? '--')}</p>
-      {sub && <p className="text-[10px] text-slate-500 leading-tight">{sub}</p>}
+      <p className="text-lg sm:text-2xl lg:text-3xl font-black leading-none mt-1 break-words" style={{ color: accent }}>{isCurrency ? fmt(value) : (value ?? '--')}</p>
+      {sub && <p className="text-[9px] sm:text-[10px] text-slate-500 leading-tight line-clamp-2">{sub}</p>}
     </motion.div>
   );
 }
@@ -165,18 +182,25 @@ function TipsHistoryModal({ waiter, apiUrl, formatCurrency, onClose, onViewTicke
   const [activeTab, setActiveTab] = useState('list'); // 'list' | 'years'
 
   useEffect(() => {
-    setLoading(true);
-    fetch(`${apiUrl}/softrestaurant/tips-history.php?waiter=${encodeURIComponent(waiter)}&limit=500`, { credentials: 'include' })
-      .then(r => r.json())
-      .then(d => {
-        if (d.success) {
-          setTips(d.tips || []);
-          setMeta({ count: d.count, total_tips: d.total_tips, total_paid: d.total_paid, total_pending: d.total_pending, by_year: d.by_year || [] });
+    const fetchTips = async () => {
+      setLoading(true);
+      try {
+        const response = await fetch(`${apiUrl}/softrestaurant/tips-history.php?waiter=${encodeURIComponent(waiter)}&limit=500`, { credentials: 'include' });
+        const data = await response.json();
+        
+        if (data.success) {
+          setTips(data.tips || []);
+          setMeta({ count: data.count, total_tips: data.total_tips, total_paid: data.total_paid, total_pending: data.total_pending, by_year: data.by_year || [] });
         }
-      })
-      .catch(() => {})
-      .finally(() => setLoading(false));
-  }, [waiter]);
+      } catch (error) {
+        console.error('Error fetching tips history:', error);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchTips();
+  }, [waiter, apiUrl]);
 
   const paidPct = meta.total_tips > 0 ? Math.round(meta.total_paid / meta.total_tips * 100) : 0;
 
@@ -557,11 +581,11 @@ export default function Sales() {
   const chartData = isHourlyRange ? (data.hourly || []) : (data.daily || []);
 
   return (
-    <div className="min-h-screen bg-[#030712] text-slate-200 p-3 sm:p-4 lg:p-6 space-y-4 sm:space-y-5 font-sans overflow-x-hidden">
+    <div className="min-h-screen bg-[#030712] text-slate-200 p-3 sm:p-4 lg:p-6 space-y-4 sm:space-y-5 font-sans overflow-x-hidden max-w-full">
       
       {/* ── HEADER ── */}
-      <div className="bg-[#0b1120] border border-slate-800 rounded-2xl p-5 lg:p-6">
-        <div className="flex flex-col lg:flex-row lg:items-start justify-between gap-4">
+      <div className="bg-[#0b1120] border border-slate-800 rounded-2xl p-4 sm:p-5 lg:p-6 overflow-hidden">
+        <div className="flex flex-col lg:flex-row lg:items-start justify-between gap-4 w-full">
           <div>
             <div className="flex items-center gap-2 mb-1">
               <span className="relative flex h-2.5 w-2.5">
@@ -574,12 +598,12 @@ export default function Sales() {
               </p>
             </div>
             <div className="flex flex-col gap-1">
-              <div className="flex items-baseline gap-3 flex-wrap">
-                <h1 className="text-4xl lg:text-6xl font-black text-white tracking-tight leading-none">{formatCurrency(totalWithOpen)}</h1>
-                <span className="text-slate-500 text-sm">venta del turno (cerrada + en curso) · {selectedRangeLabel}</span>
+              <div className="flex flex-col sm:flex-row sm:items-baseline gap-2 sm:gap-3 flex-wrap">
+                <h1 className="text-2xl sm:text-3xl lg:text-4xl xl:text-6xl font-black text-white tracking-tight leading-none break-words">{formatCurrency(totalWithOpen)}</h1>
+                <span className="text-slate-500 text-xs sm:text-sm mt-1 sm:mt-0">venta del turno (cerrada + en curso) · {selectedRangeLabel}</span>
               </div>
               {openAmount > 0 && (
-                <div className="flex flex-wrap gap-x-4 gap-y-1 mt-1">
+                <div className="flex flex-wrap gap-x-2 sm:gap-x-4 gap-y-1 mt-1">
                   <span className="text-[11px] text-slate-400">
                     <span className="text-slate-500">Cerrada:</span> <span className="text-emerald-400 font-bold">{formatCurrency(stats.total || 0)}</span>
                   </span>
@@ -594,7 +618,7 @@ export default function Sales() {
                 </p>
               )}
               {/* Desglose SR — igual que reporte SoftRestaurant */}
-              <div className="flex flex-wrap gap-x-4 gap-y-1 mt-2">
+              <div className="flex flex-wrap gap-x-2 sm:gap-x-4 gap-y-1 mt-2">
                 {grossSales > 0 && (
                   <span className="text-[11px] text-slate-400">
                     <span className="text-slate-500">Bruta:</span> <span className="text-white font-bold">{formatCurrency(grossSales)}</span>
@@ -630,10 +654,10 @@ export default function Sales() {
             </div>
           </div>
           <div className="flex flex-col gap-2 shrink-0">
-            <div className="flex gap-1 bg-black/40 p-1 rounded-xl border border-slate-800">
+            <div className="flex flex-wrap gap-1 bg-black/40 p-1 rounded-xl border border-slate-800 overflow-hidden">
               {RANGES.map((key) => (
                 <button key={key} onClick={() => setDateRange(key)}
-                  className={`flex items-center gap-1 px-3 py-1.5 text-xs font-bold rounded-lg transition-all ${dateRange === key ? 'bg-white text-black shadow' : 'text-slate-400 hover:text-white'}`}>
+                  className={`flex items-center gap-1 px-2 sm:px-3 py-1.5 text-xs font-bold rounded-lg transition-all whitespace-nowrap ${dateRange === key ? 'bg-white text-black shadow' : 'text-slate-400 hover:text-white'}`}>
                   <span>{RANGE_ICONS[key]}</span> {RANGE_LABELS[key]}
                 </button>
               ))}
@@ -643,7 +667,7 @@ export default function Sales() {
                 <select
                   value={selectedMonth}
                   onChange={(e) => setSelectedMonth(parseInt(e.target.value))}
-                  className="bg-[#0b1120] border border-slate-700 text-slate-200 text-xs p-2 rounded-lg"
+                  className="bg-[#0b1120] border border-slate-700 text-slate-200 text-xs p-2 rounded-lg min-w-0 flex-shrink-0"
                 >
                   <option value="1">Enero</option>
                   <option value="2">Febrero</option>
@@ -664,24 +688,23 @@ export default function Sales() {
                   onChange={(e) => setSelectedYear(parseInt(e.target.value))}
                   min="2020"
                   max="2030"
-                  className="bg-[#0b1120] border border-slate-700 text-slate-200 text-xs p-2 rounded-lg w-24"
+                  className="bg-[#0b1120] border border-slate-700 text-slate-200 text-xs p-2 rounded-lg w-20 sm:w-24 flex-shrink-0"
                 />
               </div>
             )}
             {dateRange === 'custom' && (
-              <div className="flex items-center gap-2 bg-black/40 p-2 rounded-xl border border-slate-800">
+              <div className="flex flex-wrap items-center gap-2 bg-black/40 p-2 rounded-xl border border-slate-800">
                 <input
                   type="date"
                   value={customStart}
                   onChange={(e) => setCustomStart(e.target.value)}
-                  className="bg-[#0b1120] border border-slate-700 text-slate-200 text-xs p-2 rounded-lg"
+                  className="bg-[#0b1120] border border-slate-700 text-slate-200 text-xs p-2 rounded-lg min-w-0 flex-shrink-0"
                 />
-                <span className="text-slate-500 text-xs">a</span>
                 <input
                   type="date"
                   value={customEnd}
                   onChange={(e) => setCustomEnd(e.target.value)}
-                  className="bg-[#0b1120] border border-slate-700 text-slate-200 text-xs p-2 rounded-lg"
+                  className="bg-[#0b1120] border border-slate-700 text-slate-200 text-xs p-2 rounded-lg min-w-0 flex-shrink-0"
                 />
               </div>
             )}
@@ -776,7 +799,7 @@ export default function Sales() {
               <select value={viewMode} onChange={(e) => setViewMode(e.target.value)}
                 className="w-full bg-black/40 border border-slate-800 text-white text-sm p-2.5 rounded-xl focus:outline-none focus:border-cyan-500">
                 {Object.entries(VIEW_CONFIG).map(([k, v]) => (
-                  <option key={k} value={k} className="bg-[#0b1120]">{v.icon} {v.label}</option>
+                  <option key={k} value={k} className="bg-[#0b1120]">{v.label}</option>
                 ))}
               </select>
             </div>
@@ -788,13 +811,12 @@ export default function Sales() {
             <button key={key} onClick={() => setViewMode(key)} title={cfg.desc}
               className={`flex items-center gap-1.5 px-3 py-2 text-xs font-bold rounded-xl transition-all ${
                 viewMode === key ? 'bg-cyan-500 text-black shadow shadow-cyan-500/20' : 'text-slate-400 hover:text-white hover:bg-white/5 border border-transparent hover:border-slate-700'}`}>
-              <span>{cfg.icon}</span> {cfg.label}
+              {cfg.label}
             </button>
           ))}
         </div>
 
         <div className="mt-3 flex items-center gap-2">
-          <span>{VIEW_CONFIG[viewMode]?.icon}</span>
           <span className="text-white font-bold text-sm">{VIEW_CONFIG[viewMode]?.label}</span>
           <span className="text-slate-500 text-xs">— {VIEW_CONFIG[viewMode]?.desc}</span>
         </div>
@@ -912,7 +934,7 @@ export default function Sales() {
       )}
 
       {/* ── KPIs ── (solo en vista General) */}
-      {viewMode === 'overview' && <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+      {viewMode === 'overview' && <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 overflow-hidden">
         <KPICard icon="🧾" label="Tickets cerrados" value={stats.checks} sub="Cuentas cobradas en el período" accent="#06b6d4" border="border-cyan-500/25" isCurrency={false} fmt={formatCurrency} />
         <KPICard icon="💵" label="Ticket promedio" value={avgTicket} sub={`Promedio sobre ${stats.checks} tickets`} accent="#a78bfa" border="border-violet-500/25" isCurrency={true} fmt={formatCurrency} />
         <KPICard icon="👥" label="Comensales" value={stats.covers} sub="Personas atendidas" accent="#818cf8" border="border-indigo-500/25" isCurrency={false} fmt={formatCurrency} />
@@ -927,11 +949,11 @@ export default function Sales() {
         {/* ── VISTA GENERAL ── */}
         {viewMode === 'overview' && (
           <motion.div key="ov" initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} className="space-y-5">
-            <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 lg:gap-5">
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-3 sm:gap-4 lg:gap-5 overflow-hidden">
               {/* Gráfica Horaria */}
-              <div className="lg:col-span-2 bg-[#0b1120] border border-slate-800 p-4 sm:p-5 rounded-2xl">
+              <div className="lg:col-span-2 bg-[#0b1120] border border-slate-800 p-4 sm:p-5 rounded-2xl overflow-hidden">
                 <SectionHeader icon="📈" title={isHourlyRange ? 'Ventas por hora' : 'Ventas por día'} desc={isHourlyRange ? 'Cuánto se vendió en cada franja horaria del día' : 'Resumen diario dentro del período seleccionado'} />
-                <div className="h-64">
+                <div className="h-48 sm:h-56 lg:h-64 w-full overflow-hidden">
                   <ResponsiveContainer width="100%" height="100%">
                     <BarChart data={chartData} margin={{ top: 22, right: 8, left: -14, bottom: 0 }}>
                       <XAxis dataKey={isHourlyRange ? 'hour' : 'date'} stroke="#334155" fontSize={11} axisLine={false} tickLine={false} tickFormatter={(x) => isHourlyRange ? `${String(x).replace(':00', '')}h` : x} />
@@ -948,9 +970,9 @@ export default function Sales() {
               </div>
 
               {/* Métodos de Pago */}
-              <div className="bg-[#0b1120] border border-slate-800 p-4 sm:p-5 rounded-2xl flex flex-col">
+              <div className="bg-[#0b1120] border border-slate-800 p-4 sm:p-5 rounded-2xl flex flex-col overflow-hidden">
                 <SectionHeader icon="💳" title="Métodos de pago" desc="Cómo pagaron los clientes" />
-                <ResponsiveContainer width="100%" height={170}>
+                <ResponsiveContainer width="100%" height={140} className="flex-shrink-0">
                   <PieChart>
                     <Pie data={data.payment_methods || []} innerRadius={50} outerRadius={75} dataKey="value" stroke="none">
                       {data.payment_methods?.map((e, i) => <Cell key={i} fill={COLORS[i % COLORS.length]} />)}
@@ -975,58 +997,59 @@ export default function Sales() {
             </div>
 
             {/* Propinas + Hora pico + Mesas */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 sm:gap-4">
-              <div className="bg-[#0b1120] border border-emerald-500/20 p-5 rounded-2xl">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 sm:gap-4 overflow-hidden">
+              <div className="bg-[#0b1120] border border-emerald-500/20 p-3 sm:p-5 rounded-2xl overflow-hidden">
                 <SectionHeader icon="💚" title="Propinas" desc="Cobradas en este período" />
                 <div className="space-y-2">
-                  <div className="flex justify-between items-center py-2 border-b border-slate-800">
-                    <span className="text-slate-400 text-sm">Total acumulado</span>
-                    <span className="text-emerald-400 font-black text-xl">{formatCurrency(totalTips)}</span>
+                  <div className="flex justify-between items-center py-1.5 sm:py-2 border-b border-slate-800">
+                    <span className="text-slate-400 text-xs sm:text-sm truncate flex-1 mr-2">Total acumulado</span>
+                    <span className="text-emerald-400 font-black text-lg sm:text-xl text-right flex-shrink-0">{formatCurrency(totalTips)}</span>
                   </div>
                   {data.analytics?.tips_breakdown && (<>
                     <div className="flex justify-between items-center py-1">
-                      <span className="text-slate-500 text-xs flex items-center gap-1.5"><span className="w-1.5 h-1.5 rounded-full bg-emerald-400 inline-block"/>Pagadas a meseros</span>
-                      <span className="text-white font-bold text-sm">{formatCurrency(data.analytics.tips_breakdown.paid_tips)}</span>
+                      <span className="text-slate-500 text-[10px] sm:text-xs flex items-center gap-1.5 truncate flex-1 mr-2"><span className="w-1.5 h-1.5 rounded-full bg-emerald-400 inline-block flex-shrink-0"/>Pagadas a meseros</span>
+                      <span className="text-white font-bold text-xs sm:text-sm text-right flex-shrink-0">{formatCurrency(data.analytics.tips_breakdown.paid_tips)}</span>
                     </div>
                     <div className="flex justify-between items-center py-1">
-                      <span className="text-slate-500 text-xs flex items-center gap-1.5"><span className="w-1.5 h-1.5 rounded-full bg-amber-400 inline-block"/>Pendientes de pago</span>
-                      <span className="text-amber-400 font-bold text-sm">{formatCurrency(data.analytics.tips_breakdown.unpaid_tips)}</span>
+                      <span className="text-slate-500 text-[10px] sm:text-xs flex items-center gap-1.5 truncate flex-1 mr-2"><span className="w-1.5 h-1.5 rounded-full bg-amber-400 inline-block flex-shrink-0"/>Pendientes de pago</span>
+                      <span className="text-amber-400 font-bold text-xs sm:text-sm text-right flex-shrink-0">{formatCurrency(data.analytics.tips_breakdown.unpaid_tips)}</span>
                     </div>
                   </>)}
                 </div>
               </div>
 
-              <div className="bg-[#0b1120] border border-pink-500/20 p-5 rounded-2xl">
+              <div className="bg-[#0b1120] border border-pink-500/20 p-3 sm:p-5 rounded-2xl overflow-hidden">
                 <SectionHeader icon="⏰" title="Hora pico" desc="Franja con más actividad del día" />
                 {peakHour ? (
                   <div className="text-center">
-                    <p className="text-5xl font-black text-white tabular-nums">{String(peakHour.hour).padStart(2,'0')}:00</p>
-                    <div className="flex justify-center gap-4 mt-3">
-                      <div><p className="text-pink-400 font-black text-lg">{peakHour.tickets}</p><p className="text-slate-600 text-[10px] uppercase">tickets</p></div>
+                    <p className="text-3xl sm:text-4xl lg:text-5xl font-black text-white tabular-nums break-all">{String(peakHour.hour).padStart(2,'0')}:00</p>
+                    <div className="flex justify-center gap-2 sm:gap-4 mt-2 sm:mt-3">
+                      <div className="text-center"><p className="text-pink-400 font-black text-sm sm:text-lg">{peakHour.tickets}</p><p className="text-slate-600 text-[9px] sm:text-[10px] uppercase">tickets</p></div>
                       <div className="w-px bg-slate-800"/>
-                      <div><p className="text-white font-bold">{formatCurrency(peakHour.sales)}</p><p className="text-slate-600 text-[10px] uppercase">en ventas</p></div>
+                      <div className="text-center"><p className="text-white font-bold text-xs sm:text-sm break-all">{formatCurrency(peakHour.sales)}</p><p className="text-slate-600 text-[9px] sm:text-[10px] uppercase">ventas</p></div>
                     </div>
                   </div>
                 ) : <p className="text-slate-600 text-center text-sm py-4">Sin datos suficientes</p>}
               </div>
 
-              <div className="bg-[#0b1120] border border-orange-500/20 p-5 rounded-2xl">
-                <SectionHeader icon="🪑" title="Mesas abiertas del período" desc="Tickets abiertos durante este rango de fechas" />
+              <div className="bg-[#0b1120] border border-orange-500/20 p-3 sm:p-5 rounded-2xl overflow-hidden">
+                <SectionHeader icon="AB" title="Mesas abiertas del periodo" desc="Tickets abiertos durante este rango de fechas" />
                 <div className="text-center">
-                  <p className="text-5xl font-black text-orange-400">{openCount}</p>
-                  <div className="flex justify-center gap-4 mt-3">
-                    <div><p className="text-white font-bold">{formatCurrency(data.open_stats?.total || 0)}</p><p className="text-slate-600 text-[10px] uppercase">acumulado</p></div>
+                  <p className="text-3xl sm:text-4xl lg:text-5xl font-black text-orange-400 break-all">{openCount}</p>
+                  <div className="flex justify-center gap-2 sm:gap-4 mt-2 sm:mt-3">
+                    <div className="text-center"><p className="text-white font-bold text-xs sm:text-sm break-all">{formatCurrency(data.open_stats?.total || 0)}</p><p className="text-slate-600 text-[9px] sm:text-[10px] uppercase">acumulado</p></div>
                     <div className="w-px bg-slate-800"/>
-                    <div><p className="text-orange-400 font-black text-lg">{data.open_stats?.covers || 0}</p><p className="text-slate-600 text-[10px] uppercase">comensales</p></div>
+                    <div className="text-center"><p className="text-orange-400 font-black text-sm sm:text-lg">{data.open_stats?.covers || 0}</p><p className="text-slate-600 text-[9px] sm:text-[10px] uppercase">comensales</p></div>
                   </div>
                 </div>
               </div>
             </div>
 
             {/* Resumen de caja */}
+            {/* Resumen de caja */}
             {cashMovements?.summary && (
               <div className="bg-[#0b1120] border border-cyan-500/20 p-5 rounded-2xl">
-                <SectionHeader icon="💰" title="Resumen de efectivo" desc="Estado actual del efectivo en caja" />
+                <SectionHeader icon="CJ" title="Resumen de efectivo" desc="Estado actual del efectivo en caja" />
                 <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
                   {[
                     { label: 'Ventas en efectivo', val: cashMovements.summary.cash_sales, color: 'text-white' },
@@ -1051,7 +1074,7 @@ export default function Sales() {
           <motion.div key="nt" initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="bg-[#0b1120] border border-slate-800 rounded-2xl overflow-hidden">
             <div className="p-4 sm:p-5 border-b border-slate-800 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
               <div>
-                <h3 className="text-white font-bold flex items-center gap-2">📋 Lista de Tickets</h3>
+                <h3 className="text-white font-bold flex items-center gap-2">Lista de Tickets</h3>
                 <p className="text-slate-500 text-xs mt-0.5">{tickets.length} tickets · {selectedRangeLabel}</p>
               </div>
               <div className="flex gap-2 flex-wrap">
@@ -1071,7 +1094,7 @@ export default function Sales() {
                     <th className="px-3 sm:px-5 py-3 text-right hidden sm:table-cell">Subtotal</th>
                     <th className="px-3 sm:px-5 py-3 text-right">Propina</th>
                     <th className="px-3 sm:px-5 py-3 text-right">Total</th>
-                    <th className="px-3 py-3 text-center">🍽️</th>
+                    <th className="px-3 py-3 text-center">Accion</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-800/40">
@@ -1083,7 +1106,7 @@ export default function Sales() {
                           t.status === 'canceled' ? 'bg-red-500/10 text-red-400 border-red-500/20' :
                           t.status === 'open'     ? 'bg-orange-500/10 text-orange-400 border-orange-500/20' :
                                                    'bg-emerald-500/10 text-emerald-400 border-emerald-500/20'}`}>
-                          {t.status === 'closed' ? '✓ Cobrado' : t.status === 'open' ? '● Abierto' : '✕ Cancelado'}
+                          {t.status === 'closed' ? 'Cobrado' : t.status === 'open' ? 'Abierto' : 'Cancelado'}
                         </span>
                       </td>
                       <td className="px-3 sm:px-5 py-3.5 text-slate-300 font-medium text-xs sm:text-sm">Mesa {t.table_number || '--'}</td>
@@ -1096,7 +1119,7 @@ export default function Sales() {
                           onClick={() => setSelectedTicket(t)}
                           className="px-2 py-1 rounded-lg bg-cyan-500/10 border border-cyan-500/20 text-cyan-400 text-[9px] sm:text-[10px] font-bold hover:bg-cyan-500/20 transition-all"
                         >
-                          🍽️
+                          Ver
                         </button>
                       </td>
                     </tr>
@@ -1105,16 +1128,16 @@ export default function Sales() {
               </table>
             </div>
             {tickets.length === 0 && (
-              <div className="text-center py-16"><p className="text-4xl mb-3">📭</p><p className="text-slate-500 text-sm">Sin tickets en este período</p></div>
+              <div className="text-center py-16"><p className="text-slate-500 text-sm">Sin tickets en este periodo</p></div>
             )}
           </motion.div>
         )}
 
-        {/* ?? MESEROS ?? */}
+        {/* MESEROS */}
         {viewMode === 'waiters' && (
           <motion.div key="wt" initial={{ opacity: 0, scale: 0.98 }} animate={{ opacity: 1, scale: 1 }} className="space-y-4">
             <div className="bg-[#0b1120] border border-slate-800 p-3 sm:p-4 rounded-2xl flex items-center justify-between">
-              <div><p className="text-white font-bold flex items-center gap-2">?? Desempeño por mesero</p>
+              <div><p className="text-white font-bold flex items-center gap-2">Desempeno por mesero</p>
                 <p className="text-slate-500 text-xs mt-0.5">{data.waiters?.length || 0} meseros activos · {selectedRangeLabel}</p></div>
             </div>
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 sm:gap-4">
@@ -1123,7 +1146,7 @@ export default function Sales() {
                 const isTop = w.name === topWaiter.name;
                 return (
                   <div key={i} className={`bg-[#0b1120] border rounded-2xl p-4 sm:p-5 hover:border-cyan-500/40 transition-all group relative ${isTop ? 'border-amber-500/35' : 'border-slate-800'}`}>
-                    {isTop && <span className="absolute top-4 right-4 text-xs font-bold text-amber-400 bg-amber-500/10 border border-amber-500/20 px-2 py-0.5 rounded-full">? Top</span>}
+                    {isTop && <span className="absolute top-4 right-4 text-xs font-bold text-amber-400 bg-amber-500/10 border border-amber-500/20 px-2 py-0.5 rounded-full">Top</span>}
                     <div className="flex items-center gap-3 mb-4">
                       <div className="w-10 h-10 sm:w-11 sm:h-11 rounded-xl flex items-center justify-center text-lg font-black bg-cyan-500/15 border border-cyan-500/25 text-cyan-400 group-hover:bg-cyan-500 group-hover:text-black transition-all shrink-0">
                         {w.name.charAt(0).toUpperCase()}
@@ -1152,7 +1175,7 @@ export default function Sales() {
               })}
               {(!data.waiters || data.waiters.length === 0) && (
                 <div className="col-span-3 text-center py-16 bg-[#0b1120] rounded-2xl border border-slate-800">
-                  <p className="text-4xl mb-3">?</p><p className="text-slate-500 text-sm">Sin datos de meseros</p>
+                  <p className="text-slate-500 text-sm">Sin datos de meseros</p>
                 </div>
               )}
             </div>
@@ -1163,7 +1186,7 @@ export default function Sales() {
         {viewMode === 'audit' && (
           <motion.div key="ad" initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} className="space-y-4">
             <div className="bg-[#0b1120] border border-slate-800 p-4 rounded-2xl flex items-center justify-between">
-              <div><p className="text-white font-bold">🔍 Cancelaciones y Ajustes</p>
+              <div><p className="text-white font-bold">Cancelaciones y Ajustes</p>
                 <p className="text-slate-500 text-xs mt-0.5">Registro de tickets cancelados y sus motivos · {selectedRangeLabel}</p></div>
               <div className="text-right">
                 <p className="text-red-400 font-black text-xl">{formatCurrency(cancelledStats.amount)}</p>
@@ -1655,19 +1678,20 @@ export default function Sales() {
           <motion.div key="tips" initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} className="space-y-5">
 
             {/* ── Controles propios de Propinas ── */}
-            <div className="bg-[#0b1120] border border-amber-500/20 rounded-2xl p-4 space-y-3">
+            <div className="bg-[#0b1120] border border-amber-500/20 rounded-2xl p-3 sm:p-4 space-y-3">
               {/* Fila 1: título + tabs */}
               <div className="flex flex-wrap items-center justify-between gap-3">
-                <span className="text-amber-400 text-[10px] font-black uppercase tracking-widest">🤝 Propinas</span>
-                <div className="flex gap-1">
+                <span className="text-amber-400 text-[10px] font-black uppercase tracking-widest">Propinas</span>
+                <div className="grid grid-cols-3 gap-1 w-full sm:w-auto sm:flex sm:gap-1">
                   {[
-                    ['general',  '🌐 Histórico completo'],
-                    ['period',   '📅 Por período'],
-                    ['by_waiter','👤 Por mesero'],
+                    ['general',  'Historico completo'],
+                    ['period',   'Por periodo'],
+                    ['by_waiter','Por mesero'],
                   ].map(([k, l]) => (
                     <button key={k} onClick={() => setTipsViewMode(k)}
-                      className={`text-[10px] px-3 py-1.5 rounded-lg font-bold transition-all ${tipsViewMode === k ? 'bg-amber-500 text-black' : 'bg-slate-800 text-slate-400 hover:text-white'}`}>
-                      {l}
+                      className={`text-[10px] px-2 sm:px-3 py-2 sm:py-1.5 rounded-lg font-bold transition-all leading-tight ${tipsViewMode === k ? 'bg-amber-500 text-black' : 'bg-slate-800 text-slate-400 hover:text-white'}`}>
+                      <span className="sm:hidden">{k === 'general' ? 'Historico' : k === 'period' ? 'Periodo' : 'Mesero'}</span>
+                      <span className="hidden sm:inline">{l}</span>
                     </button>
                   ))}
                 </div>
@@ -1677,10 +1701,10 @@ export default function Sales() {
               {tipsViewMode === 'period' && (
                 <div className="flex flex-wrap items-center gap-2 pt-1 border-t border-slate-800">
                   <input type="date" value={tipsStart} onChange={e => setTipsStart(e.target.value)}
-                    className="bg-black/40 border border-slate-700 text-slate-200 text-xs px-3 py-1.5 rounded-lg focus:outline-none focus:border-amber-500/50" />
+                    className="bg-black/40 border border-slate-700 text-slate-200 text-xs px-2.5 sm:px-3 py-1.5 rounded-lg focus:outline-none focus:border-amber-500/50" />
                   <span className="text-slate-600 text-xs">—</span>
                   <input type="date" value={tipsEnd} onChange={e => setTipsEnd(e.target.value)}
-                    className="bg-black/40 border border-slate-700 text-slate-200 text-xs px-3 py-1.5 rounded-lg focus:outline-none focus:border-amber-500/50" />
+                    className="bg-black/40 border border-slate-700 text-slate-200 text-xs px-2.5 sm:px-3 py-1.5 rounded-lg focus:outline-none focus:border-amber-500/50" />
                   <div className="flex gap-1 flex-wrap">
                     {[
                       ['Hoy',  () => { const t = new Date().toISOString().split('T')[0]; setTipsStart(t); setTipsEnd(t); }],
@@ -1711,17 +1735,17 @@ export default function Sales() {
               <div className="space-y-5">
 
                 {/* ── Estadísticas generales ── */}
-                <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3">
                   {[
                     { label: 'Total acumulado', value: formatCurrency(tipsData.total_tips), sub: `${tipsData.count} tickets con propina`, accent: '#f59e0b', border: 'border-amber-500/25' },
                     { label: '✓ Pagadas', value: formatCurrency(tipsData.total_paid), sub: `${tipsData.count_paid} tickets · ${tipsData.total_tips > 0 ? Math.round(tipsData.total_paid/tipsData.total_tips*100) : 0}%`, accent: '#10b981', border: 'border-emerald-500/25' },
                     { label: 'Pendientes', value: formatCurrency(tipsData.total_pending), sub: `${tipsData.count_pending} tickets · ${tipsData.total_tips > 0 ? Math.round(tipsData.total_pending/tipsData.total_tips*100) : 0}%`, accent: '#f97316', border: 'border-orange-500/25' },
                     { label: 'Propina promedio', value: formatCurrency(tipsData.avg_tip), sub: `Mediana: ${formatCurrency(tipsData.median_tip)} · Máx: ${formatCurrency(tipsData.max_tip)}`, accent: '#8b5cf6', border: 'border-violet-500/25' },
                   ].map(s => (
-                    <div key={s.label} className={`bg-[#0b1120] border ${s.border} p-4 rounded-2xl`}>
+                    <div key={s.label} className={`bg-[#0b1120] border ${s.border} p-3 sm:p-4 rounded-2xl min-w-0`}>
                       <p className="text-[9px] font-black uppercase tracking-widest mb-1" style={{ color: s.accent }}>{s.label}</p>
-                      <p className="font-black text-xl" style={{ color: s.accent }}>{s.value}</p>
-                      <p className="text-slate-500 text-[10px] mt-0.5">{s.sub}</p>
+                      <p className="font-black text-base sm:text-xl leading-tight break-all" style={{ color: s.accent }}>{s.value}</p>
+                      <p className="text-slate-500 text-[10px] mt-0.5 leading-relaxed break-words">{s.sub}</p>
                     </div>
                   ))}
                 </div>
@@ -1759,7 +1783,7 @@ export default function Sales() {
                         const color = COLORS[idx % COLORS.length];
                         const pct = tipsData.total_tips > 0 ? Math.round(w.total / tipsData.total_tips * 100) : 0;
                         return (
-                          <div key={w.waiter} className="flex items-center gap-4 px-5 py-3 hover:bg-slate-800/20 transition-colors cursor-pointer"
+                          <div key={w.waiter} className="flex items-center gap-3 sm:gap-4 px-3 sm:px-5 py-3 hover:bg-slate-800/20 transition-colors cursor-pointer"
                             onClick={() => setTipsModal({ waiter: w.waiter })}>
                             <div className="w-8 h-8 rounded-full flex items-center justify-center text-xs font-black shrink-0" style={{ backgroundColor: `${color}20`, color }}>
                               {(w.waiter || '?')[0].toUpperCase()}
@@ -1769,7 +1793,7 @@ export default function Sales() {
                                 <p className="text-white font-bold text-xs">{w.waiter}</p>
                                 <p className="font-black text-sm" style={{ color }}>{formatCurrency(w.total)}</p>
                               </div>
-                              <div className="flex items-center gap-3">
+                              <div className="flex flex-wrap items-center gap-2 sm:gap-3">
                                 <div className="flex-1 h-1 bg-slate-800 rounded-full overflow-hidden">
                                   <div className="h-full rounded-full" style={{ width: `${pct}%`, backgroundColor: color }} />
                                 </div>
@@ -1971,7 +1995,7 @@ export default function Sales() {
 
             <div className="bg-[#0b1120] border border-slate-800 rounded-2xl overflow-hidden">
               <div className="p-5 border-b border-slate-800">
-                <p className="text-white font-bold">📊 Top 10 Productos más vendidos</p>
+                <p className="text-white font-bold">Top 10 Productos mas vendidos</p>
                 <p className="text-slate-500 text-xs mt-0.5">Ordenados por unidades vendidas · {selectedRangeLabel}</p>
               </div>
               <div className="overflow-x-auto">
@@ -2000,7 +2024,59 @@ export default function Sales() {
                   </tbody>
                 </table>
                 {(!data.top_products || data.top_products.length === 0) && (
-                  <div className="text-center py-16"><p className="text-4xl mb-3">📦</p><p className="text-slate-500 text-sm">Sin datos de productos</p></div>
+                  <div className="text-center py-16"><p className="text-slate-500 text-sm">Sin datos de productos</p></div>
+                )}
+              </div>
+            </div>
+
+            {/* Detalle de Productos por Ticket */}
+            <div className="bg-[#0b1120] border border-slate-800 rounded-2xl overflow-hidden">
+              <div className="p-5 border-b border-slate-800 flex justify-between items-center">
+                <div>
+                  <p className="text-white font-bold flex items-center gap-2">Detalle de Productos por Ticket</p>
+                  <p className="text-slate-500 text-xs mt-0.5">Listado de tickets y su desglose individual · {selectedRangeLabel}</p>
+                </div>
+              </div>
+              <div className="overflow-x-auto max-h-[500px] overflow-y-auto">
+                <table className="w-full text-left">
+                  <thead className="bg-black/30 text-[10px] text-slate-500 font-black uppercase tracking-wider sticky top-0 z-10">
+                    <tr>
+                      <th className="px-5 py-3">Folio</th>
+                      <th className="px-5 py-3">Mesa / Mesero</th>
+                      <th className="px-5 py-3 text-right">Total</th>
+                      <th className="px-5 py-3 text-center">Acción</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-800/40">
+                    {tickets.map((t, i) => (
+                      <tr key={i} className={`hover:bg-white/[0.02] transition-colors ${t.status === 'canceled' ? 'opacity-50' : ''}`}>
+                        <td className="px-5 py-4 font-mono text-cyan-400 font-bold">#{t.folio}</td>
+                        <td className="px-5 py-4">
+                          <p className="text-white text-xs font-bold">Mesa {t.table_number || '--'}</p>
+                          <p className="text-slate-500 text-[10px] uppercase tracking-wide">{t.waiter_name || '--'}</p>
+                        </td>
+                        <td className="px-5 py-4 text-right">
+                          <p className={`font-black text-sm ${t.status === 'canceled' ? 'line-through text-slate-700' : 'text-white'}`}>
+                            {formatCurrency(t.total)}
+                          </p>
+                        </td>
+                        <td className="px-5 py-4 text-center">
+                          <button
+                            onClick={() => setSelectedTicket(t)}
+                            className="px-3 py-1.5 rounded-xl bg-cyan-500/10 border border-cyan-500/20 text-cyan-400 text-[10px] font-bold hover:bg-cyan-500/20 transition-all flex items-center gap-2 mx-auto"
+                          >
+                            <span>🍽️ Ver productos</span>
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                {tickets.length === 0 && (
+                  <div className="text-center py-12">
+                    <p className="text-3xl mb-2">📭</p>
+                    <p className="text-slate-500 text-sm">Sin tickets registrados en este período</p>
+                  </div>
                 )}
               </div>
             </div>

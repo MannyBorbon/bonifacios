@@ -40,7 +40,7 @@ function StatCard({ label, value, color, sub, to, pulse }) {
   }
   const c = colorMap[color] || colorMap.cyan
   const Inner = (
-    <div className={`relative overflow-hidden rounded-2xl border ${c.border} ${c.bg} p-4 shadow-lg ${c.glow} hover:scale-[1.03] hover:shadow-xl transition-all duration-300 cursor-pointer h-full`}>
+    <div className={`relative overflow-hidden rounded-2xl border ${c.border} ${c.bg} p-3 sm:p-4 shadow-lg ${c.glow} hover:scale-[1.03] hover:shadow-xl transition-all duration-300 cursor-pointer h-full min-w-0`}>
       {/* top shimmer line */}
       <div className={`absolute top-0 left-0 right-0 h-px bg-gradient-to-r from-transparent via-current to-transparent opacity-40`} />
       {/* glow corner */}
@@ -49,10 +49,10 @@ function StatCard({ label, value, color, sub, to, pulse }) {
         <p className={`text-[10px] uppercase tracking-[0.3em] ${c.text} font-semibold`}>{label}</p>
         {pulse && <span className={`h-2 w-2 rounded-full ${c.dot} animate-pulse flex-shrink-0 mt-0.5`} />}
       </div>
-      <p className={`text-3xl font-extralight tabular-nums ${c.text}`} style={{ textShadow: `0 0 20px currentColor` }}>
+      <p className={`text-2xl sm:text-3xl font-extralight tabular-nums break-all leading-tight ${c.text}`} style={{ textShadow: `0 0 20px currentColor` }}>
         {typeof value === 'number' ? displayed : value}
       </p>
-      {sub && <p className="text-[10px] text-slate-400 mt-1.5">{sub}</p>}
+      {sub && <p className="text-[10px] text-slate-400 mt-1.5 break-words leading-relaxed">{sub}</p>}
       <div className="absolute bottom-0 left-0 right-0 h-px bg-gradient-to-r from-transparent via-white/10 to-transparent" />
     </div>
   )
@@ -83,7 +83,7 @@ function QuickBtn({ label, sub, to, color = 'cyan', iconKey }) {
   }[color]
   const iconPath = NAV_ICONS[iconKey]
   return (
-    <Link to={to} className={`flex items-center gap-3 rounded-xl border px-3 py-2.5 transition-all duration-200 group ${c}`}>
+    <Link to={to} className={`flex items-center gap-2.5 sm:gap-3 rounded-xl border px-2.5 sm:px-3 py-2.5 transition-all duration-200 group min-w-0 ${c}`}>
       {iconPath && (
         <svg className="h-4 w-4 flex-shrink-0 opacity-70" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
           <path strokeLinecap="round" strokeLinejoin="round" d={iconPath} />
@@ -325,6 +325,7 @@ export default function AdminDashboard() {
             <QuickBtn label="Mensajes"       sub={`${unread} sin leer`}                            to="/admin/messages"     color="blue"   iconKey="messages" />
             <QuickBtn label="Cotizaciones"   sub={`${quotesStats?.total_quotes || 0} registradas`} to="/admin/quotes"        color="purple" iconKey="quotes" />
             <QuickBtn label="Ventas"         sub="ventas en tiempo real"                             to="/admin/sales"        color="green"  iconKey="analytics" />
+            <QuickBtn label="Eventos Especiales" sub="crear y filtrar reservas"                      to="/admin/reservations" color="amber"  iconKey="meetings" />
             <QuickBtn label="Analíticas"     sub="visitas y métricas"                              to="/admin/analytics"    color="cyan"   iconKey="analytics" />
             <QuickBtn label="Reuniones"      sub="videoconferencias"                               to="/admin/meetings"     color="amber"  iconKey="meetings" />
             <QuickBtn label="Correo"         sub={`${inbox.filter(e=>!e.seen).length} sin leer`}  to="/admin/inbox"        color="cyan"   iconKey="inbox" />

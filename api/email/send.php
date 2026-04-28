@@ -36,8 +36,12 @@ if (!isset($data['to']) || !isset($data['subject']) || !isset($data['message']))
 $to = $data['to'];
 $subject = $data['subject'];
 $message = $data['message'];
-$from = 'info@bonifaciossancarlos.com';
+$from = getenv('MAIL_FROM') ?: 'info@bonifaciossancarlos.com';
 $fromName = "Bonifacio's Restaurant";
+$smtpUser = getenv('SMTP_USER') ?: $from;
+$smtpPass = getenv('SMTP_PASS') ?: '';
+$smtpHost = getenv('SMTP_HOST') ?: 'smtp.hostinger.com';
+$smtpPort = intval(getenv('SMTP_PORT') ?: 587);
 
 // HTML email template
 $htmlMessage = '<!DOCTYPE html>
@@ -73,18 +77,18 @@ $email_sent = false;
 $error_message = '';
 
 // Method 1: Try PHPMailer if available (most reliable)
-if (!$email_sent && class_exists('PHPMailer')) {
+if (!$email_sent && class_exists('PHPMailer') && $smtpPass !== '') {
     try {
         $mail = new PHPMailer(true);
         $mail->isSMTP();
-        $mail->Host = 'smtp.hostinger.com';
+        $mail->Host = $smtpHost;
         $mail->SMTPAuth = true;
-        $mail->Username = 'info@bonifaciossancarlos.com';
-        $mail->Password = 'Filipenses4:8@';
+        $mail->Username = $smtpUser;
+        $mail->Password = $smtpPass;
         $mail->SMTPSecure = PHPMailer::ENCRYPTION_STARTTLS;
-        $mail->Port = 587;
+        $mail->Port = $smtpPort;
         
-        $mail->setFrom('info@bonifaciossancarlos.com', "Bonifacio\'s Restaurant");
+        $mail->setFrom($from, "Bonifacio\'s Restaurant");
         $mail->addAddress($to);
         $mail->isHTML(true);
         $mail->Subject = $subject;
@@ -142,8 +146,7 @@ if ($email_sent) {
     error_log("Email sending failed: " . $error_message);
     http_response_code(500);
     echo json_encode([
-        'error' => 'Error al enviar el correo. Por favor, contacte al administrador.',
-        'debug' => $error_message // Only for debugging, remove in production
+        'error' => 'Error al enviar el correo. Verifica la configuracion SMTP del servidor.'
     ]);
 }
 

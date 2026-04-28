@@ -30,7 +30,7 @@ $id = intval($data['id']);
 $field = $data['field'];
 $value = $data['value'];
 
-$allowedFields = ['name', 'email', 'phone', 'age', 'gender', 'position', 'experience', 'current_job', 'address', 'estudios'];
+$allowedFields = ['name', 'email', 'phone', 'age', 'gender', 'position', 'experience', 'current_job', 'address', 'estudios', 'notes'];
 
 if (!in_array($field, $allowedFields)) {
     http_response_code(400);

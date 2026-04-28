@@ -31,6 +31,41 @@ body {
   text-rendering: optimizeLegibility;
 }
 
+/* Admin mobile hardening: evita overflows horizontales y mejora legibilidad */
+@media (max-width: 768px) {
+  .admin-mobile-shell,
+  .admin-mobile-content {
+    width: 100%;
+    max-width: 100%;
+    overflow-x: hidden;
+  }
+
+  .admin-mobile-content * {
+    min-width: 0;
+  }
+
+  .admin-mobile-content p,
+  .admin-mobile-content span,
+  .admin-mobile-content h1,
+  .admin-mobile-content h2,
+  .admin-mobile-content h3,
+  .admin-mobile-content h4 {
+    overflow-wrap: break-word;
+    word-break: normal;
+  }
+
+  .admin-mobile-content .tabular-nums {
+    font-variant-numeric: tabular-nums;
+    overflow-wrap: break-word;
+    word-break: normal;
+  }
+
+  .admin-mobile-content .overflow-x-auto {
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior-x: contain;
+  }
+}
+
 /* Quill editor dark theme */
 .quill-dark .ql-toolbar {
   border-color: rgba(212,175,55,0.2) !important;
@@ -56,4 +91,101 @@ body {
 .quill-dark .ql-editor.ql-blank::before {
   color: rgba(244,228,193,0.3);
   font-style: normal;
+}
+
+/* Admin contrast boost: resalta contenido sin alterar la paleta base */
+.admin-mobile-content {
+  color: #f1f5f9;
+}
+
+.admin-mobile-content [class*="bg-[#0"],
+.admin-mobile-content [class*="bg-black/"],
+.admin-mobile-content [class*="bg-slate-"] {
+  box-shadow: 0 0 0 1px rgba(148, 163, 184, 0.28), 0 20px 40px rgba(2, 6, 23, 0.62);
+}
+
+.admin-mobile-content [class*="border-"] {
+  border-color: rgba(148, 163, 184, 0.22);
+}
+
+.admin-mobile-content h1,
+.admin-mobile-content h2,
+.admin-mobile-content h3,
+.admin-mobile-content h4,
+.admin-mobile-content h5,
+.admin-mobile-content h6 {
+  color: #ffffff;
+  letter-spacing: 0.01em;
+  text-shadow: 0 1px 0 rgba(2, 6, 23, 0.45);
+}
+
+.admin-mobile-content input,
+.admin-mobile-content textarea,
+.admin-mobile-content select {
+  border-color: rgba(148, 163, 184, 0.5) !important;
+  color: #ffffff;
+}
+
+.admin-mobile-content button,
+.admin-mobile-content a {
+  filter: saturate(1.08) contrast(1.03);
+}
+
+/* Levanta legibilidad cuando el UI se percibe opaco */
+.admin-mobile-content .text-slate-600 {
+  color: #c5d2df !important;
+}
+
+.admin-mobile-content .text-slate-500 {
+  color: #d1dcea !important;
+}
+
+.admin-mobile-content .text-slate-400 {
+  color: #e0e8f2 !important;
+}
+
+.admin-mobile-content .text-slate-300 {
+  color: #eef3f9 !important;
+}
+
+.admin-mobile-content .text-white {
+  color: #ffffff !important;
+}
+
+.admin-mobile-content [class*="text-cyan-500/"],
+.admin-mobile-content [class*="text-cyan-400/"],
+.admin-mobile-content [class*="text-amber-500/"] {
+  filter: brightness(1.28) saturate(1.1);
+}
+
+.admin-mobile-content .border-slate-800 {
+  border-color: rgba(148, 163, 184, 0.5) !important;
+}
+
+.admin-mobile-content .border-slate-700 {
+  border-color: rgba(148, 163, 184, 0.56) !important;
+}
+
+.admin-mobile-content [class*="bg-[#040c1a]"] {
+  background-color: rgba(11, 22, 40, 0.98) !important;
+}
+
+.admin-mobile-content [class*="bg-[#0b1120]"] {
+  background-color: rgba(14, 27, 48, 0.985) !important;
+}
+
+.admin-mobile-content .border-slate-800 {
+  border-color: rgba(148, 163, 184, 0.36) !important;
+}
+
+.admin-mobile-content .border-slate-700 {
+  border-color: rgba(148, 163, 184, 0.42) !important;
+}
+
+.admin-mobile-content [class*="bg-[#040c1a]"] {
+  background-color: rgba(9, 18, 34, 0.95) !important;
+}
+
+.admin-mobile-content [class*="bg-[#0b1120]"] {
+  background-color: rgba(12, 22, 40, 0.96) !important;
 }

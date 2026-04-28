@@ -24,6 +24,7 @@ if ($method === 'GET') {
     $date = $_GET['date'] ?? date('Y-m-d');
     $range = $_GET['range'] ?? 'today';
     $employeeId = $_GET['employee_id'] ?? null;
+    $allowFallback = ($_GET['fallback'] ?? '0') === '1';
 
     // Calcular rango de fechas
     switch ($range) {
@@ -84,9 +85,9 @@ if ($method === 'GET') {
                 $stmt->execute([$startDate, $endDate]);
                 $attendance = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
-                // Fallback robusto: si 'today' no trae filas, usar la fecha más reciente con asistencia.
-                // Evita que el dashboard muestre 0 por desfase de fecha/huso horario cliente-servidor.
-                if ($range === 'today' && count($attendance) === 0) {
+                // Fallback opcional: solo si fallback=1.
+                // Por defecto NO se usa para evitar mostrar "en turno" con datos de días pasados.
+                if ($range === 'today' && count($attendance) === 0 && $allowFallback) {
                     $lastDateStmt = $pdo->query("SELECT MAX(attendance_date) as last_date FROM sr_attendance");
                     $lastDateRow = $lastDateStmt ? $lastDateStmt->fetch(PDO::FETCH_ASSOC) : null;
                     $lastDate = $lastDateRow['last_date'] ?? null;
@@ -214,23 +215,67 @@ if ($method === 'POST') {
                 $empName = $input['employee_name'] ?? '';
                 $schedules = $input['schedules'] ?? []; // Array de {day_of_week, start, end, is_day_off}
 
-                $stmt = $pdo->prepare("INSERT INTO employee_schedules 
-                    (employee_id, employee_name, day_of_week, scheduled_start, scheduled_end, is_day_off)
-                    VALUES (?, ?, ?, ?, ?, ?)
-                    ON DUPLICATE KEY UPDATE 
-                        employee_name = VALUES(employee_name),
-                        scheduled_start = VALUES(scheduled_start),
-                        scheduled_end = VALUES(scheduled_end),
-                        is_day_off = VALUES(is_day_off)");
+                // Ensure day_type support exists for richer scheduling states.
+                $hasDayType = false;
+                try {
+                    $colStmt = $pdo->query("SHOW COLUMNS FROM employee_schedules LIKE 'day_type'");
+                    $hasDayType = (bool)$colStmt->fetch(PDO::FETCH_ASSOC);
+                    if (!$hasDayType) {
+                        $pdo->exec("ALTER TABLE employee_schedules ADD COLUMN day_type ENUM('laboral','descanso','enfermedad') DEFAULT 'laboral' AFTER is_day_off");
+                        $hasDayType = true;
+                    }
+                } catch (Exception $e) {
+                    $hasDayType = false;
+                }
+
+                if ($hasDayType) {
+                    $stmt = $pdo->prepare("INSERT INTO employee_schedules 
+                        (employee_id, employee_name, day_of_week, scheduled_start, scheduled_end, is_day_off, day_type)
+                        VALUES (?, ?, ?, ?, ?, ?, ?)
+                        ON DUPLICATE KEY UPDATE 
+                            employee_name = VALUES(employee_name),
+                            scheduled_start = VALUES(scheduled_start),
+                            scheduled_end = VALUES(scheduled_end),
+                            is_day_off = VALUES(is_day_off),
+                            day_type = VALUES(day_type)");
+                } else {
+                    $stmt = $pdo->prepare("INSERT INTO employee_schedules 
+                        (employee_id, employee_name, day_of_week, scheduled_start, scheduled_end, is_day_off)
+                        VALUES (?, ?, ?, ?, ?, ?)
+                        ON DUPLICATE KEY UPDATE 
+                            employee_name = VALUES(employee_name),
+                            scheduled_start = VALUES(scheduled_start),
+                            scheduled_end = VALUES(scheduled_end),
+                            is_day_off = VALUES(is_day_off)");
+                }
 
                 foreach ($schedules as $s) {
-                    $stmt->execute([
-                        $empId, $empName,
-                        $s['day_of_week'],
-                        $s['start'] ?? '09:00',
-                        $s['end'] ?? '17:00',
-                        $s['is_day_off'] ?? false
-                    ]);
+                    $dayType = $s['day_type'] ?? (($s['is_day_off'] ?? false) ? 'descanso' : 'laboral');
+                    if (!in_array($dayType, ['laboral', 'descanso', 'enfermedad'], true)) {
+                        $dayType = 'laboral';
+                    }
+                    $isDayOff = $dayType !== 'laboral' ? 1 : (int)($s['is_day_off'] ?? false);
+                    $start = $dayType === 'laboral' ? ($s['start'] ?? null) : null;
+                    $end = $dayType === 'laboral' ? ($s['end'] ?? null) : null;
+
+                    if ($hasDayType) {
+                        $stmt->execute([
+                            $empId, $empName,
+                            $s['day_of_week'],
+                            $start,
+                            $end,
+                            $isDayOff,
+                            $dayType
+                        ]);
+                    } else {
+                        $stmt->execute([
+                            $empId, $empName,
+                            $s['day_of_week'],
+                            $start,
+                            $end,
+                            $isDayOff
+                        ]);
+                    }
                 }
                 echo json_encode(['success' => true, 'message' => 'Horario guardado']);
                 break;

@@ -79,6 +79,44 @@ class SyncFinal {
         }
     }
 
+    // Helper para obtener items de un ticket
+    private function getTicketItems(string $folio): array {
+        try {
+            $sql = "
+                SELECT
+                    CAST(d.idproducto AS VARCHAR(50)) AS product_id,
+                    ISNULL(CAST(p.nombre AS VARCHAR(255)), CAST(d.idproducto AS VARCHAR(50))) AS product_name,
+                    ISNULL(CAST(d.cantidad AS DECIMAL(10,3)), 1) AS quantity,
+                    ISNULL(CAST(d.precio AS DECIMAL(10,2)), 0) AS unit_price,
+                    ISNULL(CAST(d.descuento AS DECIMAL(10,2)), 0) AS discount
+                FROM cheqdet d
+                LEFT JOIN productos p ON p.idproducto = d.idproducto
+                WHERE d.foliodet = ?
+            ";
+            $stmt = $this->conn->prepare($sql);
+            $stmt->execute([$folio]);
+            $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
+            
+            $items = [];
+            foreach ($rows as $r) {
+                $qty = floatval($r['quantity']);
+                $prc = floatval($r['unit_price']);
+                $dsc = floatval($r['discount']);
+                $items[] = [
+                    'product_id'   => $r['product_id'],
+                    'product_name' => trim($r['product_name']),
+                    'quantity'     => $qty,
+                    'unit_price'   => $prc,
+                    'discount'     => $dsc,
+                    'subtotal'     => ($qty * $prc) - $dsc
+                ];
+            }
+            return $items;
+        } catch (Throwable $e) {
+            return [];
+        }
+    }
+
     // Sincroniza solo el dia actual (turno 8AM-7:59AM) para tener ventas en vivo
     // Se ejecuta incluso durante la carga historica
     private function syncToday(): void {
@@ -181,7 +219,8 @@ class SyncFinal {
                     'status'=>$isPaid?'closed':'open', 'payment_type'=>$pType,
                     'cash_amount'=>$ef, 'card_amount'=>$ta,
                     'voucher_amount'=>$va, 'other_amount'=>$ot,
-                    'opened_at'=>$dt, 'closed_at'=>$isPaid?$dt:null, 'items'=>[],
+                    'opened_at'=>$dt, 'closed_at'=>$isPaid?$dt:null,
+                    'items' => $this->getTicketItems($tid),
                 ];
             }
 
@@ -444,7 +483,7 @@ class SyncFinal {
                     'other_amount'   => $ot,
                     'opened_at'      => $dt,
                     'closed_at'      => $isPaid ? $dt : null,
-                    'items'          => [],
+                    'items'          => $this->getTicketItems($tid),
                 ];
 
                 if ($isPaid && $dt > $lastClosedDate) {

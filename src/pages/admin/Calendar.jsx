@@ -30,6 +30,7 @@ export default function Calendar() {
   const [form, setForm] = useState(EMPTY_FORM)
   const [selectedEvent, setSelectedEvent] = useState(null)
   const [saving, setSaving] = useState(false)
+  const [formError, setFormError] = useState('')
   const [selectedDay, setSelectedDay] = useState(null)
 
   const loadEvents = useCallback(async () => {
@@ -98,7 +99,15 @@ export default function Calendar() {
   }
 
   const handleSave = async () => {
-    if (!form.title || !form.event_date) return
+    if (!form.title || !form.event_date) {
+      setFormError('Titulo y fecha son obligatorios')
+      return
+    }
+    if (form.start_time && form.end_time && form.end_time <= form.start_time) {
+      setFormError('La hora fin debe ser mayor a la hora inicio')
+      return
+    }
+    setFormError('')
     setSaving(true)
     try {
       if (modal === 'edit' && selectedEvent) {
@@ -108,7 +117,9 @@ export default function Calendar() {
       }
       await loadEvents()
       setModal(null)
-    } catch { /* silent */ }
+    } catch {
+      setFormError('No se pudo guardar el evento. Intenta de nuevo.')
+    }
     finally { setSaving(false) }
   }
 
@@ -381,6 +392,9 @@ export default function Calendar() {
                 <label className="block text-[10px] uppercase tracking-widest text-slate-500 mb-1.5">ID de Cotización (opcional)</label>
                 <input type="number" value={form.quote_id} onChange={upd('quote_id')} placeholder="Ej: 4" className={inputCls} />
               </div>
+              {formError && (
+                <p className="text-xs text-red-300">{formError}</p>
+              )}
             </div>
 
             <div className="flex justify-end gap-2 mt-5">

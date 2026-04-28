@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { applicationsAPI } from '../../services/api';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
 import LocationMap from '../../components/LocationMap';
@@ -20,8 +20,27 @@ function Applications() {
   const [generalMapLoading, setGeneralMapLoading] = useState(false);
   const [sectorStats, setSectorStats] = useState([]);
   const [viewingFullImage, setViewingFullImage] = useState(false);
+  const [notesDraft, setNotesDraft] = useState({});
+  const [notesSaving, setNotesSaving] = useState({});
+  const noteTimers = useRef({});
   const user = JSON.parse(localStorage.getItem('user') || '{}');
   const isAdmin = user.role === 'administrador';
+  const normalizeAvatarUrl = (raw) => {
+    const value = String(raw || '').trim();
+    if (!value) return '';
+    if (/^https?:\/\//i.test(value)) return value;
+    if (/^\/\//.test(value)) return `https:${value}`;
+    if (value.startsWith('/')) {
+      try {
+        if (typeof window !== 'undefined' && window.location?.origin) {
+          return new URL(value, window.location.origin).href;
+        }
+      } catch {
+        return value;
+      }
+    }
+    return value;
+  };
 
   useEffect(() => {
     loadApplications();
@@ -54,13 +73,14 @@ function Applications() {
     setMapLoading(true);
     const build = async () => {
       const m = [];
+      const appAvatar = normalizeAvatarUrl(selectedApp.photo_url || '');
       // Applicant IP location (red)
       const ipCoords = parseIpCoords(selectedApp.ip_location);
-      if (ipCoords) m.push({ lat: ipCoords[0], lng: ipCoords[1], color: 'red', popup: `<b style="color:#ef4444">Ubicación IP</b><br/><b>${selectedApp.name}</b><br/><small>${selectedApp.ip_location?.split(' - ')[0] || ''}</small>` });
+      if (ipCoords) m.push({ lat: ipCoords[0], lng: ipCoords[1], color: 'red', avatar: appAvatar, label: `${selectedApp.name} (IP)`, popup: `<b style="color:#ef4444">Ubicación IP</b><br/><b>${selectedApp.name}</b><br/><small>${selectedApp.ip_location?.split(' - ')[0] || ''}</small>` });
       // Applicant stated address (blue)
       if (selectedApp.address) {
         const coords = await geocodeAddress(selectedApp.address);
-        if (coords && !cancelled) m.push({ lat: coords[0], lng: coords[1], color: 'blue', popup: `<b style="color:#3b82f6">Dirección declarada</b><br/><b>${selectedApp.name}</b><br/><small>${selectedApp.address}</small>` });
+        if (coords && !cancelled) m.push({ lat: coords[0], lng: coords[1], color: 'blue', avatar: appAvatar, label: `${selectedApp.name} (Dirección)`, popup: `<b style="color:#3b82f6">Dirección declarada</b><br/><b>${selectedApp.name}</b><br/><small>${selectedApp.address}</small>` });
       }
       // All hired employees (green)
       console.log('[Apps] Building map with', employees.length, 'employees');
@@ -68,7 +88,7 @@ function Applications() {
         if (cancelled) return;
         if (emp.address) {
           const coords = await geocodeAddress(emp.address);
-          if (coords) m.push({ lat: coords[0], lng: coords[1], color: 'green', label: emp.name, popup: `<b style="color:#22c55e">Empleado</b><br/><b>${emp.name}</b><br/>${emp.position || ''}<br/><small>${emp.address}</small>` });
+          if (coords) m.push({ lat: coords[0], lng: coords[1], color: 'green', avatar: normalizeAvatarUrl(emp.photo || ''), label: emp.name, popup: `<b style="color:#22c55e">Empleado</b><br/><b>${emp.name}</b><br/>${emp.position || ''}<br/><small>${emp.address}</small>` });
         }
       }
       if (!cancelled) {
@@ -82,6 +102,7 @@ function Applications() {
   }, [selectedApp, employees]);
 
   // Build general map markers + sector stats from ALL applications (not filtered)
+  // Includes employees to compare postulantes vs colaboradores activos
   useEffect(() => {
     if (applications.length === 0) return;
     let cancelled = false;
@@ -91,21 +112,34 @@ function Applications() {
       const sectors = {};
       for (const app of applications) {
         if (cancelled) return;
-        let coords = null;
         let sector = 'Desconocido';
-        // Try IP location first (fast, no API call)
+        const appAvatar = normalizeAvatarUrl(app.photo_url || '');
+        // Applicant IP location (red)
         const ipCoords = parseIpCoords(app.ip_location);
         if (ipCoords) {
-          coords = ipCoords;
-          // Extract city from ip_location string
+          m.push({
+            lat: ipCoords[0],
+            lng: ipCoords[1],
+            color: 'red',
+            avatar: appAvatar,
+            label: `${app.name} (IP)`,
+            popup: `<b style="color:#ef4444">IP del solicitante</b><br/><b>${app.name}</b><br/><small>${app.ip_location || ''}</small>`
+          });
           const ipCity = app.ip_location?.split(',')[0]?.trim();
           if (ipCity) sector = ipCity;
         }
-        // Try address geocoding (more accurate)
+        // Applicant declared address (blue)
         if (app.address) {
           const addrCoords = await geocodeAddress(app.address);
           if (addrCoords && !cancelled) {
-            coords = addrCoords;
+            m.push({
+              lat: addrCoords[0],
+              lng: addrCoords[1],
+              color: 'blue',
+              avatar: appAvatar,
+              label: `${app.name} (Dirección)`,
+              popup: `<b style="color:#3b82f6">Dirección del solicitante</b><br/><b>${app.name}</b><br/><small>${app.address || ''}</small>`
+            });
             // Extract sector from address
             const addrParts = app.address.split(',').map(p => p.trim());
             // Find a colonia/neighborhood or city name
@@ -117,15 +151,28 @@ function Applications() {
             }
           }
         }
-        if (coords && !cancelled) {
-          const statusColor = app.status === 'accepted' ? 'green' : app.status === 'rejected' ? 'red' : app.status === 'reviewing' ? 'blue' : 'amber';
-          m.push({
-            lat: coords[0], lng: coords[1], color: statusColor, label: app.name,
-            popup: `<b>${app.name}</b><br/><small>${app.position || ''}</small><br/><small style="opacity:0.6">${app.address || ''}</small>`
-          });
+        if ((ipCoords || app.address) && !cancelled) {
           sectors[sector] = (sectors[sector] || 0) + 1;
         }
       }
+
+      // Add employee markers (teal) to compare with applicants
+      for (const emp of employees) {
+        if (cancelled) return;
+        if (!emp?.address) continue;
+        const empCoords = await geocodeAddress(emp.address);
+        if (empCoords && !cancelled) {
+          m.push({
+            lat: empCoords[0],
+            lng: empCoords[1],
+            color: 'green',
+            avatar: normalizeAvatarUrl(emp.photo || ''),
+            label: emp.name,
+            popup: `<b style="color:#22c55e">Empleado</b><br/><b>${emp.name || ''}</b><br/><small>${emp.position || ''}</small><br/><small style="opacity:0.6">${emp.address || ''}</small>`
+          });
+        }
+      }
+
       if (!cancelled) {
         setGeneralMapMarkers(m);
         // Sort sectors by count descending
@@ -136,19 +183,63 @@ function Applications() {
     };
     build();
     return () => { cancelled = true; };
-  }, [applications]);
+  }, [applications, employees]);
 
   const loadApplications = async () => {
     try {
       const params = filter !== 'all' ? { status: filter } : {};
       const response = await applicationsAPI.list(params);
-      setApplications(response.data.applications);
+      const list = response.data.applications || [];
+      setApplications(list);
+      setNotesDraft(prev => {
+        const next = { ...prev };
+        list.forEach((app) => {
+          if (next[app.id] === undefined) next[app.id] = app.notes || '';
+        });
+        return next;
+      });
     } catch (error) {
       console.error('Error loading applications:', error);
     } finally {
       setLoading(false);
     }
   };
+
+  const saveApplicationNotes = async (id) => {
+    try {
+      setNotesSaving(prev => ({ ...prev, [id]: true }));
+      const noteValue = notesDraft[id] ?? '';
+      const res = await fetch(`${import.meta.env.VITE_API_URL}/applications/update-field.php`, {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id, field: 'notes', value: noteValue })
+      });
+      const result = await res.json();
+      if (!res.ok || !result.success) throw new Error(result.error || 'Error al guardar notas');
+      setApplications(prev => prev.map(app => (app.id === id ? { ...app, notes: noteValue } : app)));
+      if (selectedApp?.id === id) setSelectedApp(prev => ({ ...prev, notes: noteValue }));
+    } catch (error) {
+      console.error('Error saving notes:', error);
+      alert('No se pudo guardar la nota');
+    } finally {
+      setNotesSaving(prev => ({ ...prev, [id]: false }));
+    }
+  };
+
+  const handleAutoSaveNote = (id, value) => {
+    setNotesDraft(prev => ({ ...prev, [id]: value }));
+    if (noteTimers.current[id]) clearTimeout(noteTimers.current[id]);
+    noteTimers.current[id] = setTimeout(() => {
+      saveApplicationNotes(id);
+    }, 800);
+  };
+
+  useEffect(() => {
+    return () => {
+      Object.values(noteTimers.current).forEach((timer) => clearTimeout(timer));
+    };
+  }, []);
 
   const loadChartData = async () => {
     try {
@@ -263,9 +354,9 @@ function Applications() {
   }
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-5 sm:space-y-6">
       <div>
-        <h1 className="text-2xl sm:text-3xl font-light text-white tracking-wide">Solicitudes de Empleo</h1>
+        <h1 className="text-xl sm:text-3xl font-light text-white tracking-wide leading-tight">Solicitudes de Empleo</h1>
         <p className="mt-1 text-sm text-slate-500">Gestiona las solicitudes recibidas</p>
       </div>
 
@@ -285,12 +376,12 @@ function Applications() {
       </div>
 
 
-      <div className="flex gap-2">
+      <div className="flex flex-wrap gap-2">
         {['all', 'pending', 'reviewing', 'accepted', 'rejected'].map((status) => (
           <button
             key={status}
             onClick={() => setFilter(status)}
-            className={`rounded-lg px-4 py-2 text-sm font-light transition-all ${
+            className={`rounded-lg px-3 sm:px-4 py-2 text-xs sm:text-sm font-light transition-all ${
               filter === status
                 ? 'border border-cyan-400/50 bg-cyan-500/15 text-cyan-400'
                 : 'border border-cyan-500/15 bg-[#040c1a]/60 text-slate-500 hover:border-cyan-500/25 hover:text-slate-300'
@@ -305,10 +396,10 @@ function Applications() {
         {applications.map((app) => (
           <div
             key={app.id}
-            className="rounded-xl border border-cyan-500/15 bg-gradient-to-br from-[#040c1a] to-[#060f20] p-6 transition-all hover:border-cyan-400/30 hover:shadow-lg hover:shadow-cyan-500/8"
+            className="rounded-xl border border-cyan-500/15 bg-gradient-to-br from-[#040c1a] to-[#060f20] p-3 sm:p-6 transition-all hover:border-cyan-400/30 hover:shadow-lg hover:shadow-cyan-500/8"
           >
-            <div className="flex items-start justify-between">
-              <div className="flex items-start gap-4 flex-1">
+            <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3 sm:gap-0">
+              <div className="flex flex-col sm:flex-row items-start gap-3 sm:gap-4 flex-1 min-w-0">
                 {/* Photo thumbnail */}
                 {app.photo_url ? (
                   <img
@@ -322,14 +413,14 @@ function Applications() {
                     <svg className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" /></svg>
                   </div>
                 )}
-              <div className="flex-1">
-                <div className="flex items-center gap-3">
-                  <h3 className="text-xl font-light text-slate-200">{app.name}</h3>
+              <div className="flex-1 min-w-0">
+                <div className="flex flex-wrap items-center gap-2 sm:gap-3">
+                  <h3 className="text-lg sm:text-xl font-light text-slate-200 leading-tight break-words">{app.name}</h3>
                   <span className={`rounded-full px-3 py-1 text-xs ${getStatusColor(app.status)}`}>
                     {getStatusText(app.status)}
                   </span>
                 </div>
-                <div className="mt-3 grid gap-2 text-sm text-slate-400">
+                <div className="mt-3 grid gap-1.5 sm:gap-2 text-xs sm:text-sm text-slate-400">
                   <p><span className="text-cyan-500/70">Puesto:</span> {app.position}</p>
                   <p><span className="text-cyan-500/70">Experiencia:</span> {app.experience} años</p>
                   <p><span className="text-cyan-500/70">Teléfono:</span> 
@@ -342,9 +433,24 @@ function Applications() {
                   )}
                   <p><span className="text-cyan-500/70">Fecha:</span> {new Date(app.created_at).toLocaleDateString('es-MX', { timeZone: 'America/Hermosillo', day: '2-digit', month: 'short', year: 'numeric' })}</p>
                 </div>
+                {isAdmin && (
+                  <div className="mt-3 rounded-lg border border-cyan-500/15 bg-[#030b18]/40 p-2.5">
+                    <label className="block text-[10px] uppercase tracking-wider text-cyan-500/60 mb-1">Notas internas</label>
+                    <textarea
+                      value={notesDraft[app.id] ?? app.notes ?? ''}
+                      onChange={(e) => handleAutoSaveNote(app.id, e.target.value)}
+                      rows={2}
+                      className="w-full rounded border border-cyan-500/20 bg-[#030b18]/60 px-2.5 py-1.5 text-xs text-slate-200 focus:border-cyan-400/50 focus:outline-none resize-y"
+                      placeholder="Escribe una nota para esta solicitud..."
+                    />
+                    <div className="mt-1.5 text-[10px] text-right text-slate-500">
+                      {notesSaving[app.id] ? 'Guardando...' : 'Guardado automatico'}
+                    </div>
+                  </div>
+                )}
               </div>
               </div>
-              <div className="flex gap-2">
+              <div className="flex gap-2 self-end sm:self-start">
                 <button
                   onClick={() => handleDownloadPDF(app.id)}
                   className="rounded-lg border border-cyan-500/20 bg-[#040c1a]/60 p-2 text-cyan-400/60 transition-all hover:text-cyan-400 hover:border-cyan-400/40"
@@ -373,16 +479,15 @@ function Applications() {
       {/* General Applications Map + Sector Stats */}
       <div className="rounded-2xl border border-cyan-500/15 bg-gradient-to-br from-[#040c1a] to-[#060f20] p-4 sm:p-6 shadow-lg shadow-cyan-500/5">
         <h2 className="mb-1 text-base font-light text-white">Mapa General de Solicitudes</h2>
-        <p className="mb-4 text-xs text-slate-500">Ubicaciones de los solicitantes por dirección e IP</p>
+        <p className="mb-4 text-xs text-slate-500">Ubicaciones de solicitantes por dirección e IP, junto con empleados activos</p>
         <div className="flex flex-wrap gap-3 mb-3 text-[10px] text-slate-500">
-          <span className="flex items-center gap-1"><span className="h-2.5 w-2.5 rounded-full bg-amber-400 inline-block" /> Pendiente</span>
-          <span className="flex items-center gap-1"><span className="h-2.5 w-2.5 rounded-full bg-blue-500 inline-block" /> En Revisión</span>
-          <span className="flex items-center gap-1"><span className="h-2.5 w-2.5 rounded-full bg-green-500 inline-block" /> Aceptado</span>
-          <span className="flex items-center gap-1"><span className="h-2.5 w-2.5 rounded-full bg-red-500 inline-block" /> Rechazado</span>
+          <span className="flex items-center gap-1"><span className="h-2.5 w-2.5 rounded-full bg-blue-500 inline-block" /> Dirección del solicitante</span>
+          <span className="flex items-center gap-1"><span className="h-2.5 w-2.5 rounded-full bg-red-500 inline-block" /> IP del solicitante</span>
+          <span className="flex items-center gap-1"><span className="h-2.5 w-2.5 rounded-full bg-green-500 inline-block" /> Empleados contratados</span>
         </div>
         {generalMapLoading ? (
           <div className="h-[400px] rounded-xl border border-cyan-500/15 bg-[#030b18]/60 flex items-center justify-center">
-            <p className="text-xs text-slate-500">Geocodificando direcciones de solicitantes...</p>
+            <p className="text-xs text-slate-500">Geocodificando solicitantes y empleados...</p>
           </div>
         ) : generalMapMarkers.length > 0 ? (
           <LocationMap markers={generalMapMarkers} height={400} zoom={11} />
@@ -392,7 +497,7 @@ function Applications() {
           </div>
         )}
         <div className="mt-3 text-[10px] text-slate-600">
-          {generalMapMarkers.length} de {applications.length} solicitudes ubicadas en el mapa
+          {generalMapMarkers.length} marcadores totales ({applications.length} solicitudes + empleados)
         </div>
 
         {/* Sector Statistics */}
@@ -489,6 +594,22 @@ function Applications() {
                   )}
                 </div>
               ))}
+              <div className="rounded-lg border border-cyan-500/15 bg-[#030b18]/50 p-3 mt-1">
+                <label className="text-[10px] text-cyan-500/60 block mb-1 uppercase tracking-wider">Notas internas</label>
+                <textarea
+                  value={notesDraft[selectedApp.id] ?? selectedApp.notes ?? ''}
+                  onChange={(e) => handleAutoSaveNote(selectedApp.id, e.target.value)}
+                  rows={3}
+                  className="w-full rounded border border-cyan-500/20 bg-[#030b18]/60 px-2.5 py-1.5 text-xs text-slate-200 focus:border-cyan-400/50 focus:outline-none resize-y"
+                  placeholder="Agregar notas para seguimiento de esta solicitud..."
+                  disabled={!isAdmin}
+                />
+                {isAdmin && (
+                  <div className="mt-1.5 text-[10px] text-right text-slate-500">
+                    {notesSaving[selectedApp.id] ? 'Guardando...' : 'Guardado automatico'}
+                  </div>
+                )}
+              </div>
               {isAdmin && (
                 <div className="flex gap-2 pt-2">
                   {editing ? (

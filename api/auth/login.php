@@ -85,6 +85,17 @@ echo json_encode([
         'role'     => $user['role'],
         'avatar'   => $user['avatar'],
         'can_edit' => (bool)($user['can_edit'] ?? false),
+        'can_view_employees'      => array_key_exists('can_view_employees', $user) ? (bool)$user['can_view_employees'] : true,
+        'can_edit_employees'      => (bool)($user['can_edit_employees'] ?? false),
+        'can_delete_employees'    => (bool)($user['can_delete_employees'] ?? false),
+        'can_view_quotes'         => array_key_exists('can_view_quotes', $user) ? (bool)$user['can_view_quotes'] : true,
+        'can_edit_quotes'         => (bool)($user['can_edit_quotes'] ?? false),
+        'can_delete_quotes'       => (bool)($user['can_delete_quotes'] ?? false),
+        'can_view_applications'   => array_key_exists('can_view_applications', $user) ? (bool)$user['can_view_applications'] : true,
+        'can_edit_applications'   => (bool)($user['can_edit_applications'] ?? false),
+        'can_delete_applications' => (bool)($user['can_delete_applications'] ?? false),
+        'can_view_sales'          => (bool)($user['can_view_sales'] ?? true),
+        'can_edit_sales'          => (bool)($user['can_edit_sales'] ?? false),
     ]
 ]);
 

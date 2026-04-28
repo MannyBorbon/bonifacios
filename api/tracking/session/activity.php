@@ -13,6 +13,20 @@ if ($sessionId) {
     $stmt->execute();
 }
 
+// Auto-close ghost sessions inactive for 3+ minutes
+$cleanup = $conn->prepare("
+    UPDATE user_sessions
+    SET is_active = FALSE,
+        ended_at = NOW(),
+        duration_seconds = TIMESTAMPDIFF(SECOND, started_at, NOW())
+    WHERE is_active = TRUE
+      AND last_activity IS NOT NULL
+      AND last_activity < (NOW() - INTERVAL 3 MINUTE)
+");
+if ($cleanup) {
+    $cleanup->execute();
+}
+
 echo json_encode(['success' => true]);
 $conn->close();
 ?>
