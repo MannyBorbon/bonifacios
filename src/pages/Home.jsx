@@ -5,7 +5,7 @@ import PublicTracker from '../components/PublicTracker'
 function Home() {
   const [language, setLanguage] = useState('es')
   const [showAward, setShowAward] = useState(false)
-  const [eventForm, setEventForm] = useState({ name: '', phone: '', email: '', event_type: '', date: '', guests: '', location: '', notes: '' })
+  const [eventForm, setEventForm] = useState({ name: '', phone: '', email: '', event_type: '', event_type_other: '', date: '', guests: '', location: '', notes: '' })
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [submitMessage, setSubmitMessage] = useState('')
   const [activeHomeEvent, setActiveHomeEvent] = useState(null)
@@ -42,6 +42,8 @@ function Home() {
       eventPhone: 'Teléfono',
       eventEmail: 'Correo electrónico',
       eventType: 'Tipo de evento',
+      eventTypeOther: '¿Qué evento es?',
+      eventTypeOtherPh: 'Describe el tipo de evento',
       eventDate: 'Fecha del evento',
       eventGuests: 'Número aprox. de invitados',
       eventNotes: 'Detalles adicionales (opcional)',
@@ -79,6 +81,8 @@ function Home() {
       eventPhone: 'Phone',
       eventEmail: 'Email',
       eventType: 'Event type',
+      eventTypeOther: 'What event is it?',
+      eventTypeOtherPh: 'Describe the event type',
       eventDate: 'Event date',
       eventGuests: 'Approx. number of guests',
       eventNotes: 'Additional details (optional)',
@@ -116,6 +120,8 @@ function Home() {
       eventPhone: 'Téléphone',
       eventEmail: 'Email',
       eventType: 'Type d\'événement',
+      eventTypeOther: 'Quel type d\'événement ?',
+      eventTypeOtherPh: 'Décrivez le type d\'événement',
       eventDate: 'Date de l\'événement',
       eventGuests: 'Nombre approx. d\'invités',
       eventNotes: 'Détails supplémentaires (optionnel)',
@@ -153,6 +159,8 @@ function Home() {
       eventPhone: '电话',
       eventEmail: '电子邮件',
       eventType: '活动类型',
+      eventTypeOther: '具体是什么活动？',
+      eventTypeOtherPh: '请描述活动类型',
       eventDate: '活动日期',
       eventGuests: '大约宾客人数',
       eventNotes: '其他细节（可选）',
@@ -194,6 +202,11 @@ function Home() {
       setSubmitMessage('Por favor completa todos los campos requeridos')
       return
     }
+    const isOtherType = ['otro', 'other', 'autre', '其他'].includes(String(eventForm.event_type || '').toLowerCase().trim())
+    if (isOtherType && !eventForm.event_type_other.trim()) {
+      setSubmitMessage('Por favor especifica el tipo de evento cuando selecciones "Otro".')
+      return
+    }
 
     setIsSubmitting(true)
     setSubmitMessage('')
@@ -211,7 +224,7 @@ function Home() {
 
       if (data.success) {
         setSubmitMessage('¡Solicitud enviada! Te contactaremos pronto.')
-        setEventForm({ name: '', phone: '', email: '', event_type: '', date: '', guests: '', location: '', notes: '' })
+        setEventForm({ name: '', phone: '', email: '', event_type: '', event_type_other: '', date: '', guests: '', location: '', notes: '' })
       } else {
         setSubmitMessage('Error al enviar la solicitud. Por favor intenta de nuevo.')
       }
@@ -232,11 +245,47 @@ function Home() {
     { day: t.days[6], hours: '8 a.m.–11:30 p.m.' }
   ]
 
+  const getHomeEventTheme = (slug = '') => {
+    const normalized = String(slug).toLowerCase().trim()
+
+    const themes = {
+      'san-valentin': {
+        className: 'group relative inline-flex items-center gap-2 overflow-hidden rounded-full border border-rose-200/35 bg-gradient-to-r from-rose-900/95 via-rose-700/95 to-pink-700/95 px-8 py-3.5 font-serif text-sm font-semibold tracking-wide text-rose-50 shadow-xl shadow-rose-900/40 transition-all duration-400 hover:-translate-y-0.5 hover:scale-[1.02] hover:border-rose-100/70 hover:shadow-rose-700/45 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-rose-200/70'
+      },
+      'dia-madres': {
+        className: 'group relative inline-flex items-center gap-2 overflow-hidden rounded-full border border-pink-200/35 bg-gradient-to-r from-fuchsia-900/95 via-pink-700/95 to-rose-700/95 px-8 py-3.5 font-serif text-sm font-semibold tracking-wide text-pink-50 shadow-xl shadow-fuchsia-900/40 transition-all duration-400 hover:-translate-y-0.5 hover:scale-[1.02] hover:border-pink-100/75 hover:shadow-pink-700/45 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-pink-200/70'
+      },
+      'dia-del-padre': {
+        className: 'group relative inline-flex items-center gap-2 overflow-hidden rounded-full border border-sky-200/35 bg-gradient-to-r from-slate-900/95 via-blue-900/95 to-sky-800/95 px-8 py-3.5 font-serif text-sm font-semibold tracking-wide text-sky-50 shadow-xl shadow-slate-900/45 transition-all duration-400 hover:-translate-y-0.5 hover:scale-[1.02] hover:border-sky-100/75 hover:shadow-sky-700/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-200/70'
+      },
+      'halloween': {
+        className: 'group relative inline-flex items-center gap-2 overflow-hidden rounded-full border border-orange-200/40 bg-gradient-to-r from-zinc-950/95 via-orange-900/95 to-amber-800/95 px-8 py-3.5 font-serif text-sm font-semibold tracking-wide text-orange-50 shadow-xl shadow-zinc-950/45 transition-all duration-400 hover:-translate-y-0.5 hover:scale-[1.02] hover:border-orange-100/80 hover:shadow-orange-800/45 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-orange-200/70'
+      },
+      'posadas': {
+        className: 'group relative inline-flex items-center gap-2 overflow-hidden rounded-full border border-emerald-200/40 bg-gradient-to-r from-emerald-900/95 via-teal-800/95 to-emerald-700/95 px-8 py-3.5 font-serif text-sm font-semibold tracking-wide text-emerald-50 shadow-xl shadow-emerald-900/45 transition-all duration-400 hover:-translate-y-0.5 hover:scale-[1.02] hover:border-emerald-100/80 hover:shadow-emerald-700/45 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-200/70'
+      },
+      'navidad': {
+        className: 'group relative inline-flex items-center gap-2 overflow-hidden rounded-full border border-red-200/40 bg-gradient-to-r from-emerald-900/95 via-emerald-700/95 to-red-800/95 px-8 py-3.5 font-serif text-sm font-semibold tracking-wide text-red-50 shadow-xl shadow-emerald-900/45 transition-all duration-400 hover:-translate-y-0.5 hover:scale-[1.02] hover:border-red-100/80 hover:shadow-red-800/45 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-200/70'
+      },
+      'ano-nuevo': {
+        className: 'group relative inline-flex items-center gap-2 overflow-hidden rounded-full border border-violet-200/40 bg-gradient-to-r from-indigo-900/95 via-violet-800/95 to-slate-800/95 px-8 py-3.5 font-serif text-sm font-semibold tracking-wide text-violet-50 shadow-xl shadow-indigo-900/45 transition-all duration-400 hover:-translate-y-0.5 hover:scale-[1.02] hover:border-violet-100/80 hover:shadow-violet-700/45 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-200/70'
+      },
+      general: {
+        className: 'group relative inline-flex items-center gap-2 overflow-hidden rounded-full border border-amber-200/35 bg-gradient-to-r from-amber-900/95 via-amber-700/95 to-orange-700/95 px-8 py-3.5 font-serif text-sm font-semibold tracking-wide text-amber-50 shadow-xl shadow-amber-900/45 transition-all duration-400 hover:-translate-y-0.5 hover:scale-[1.02] hover:border-amber-100/80 hover:shadow-amber-700/45 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-200/70'
+      }
+    }
+
+    return themes[normalized] || themes.general
+  }
+
+  /** Botón flotante WhatsApp en home: `true` para volver a mostrarlo (código del `<a>` se mantiene abajo). */
+  const showHomeWhatsAppFloat = false
+
   return (
     <>
       <div className="min-h-screen bg-gradient-to-br from-[#0f0f14] via-[#1a1a1f] to-[#0a0a0f]">
         <PublicTracker />
-        <div className="relative isolate overflow-hidden">
+        <div className="relative isolate overflow-x-hidden">
           {/* 1. CAPA DE DECORACIÓN (BACKGROUNDS) */}
           <div className="pointer-events-none absolute inset-0">
             <div className="absolute top-0 left-1/2 h-[800px] w-[800px] -translate-x-1/2 rounded-full bg-[#D4AF37]/8 blur-[150px]" />
@@ -270,30 +319,29 @@ function Home() {
                 </button>
                 <p className="font-serif italic text-[#F4E4C1]/60 mb-10">{t.tagline}</p>
                 <div className="flex flex-col sm:flex-row gap-4 justify-center items-center">
-                  <a href={`tel:${phoneE164Mx}`} className="inline-block rounded-full bg-[#D4AF37] px-10 py-4 text-black font-bold shadow-2xl">
+                  <Link to="/reservacion" className="inline-block rounded-full bg-[#D4AF37] px-10 py-4 text-black font-bold shadow-2xl">
                     {t.cta}
-                  </a>
-                  <Link
-                    to="/cotizador"
-                    className="group relative inline-flex items-center gap-3 overflow-hidden rounded-full border border-[#D4AF37]/40 bg-black/40 px-8 py-3.5 font-serif text-sm font-medium tracking-wider text-[#D4AF37] backdrop-blur-md shadow-xl shadow-[#D4AF37]/20 transition-all duration-500 hover:scale-105 hover:border-[#D4AF37]/60 hover:bg-[#D4AF37]/20 hover:shadow-[#D4AF37]/40"
-                  >
-                    <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 17v-6a3 3 0 013-3h9m0 0l-3-3m3 3l-3 3M3 7h6a3 3 0 013 3v11" />
-                    </svg>
-                    <span>Cotizador de Eventos</span>
                   </Link>
-                  {activeHomeEvent && (
+                  
+                  {/* Botón de Día de las Madres - siempre visible */}
+                  <Link
+                    to="/reservacion-dia-madres"
+                    className="group relative inline-flex items-center gap-2 overflow-hidden rounded-full border border-pink-200/35 bg-gradient-to-r from-fuchsia-900/95 via-pink-700/95 to-rose-700/95 px-6 sm:px-8 py-3.5 font-serif text-sm font-semibold tracking-wide text-pink-50 shadow-xl shadow-fuchsia-900/40 transition-all duration-400 hover:-translate-y-0.5 hover:scale-[1.02] hover:border-pink-100/75 hover:shadow-pink-700/45 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-pink-200/70"
+                  >
+                    <div className="absolute inset-0 bg-gradient-to-r from-white/15 via-white/5 to-white/15 opacity-0 transition-opacity duration-500 group-hover:opacity-100" />
+                    <div className="absolute -inset-10 translate-x-[-130%] bg-gradient-to-r from-transparent via-white/25 to-transparent transition-transform duration-700 group-hover:translate-x-[130%]" />
+                    <span className="relative z-10 uppercase">Día de las Madres</span>
+                  </Link>
+                  
+                  {/* Evento especial dinámico si existe */}
+                  {activeHomeEvent && activeHomeEvent.slug !== 'dia-madres' && (
                     <Link
                       to={`/reservacion-especial/${activeHomeEvent.slug}`}
-                      className="group relative inline-flex items-center gap-3 overflow-hidden rounded-full border border-pink-300/35 bg-gradient-to-r from-pink-500 via-rose-500 to-fuchsia-500 px-8 py-3.5 font-serif text-sm font-semibold tracking-wider text-white shadow-2xl shadow-pink-500/35 transition-all duration-500 hover:-translate-y-0.5 hover:scale-[1.03] hover:border-pink-200/70 hover:shadow-pink-400/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-pink-200/70"
+                      className={getHomeEventTheme(activeHomeEvent.slug).className}
                     >
-                      <div className="absolute inset-0 bg-gradient-to-r from-white/25 via-white/5 to-white/20 opacity-0 transition-opacity duration-500 group-hover:opacity-100" />
-                      <div className="absolute -inset-8 translate-x-[-120%] bg-gradient-to-r from-transparent via-white/35 to-transparent transition-transform duration-700 group-hover:translate-x-[120%]" />
-                      <svg className="relative z-10 h-5 w-5" fill="currentColor" viewBox="0 0 24 24">
-                        <path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 2 7.5 2c1.74 0 3.41.81 4.5 2.09C13.09 2.81 14.76 2 16.5 2 19.58 2 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z"/>
-                      </svg>
-                      <span className="relative z-10">🌸 {activeHomeEvent.name}</span>
-                      <div className="absolute -inset-1 rounded-full bg-gradient-to-r from-pink-400/20 via-rose-400/20 to-pink-400/20 opacity-0 transition-all duration-500 group-hover:opacity-100" />
+                      <div className="absolute inset-0 bg-gradient-to-r from-white/15 via-white/5 to-white/15 opacity-0 transition-opacity duration-500 group-hover:opacity-100" />
+                      <div className="absolute -inset-10 translate-x-[-130%] bg-gradient-to-r from-transparent via-white/25 to-transparent transition-transform duration-700 group-hover:translate-x-[130%]" />
+                      <span className="relative z-10 uppercase">{activeHomeEvent.name}</span>
                     </Link>
                   )}
                 </div>
@@ -361,10 +409,7 @@ function Home() {
                       <span>Eventos privados</span>
                       <span>Disponibles</span>
                     </div>
-                    <div className="flex justify-between">
-                      <span>Capacidad máxima</span>
-                      <span>100 personas</span>
-                    </div>
+                    {/* No listar capacidad máxima / N personas: política de negocio + evita HTML obsoleto en caché */}
                   </div>
                   <div className="mt-4 pt-4 border-t border-[#D4AF37]/10">
                     <Link
@@ -437,7 +482,11 @@ function Home() {
                           <label className="block text-[10px] uppercase tracking-widest text-[#D4AF37]/60 mb-1.5">{t.eventType} *</label>
                           <select
                             value={eventForm.event_type}
-                            onChange={(e) => setEventForm({ ...eventForm, event_type: e.target.value })}
+                            onChange={(e) => {
+                              const nextType = e.target.value
+                              const isOther = ['otro', 'other', 'autre', '其他'].includes(String(nextType || '').toLowerCase().trim())
+                              setEventForm({ ...eventForm, event_type: nextType, event_type_other: isOther ? eventForm.event_type_other : '' })
+                            }}
                             className="w-full rounded-xl border border-[#D4AF37]/20 bg-black/40 px-4 py-3 text-sm text-[#F4E4C1] backdrop-blur-md focus:border-[#D4AF37]/50 focus:outline-none transition-colors"
                             required
                           >
@@ -447,6 +496,19 @@ function Home() {
                             ))}
                           </select>
                         </div>
+                        {['otro', 'other', 'autre', '其他'].includes(String(eventForm.event_type || '').toLowerCase().trim()) && (
+                          <div>
+                            <label className="block text-[10px] uppercase tracking-widest text-[#D4AF37]/60 mb-1.5">{t.eventTypeOther} *</label>
+                            <input
+                              type="text"
+                              value={eventForm.event_type_other}
+                              onChange={(e) => setEventForm({ ...eventForm, event_type_other: e.target.value })}
+                              className="w-full rounded-xl border border-[#D4AF37]/20 bg-black/40 px-4 py-3 text-sm text-[#F4E4C1] placeholder-[#F4E4C1]/20 backdrop-blur-md focus:border-[#D4AF37]/50 focus:outline-none transition-colors"
+                              placeholder={t.eventTypeOtherPh}
+                              required
+                            />
+                          </div>
+                        )}
                         <div>
                           <label className="block text-[10px] uppercase tracking-widest text-[#D4AF37]/60 mb-1.5">{t.eventDate} *</label>
                           <input
@@ -571,12 +633,18 @@ function Home() {
             </Link>
           </div>
 
-          {/* 4. ELEMENTOS FLOTANTES (FUERA DEL MAIN PERO DENTRO DEL ISOLATE) */}
-          <a href={whatsappUrl} className="fixed bottom-6 right-6 z-50 h-16 w-16 rounded-full bg-[#25D366] flex items-center justify-center shadow-2xl">
-            <svg className="h-8 w-8 text-white" fill="currentColor" viewBox="0 0 24 24">
-              <path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413Z"/>
-            </svg>
-          </a>
+          {/* 4. ELEMENTOS FLOTANTES — WhatsApp: oculto con `showHomeWhatsAppFloat`; el marcado sigue en el árbol para reactivar fácil */}
+          {showHomeWhatsAppFloat && (
+            <a
+              href={whatsappUrl}
+              className="fixed bottom-6 right-6 z-50 h-16 w-16 rounded-full bg-[#25D366] flex items-center justify-center shadow-2xl"
+              aria-label={t.whatsappTooltip}
+            >
+              <svg className="h-8 w-8 text-white" fill="currentColor" viewBox="0 0 24 24">
+                <path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413Z" />
+              </svg>
+            </a>
+          )}
 
           {/* MODAL DE TRIPADVISOR */}
           {showAward && (

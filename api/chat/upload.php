@@ -110,7 +110,9 @@ $stmt->execute();
 $messageId = $conn->insert_id;
 
 // Update conversation timestamp
-$conn->query("UPDATE chat_conversations SET last_message_at = NOW() WHERE id = $conversationId");
+$convUpd = $conn->prepare('UPDATE chat_conversations SET last_message_at = NOW() WHERE id = ?');
+$convUpd->bind_param('i', $conversationId);
+$convUpd->execute();
 
 // Return the new message
 $msg = $conn->prepare("SELECT id, sender_id, message_type, content, file_url, file_name, file_size, is_read, created_at FROM chat_messages WHERE id = ?");

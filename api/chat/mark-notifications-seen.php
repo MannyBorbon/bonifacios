@@ -2,6 +2,12 @@
 require_once '../config/database.php';
 $userId = requireAuth();
 
+if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+    http_response_code(405);
+    echo json_encode(['success' => false, 'error' => 'Método no permitido']);
+    exit();
+}
+
 $conn = getConnection();
 
 // Persist per-user seen markers to prevent bell counter from reappearing on reload
@@ -32,8 +38,7 @@ try {
     }
 } catch (Exception $e) {}
 
-// Mark emails as seen (global inbox fallback)
-try { $conn->query("UPDATE email_inbox SET seen = 1 WHERE seen = 0"); } catch (Exception $e) {}
+// No actualizar email_inbox globalmente: afectaría a todos los admins. El contador usa seen_email_at por usuario.
 
 // Save all markers as seen now for this user
 try {

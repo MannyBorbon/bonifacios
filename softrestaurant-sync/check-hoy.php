@@ -1,7 +1,7 @@
 <?php
 $dsn  = "sqlsrv:Server=100.84.227.35\\NATIONALSOFT;Database=softrestaurant8pro;Encrypt=false;TrustServerCertificate=true";
 $user = 'usuario_web';
-$pass = 'Filipenses4:8@';
+$pass = getenv('SR_PASS') ?: '';
 
 echo "=== CHECK HOY " . date('Y-m-d H:i:s') . " ===\n\n";
 

@@ -4,7 +4,7 @@ $userId = requireAuth();
 
 $conn = getConnection();
 
-$days = isset($_GET['days']) ? intval($_GET['days']) : 30;
+$days = isset($_GET['days']) ? max(1, min(366, intval($_GET['days']))) : 30;
 
 // Create table if not exists
 $conn->query("CREATE TABLE IF NOT EXISTS site_visitors (

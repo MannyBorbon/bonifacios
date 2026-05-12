@@ -5,15 +5,88 @@
 
 require_once __DIR__ . '/../config/database.php';
 
-$pdo = getPDO();
+if ($_SERVER['REQUEST_METHOD'] !== 'GET') {
+    http_response_code(405);
+    echo json_encode(['success' => false, 'error' => 'Método no permitido']);
+    exit;
+}
 
-// Obtener parámetros
-$range = $_GET['range'] ?? 'today';
-$startDate = $_GET['start'] ?? '';
-$endDate = $_GET['end'] ?? '';
-$statusFilter = $_GET['status'] ?? 'all'; // 'closed' | 'open' | 'all' — default ALL para mostrar todo
+requireAuth();
+
+$pdo = getPDO();
+$SR_HAS_CHEQUE_PAYMENTS_TABLE = sr_cheque_payments_table_exists($pdo);
+$SR_USE_CHEQUE_PAYMENT_EVIDENCE = true;
+
+// Obtener parámetros (validados)
+$allowedRanges = ['today', 'yesterday', 'week', 'month', 'week1', 'week2', 'week3', 'week4', 'custom'];
+$range = strtolower(trim((string)($_GET['range'] ?? 'today')));
+if (!in_array($range, $allowedRanges, true)) {
+    http_response_code(400);
+    echo json_encode(['success' => false, 'error' => 'range inválido']);
+    exit;
+}
+
+$startDate = trim((string)($_GET['start'] ?? ''));
+$endDate = trim((string)($_GET['end'] ?? ''));
+
+$statusFilter = strtolower(trim((string)($_GET['status'] ?? 'all')));
+if (!in_array($statusFilter, ['all', 'open', 'closed'], true)) {
+    http_response_code(400);
+    echo json_encode(['success' => false, 'error' => 'status inválido']);
+    exit;
+}
+
 $selectedMonth = isset($_GET['month']) ? (int)$_GET['month'] : null;
 $selectedYear = isset($_GET['year']) ? (int)$_GET['year'] : null;
+if ($selectedMonth !== null && ($selectedMonth < 1 || $selectedMonth > 12)) {
+    http_response_code(400);
+    echo json_encode(['success' => false, 'error' => 'month inválido']);
+    exit;
+}
+if ($selectedYear !== null && ($selectedYear < 2000 || $selectedYear > 2100)) {
+    http_response_code(400);
+    echo json_encode(['success' => false, 'error' => 'year inválido']);
+    exit;
+}
+
+if ($range === 'custom') {
+    if ($startDate !== '' && !preg_match('/^\d{4}-\d{2}-\d{2}$/', $startDate)) {
+        http_response_code(400);
+        echo json_encode(['success' => false, 'error' => 'start debe ser YYYY-MM-DD']);
+        exit;
+    }
+    if ($endDate !== '' && !preg_match('/^\d{4}-\d{2}-\d{2}$/', $endDate)) {
+        http_response_code(400);
+        echo json_encode(['success' => false, 'error' => 'end debe ser YYYY-MM-DD']);
+        exit;
+    }
+    if ($startDate !== '' && $endDate !== '' && strtotime($endDate . ' 00:00:00') < strtotime($startDate . ' 00:00:00')) {
+        http_response_code(400);
+        echo json_encode(['success' => false, 'error' => 'end debe ser >= start']);
+        exit;
+    }
+}
+// sections: omitido = respuesta completa (compat). core = sin analytics/top/waiters/tips_by_waiter. heavy = solo ese bloque (JSON parcial para fusionar en el front).
+$sectionsRaw = strtolower(trim((string)($_GET['sections'] ?? '')));
+$sectionsMode = in_array($sectionsRaw, ['core', 'heavy'], true) ? $sectionsRaw : 'all';
+// include_compare=1: calcular bloque de comparación (consulta extra). En core se omite por defecto para acelerar cambio de rango.
+$includeCompare = in_array(strtolower(trim((string)($_GET['include_compare'] ?? '0'))), ['1', 'true', 'yes', 'on'], true);
+// include_sales=0: omite listado detallado de tickets para acelerar vistas donde no se muestra esa tabla.
+$includeSales = !in_array(strtolower(trim((string)($_GET['include_sales'] ?? '1'))), ['0', 'false', 'no', 'off'], true);
+// include_open_stats=0: omite cálculos de abiertos (queries con NOT EXISTS costosas) en rangos históricos.
+$includeOpenStats = !in_array(strtolower(trim((string)($_GET['include_open_stats'] ?? '1'))), ['0', 'false', 'no', 'off'], true);
+// include_historical_open=0: omite histórico de abiertos cuando no se usa en la UI actual.
+$includeHistoricalOpen = !in_array(strtolower(trim((string)($_GET['include_historical_open'] ?? '1'))), ['0', 'false', 'no', 'off'], true);
+// Para evitar falsos 0 en rangos históricos, mantener activas ambas señales de cobro.
+$includePaymentLines = true;
+$includeChequeEvidence = true;
+$SR_USE_CHEQUE_PAYMENT_EVIDENCE = $includeChequeEvidence;
+
+// Listado de tickets: tope de filas para evitar timeouts y JSON enormes (100–5000, default 2500)
+$salesListMax = 2500;
+if (isset($_GET['sales_limit'])) {
+    $salesListMax = max(100, min(5000, (int)$_GET['sales_limit']));
+}
 
 // Límites de turno SoftRestaurant: turno empieza a las 08:00 y termina 07:59:59 del día siguiente
 $shiftHour = 8;
@@ -91,61 +164,97 @@ switch ($range) {
 }
 
 try {
-    // Estadísticas según el filtro seleccionado
-    $stats = [
-        'today'     => getSalesStats($pdo, $todayStart, $todayEnd),
-        'yesterday' => getSalesStats($pdo, $yesterdayStart, $yesterdayEnd),
-        'week'      => getSalesStats($pdo, $weekStart, $weekEnd),
-        'month'     => getSalesStats($pdo, $monthStart, $monthEnd)
-    ];
-
-    // Estadísticas del período actualmente seleccionado (incluye custom)
-    $currentStats = getSalesStats($pdo, $start, $end);
-    if ($range === 'custom') {
-        $stats['custom'] = $currentStats;
+    // sections=heavy: solo bloque pesado (el front lo fusiona con un core previo).
+    if ($sectionsMode === 'heavy') {
+        $topProducts = getTopProducts($pdo, $start, $end, $statusFilter);
+        $waiters = getWaiterPerformance($pdo, $start, $end, $statusFilter);
+        $analytics = getDetailedAnalytics($pdo, $start, $end, $statusFilter);
+        $tipsByWaiter = getTipsByWaiter($pdo, $start, $end);
+        sales_emit_json([
+            'success' => true,
+            'partial' => true,
+            'sections' => 'heavy',
+            'top_products' => $topProducts,
+            'waiters' => $waiters,
+            'analytics' => $analytics,
+            'tips_by_waiter' => $tipsByWaiter,
+        ]);
+        return;
     }
 
-    // Comparación contra período anterior equivalente (misma duración)
-    $comparison = getPeriodComparison($pdo, $start, $end);
+    $includeHeavy = ($sectionsMode !== 'core');
 
-    // Tickets abiertos del período seleccionado
-    $openStats = getOpenStats($pdo, $start, $end);
-    
-    // Tickets abiertos históricos (de turnos anteriores)
-    $historicalOpenStats = getHistoricalOpenStats($pdo, $todayStart);
+    // Respuesta única; core omite consultas pesadas (analytics, top_products, waiters, tips_by_waiter).
+    // Además, en core solo se calcula la estadística del rango seleccionado para acelerar cambios Hoy/Ayer/Semana/Mes.
+    if ($sectionsMode === 'core') {
+        $currentStats = getSalesStats($pdo, $start, $end, $includeOpenStats);
+        $stats = [
+            $range => $currentStats,
+        ];
+    } else {
+        $stats = [
+            'today'     => getSalesStats($pdo, $todayStart, $todayEnd, $includeOpenStats),
+            'yesterday' => getSalesStats($pdo, $yesterdayStart, $yesterdayEnd, $includeOpenStats),
+            'week'      => getSalesStats($pdo, $weekStart, $weekEnd, $includeOpenStats),
+            'month'     => getSalesStats($pdo, $monthStart, $monthEnd, $includeOpenStats),
+        ];
+        $currentStats = getSalesStats($pdo, $start, $end, $includeOpenStats);
+        if ($range === 'custom') {
+            $stats['custom'] = $currentStats;
+        }
+    }
 
-    // Cancelaciones del rango seleccionado
+    $comparison = $includeCompare ? getPeriodComparison($pdo, $start, $end, false) : null;
+
+    $openStats = $includeOpenStats
+        ? getOpenStats($pdo, $start, $end)
+        : ['total' => 0.0, 'tips' => 0.0, 'checks' => 0, 'average' => 0.0, 'covers' => 0];
+    $historicalOpenStats = $includeHistoricalOpen
+        ? getHistoricalOpenStats($pdo, $todayStart)
+        : ['total' => 0.0, 'tips' => 0.0, 'checks' => 0, 'average' => 0.0, 'covers' => 0];
+
     $cancellations = getCancellations($pdo, $start, $end);
 
-    // Ventas del rango con filtro de status
-    $sales = getSales($pdo, $start, $end, $statusFilter);
+    $paymentMethods = getPaymentMethods($pdo, $start, $end, 'closed', $includePaymentLines);
+    $paymentMethodsCard = getCardPaymentBreakdown($pdo, $start, $end);
 
-    // Datos por hora
+    $sales = $includeSales ? getSales($pdo, $start, $end, $statusFilter, $salesListMax) : [];
+
     $hourly = [];
     if ($range === 'today' || $range === 'yesterday') {
         $hourly = getHourlySales($pdo, $start, $end, $statusFilter);
     }
 
-    // Datos diarios
     $daily = [];
+    $dailyCategories = [];
     if ($range === 'week' || $range === 'month' || $range === 'custom') {
         $daily = getDailySales($pdo, $start, $end, $statusFilter);
+        $dailyCategories = getDailySalesWithCategories($pdo, $start, $end, $statusFilter);
     }
 
-    // Top productos
-    $topProducts = getTopProducts($pdo, $start, $end, $statusFilter);
+    // Year-over-year comparison: front sends compare_years=2026,2025,2024
+    $yearOverYear = [];
+    $compareYearsRaw = trim((string)($_GET['compare_years'] ?? ''));
+    if ($compareYearsRaw !== '' && $range === 'custom' && $startDate !== '' && $endDate !== '') {
+        $compareYears = array_filter(array_map('intval', explode(',', $compareYearsRaw)), fn($y) => $y >= 2000 && $y <= 2100);
+        if (!empty($compareYears)) {
+            $startMD = substr($startDate, 5); // MM-DD
+            $endMD = substr($endDate, 5);
+            $yearOverYear = getYearOverYearDaily($pdo, $startMD, $endMD, $compareYears, $statusFilter);
+        }
+    }
 
-    // Rendimiento de meseros
-    $waiters = getWaiterPerformance($pdo, $start, $end, $statusFilter);
-
-    // Métodos de pago
-    $paymentMethods = getPaymentMethods($pdo, $start, $end, $statusFilter);
-
-    // Análisis detallado del período seleccionado
-    $analytics = getDetailedAnalytics($pdo, $start, $end, $statusFilter);
-
-    // Propinas por mesero
-    $tipsByWaiter = getTipsByWaiter($pdo, $start, $end);
+    if ($includeHeavy) {
+        $topProducts = getTopProducts($pdo, $start, $end, $statusFilter);
+        $waiters = getWaiterPerformance($pdo, $start, $end, $statusFilter);
+        $analytics = getDetailedAnalytics($pdo, $start, $end, $statusFilter);
+        $tipsByWaiter = getTipsByWaiter($pdo, $start, $end);
+    } else {
+        $topProducts = [];
+        $waiters = [];
+        $analytics = [];
+        $tipsByWaiter = [];
+    }
 
     // Formatear rango legible en español
     $rangeLabels = [
@@ -159,11 +268,18 @@ try {
     $startFormatted = date('d/m/Y H:i', strtotime($start));
     $endFormatted = date('d/m/Y H:i', strtotime($end));
     $rangeLabel = $rangeLabels[$range] ?? 'Personalizado';
-    
-    echo json_encode([
+
+    // KPI principal del dashboard (front): solo venta cobrada/cerrada. «En curso» va aparte en open_stats.
+    // Antes se sumaban pendientes al total si el rango contenía «ahora»; eso contradecía «el grande = sólo cerradas».
+    $includePendingInDashboardTotal = false;
+
+    $payload = [
         'success' => true,
         'stats' => $stats,
         'current_stats' => $currentStats,
+        'dashboard' => [
+            'include_pending_in_total' => $includePendingInDashboardTotal,
+        ],
         'selected_period' => [
             'range' => $range,
             'label' => $rangeLabel,
@@ -181,22 +297,50 @@ try {
         'sales' => $sales,
         'hourly' => $hourly,
         'daily' => $daily,
+        'daily_categories' => $dailyCategories,
+        'year_over_year' => $yearOverYear,
         'top_products' => $topProducts,
         'waiters' => $waiters,
         'payment_methods' => $paymentMethods,
+        'payment_methods_card' => $paymentMethodsCard,
         'analytics' => $analytics,
-        'tips_by_waiter' => $tipsByWaiter
-    ]);
+        'tips_by_waiter' => $tipsByWaiter,
+    ];
+    if ($sectionsMode === 'core') {
+        $payload['partial'] = false;
+        $payload['sections'] = 'core';
+        $payload['heavy_pending'] = true;
+    }
+
+    if ($includeSales) {
+        $payload['sales_row_limit'] = $salesListMax;
+    }
+
+    sales_emit_json($payload);
 
 } catch (Exception $e) {
     http_response_code(500);
-    echo json_encode([
+    sales_emit_json([
         'success' => false,
-        'error' => $e->getMessage()
+        'error' => $e->getMessage(),
     ]);
 }
 
 // ── FUNCIONES AUXILIARES ──────────────────────────────────
+
+/**
+ * Emite JSON con sustitutos UTF-8 inválidos; evita respuesta vacía si json_encode falla.
+ */
+function sales_emit_json(array $payload): void
+{
+    $json = json_encode($payload, JSON_INVALID_UTF8_SUBSTITUTE | JSON_UNESCAPED_UNICODE);
+    if ($json === false) {
+        http_response_code(500);
+        echo '{"success":false,"error":"Error al serializar la respuesta"}';
+        return;
+    }
+    echo $json;
+}
 
 function getTipsByWaiter($pdo, $start, $end) {
     // Resumen por mesero
@@ -207,7 +351,7 @@ function getTipsByWaiter($pdo, $start, $end) {
         COALESCE(AVG(CASE WHEN COALESCE(tip,0) > 0 THEN tip END),0) as avg_tip
     FROM sr_sales
     WHERE sale_datetime BETWEEN ? AND ?
-      AND status = 'closed'
+      AND " . getCollectedSaleSql() . "
       AND NOT (total=0 AND COALESCE(subtotal,0)>0)
     GROUP BY waiter_name
     HAVING total_tips > 0
@@ -236,10 +380,11 @@ function getTipsByWaiter($pdo, $start, $end) {
         ) THEN 1 ELSE 0 END as tip_paid
     FROM sr_sales s
     WHERE s.sale_datetime BETWEEN ? AND ?
-      AND s.status = 'closed'
+      AND " . getCollectedSaleSql('s') . "
       AND COALESCE(s.tip,0) > 0
       AND NOT (s.total=0 AND COALESCE(s.subtotal,0)>0)
-    ORDER BY s.sale_datetime DESC";
+    ORDER BY s.sale_datetime DESC
+    LIMIT 500";
     $stmtD = $pdo->prepare($sqlDetail);
     $stmtD->execute([$start, $end]);
     $detail = $stmtD->fetchAll(PDO::FETCH_ASSOC);
@@ -253,38 +398,202 @@ function getTipsByWaiter($pdo, $start, $end) {
     ];
 }
 
+function sqlSaleColumnPrefix(?string $alias): string {
+    if ($alias === null || $alias === '') {
+        return '';
+    }
+    return $alias . '.';
+}
+
+function getClosedStatusSql(?string $alias = null): string {
+    $p = sqlSaleColumnPrefix($alias);
+    return "LOWER(COALESCE({$p}status,'')) IN ('closed','cerrado','cobrado','pagado','paid')";
+}
+
+function getOpenStatusSql(?string $alias = null): string {
+    $p = sqlSaleColumnPrefix($alias);
+    return "LOWER(COALESCE({$p}status,'')) IN ('open','abierto','pending')";
+}
+
+function getCancelledStatusSql(?string $alias = null): string {
+    $p = sqlSaleColumnPrefix($alias);
+    return "LOWER(COALESCE({$p}status,'')) IN ('cancelled','canceled','cancelado')";
+}
+
+/** Ticket con cobro registrado: status cerrado o importes de medio de pago en sr_sales. */
+function getPaymentSplitPositiveSql(?string $alias = null): string {
+    $p = sqlSaleColumnPrefix($alias);
+    return '('
+        . "COALESCE({$p}cash_amount,0)+COALESCE({$p}card_amount,0)"
+        . "+COALESCE({$p}voucher_amount,0)+COALESCE({$p}other_amount,0)"
+        . ') > 0.005';
+}
+
+function getPaymentSplitZeroOrEmptySql(?string $alias = null): string {
+    $p = sqlSaleColumnPrefix($alias);
+    return '('
+        . "COALESCE({$p}cash_amount,0)+COALESCE({$p}card_amount,0)"
+        . "+COALESCE({$p}voucher_amount,0)+COALESCE({$p}other_amount,0)"
+        . ' <= 0.005)';
+}
+
+/**
+ * Ticket con evidencia de cobro en líneas de chequespagos sincronizadas.
+ * Se protege contra entornos sin la tabla sr_cheque_payments.
+ */
+function getChequePaymentEvidenceSql(?string $alias = null): string {
+    global $SR_HAS_CHEQUE_PAYMENTS_TABLE, $SR_USE_CHEQUE_PAYMENT_EVIDENCE;
+    if (!$SR_HAS_CHEQUE_PAYMENTS_TABLE || !$SR_USE_CHEQUE_PAYMENT_EVIDENCE) {
+        return '(0=1)';
+    }
+    $p = sqlSaleColumnPrefix($alias);
+    $saleSrId = "REPLACE(TRIM(CAST(COALESCE({$p}sr_ticket_id,'') AS CHAR)), '#', '')";
+    $saleFolio = "REPLACE(TRIM(CAST(COALESCE({$p}folio,'') AS CHAR)), '#', '')";
+    $saleTicket = "REPLACE(TRIM(CAST(COALESCE({$p}ticket_number,'') AS CHAR)), '#', '')";
+    $cpFolio = "REPLACE(TRIM(CAST(COALESCE(cp.folio,'') AS CHAR)), '#', '')";
+    $sumPaidSql = "(SELECT COALESCE(SUM(cp.amount), 0)
+        FROM sr_cheque_payments cp
+        WHERE cp.amount > 0.0001
+          AND (
+            $saleSrId = $cpFolio
+            OR $saleFolio = $cpFolio
+            OR $saleTicket = $cpFolio
+          )
+          AND ABS(TIMESTAMPDIFF(HOUR, COALESCE(cp.payment_datetime, cp.created_at), {$p}sale_datetime)) <= 18)";
+    // Evita falsos positivos por una sola línea antigua o parcial:
+    // exige al menos 90% del total del ticket (o >0 si total casi cero).
+    return "($sumPaidSql >= CASE
+        WHEN COALESCE({$p}total,0) > 0.01 THEN COALESCE({$p}total,0) * 0.90
+        ELSE 0.01
+    END)";
+}
+
+/**
+ * Ticket considerado cobrado para KPIs y totales.
+ * Incluye señal por closed_at: el sync a veces deja status "open" o medios de pago en 0
+ * pero SoftRestaurant ya cerró la cuenta (closed_at informado).
+ */
+function getCollectedSaleSql(?string $alias = null): string {
+    $p = sqlSaleColumnPrefix($alias);
+    $closedAtEvidence = '('
+        . "{$p}closed_at IS NOT NULL"
+        . ' AND COALESCE(' . $p . 'total,0) > 0.005'
+        . ' AND NOT ' . getCancelledStatusSql($alias)
+        . ')';
+    // Sync a veces deja status "open" y medios de pago en 0, pero ya envió forma de pago distinta de "pending".
+    $paymentTypeHint = '('
+        . 'COALESCE(' . $p . 'total,0) > 0.005'
+        . ' AND NOT ' . getCancelledStatusSql($alias)
+        . " AND LOWER(TRIM(COALESCE({$p}payment_type,''))) NOT IN ('','pending','abierto','open')"
+        . ')';
+    return '('
+        . getClosedStatusSql($alias)
+        . ' OR '
+        . getPaymentSplitPositiveSql($alias)
+        . ' OR '
+        . getChequePaymentEvidenceSql($alias)
+        . ' OR '
+        . $closedAtEvidence
+        . ' OR '
+        . $paymentTypeHint
+        . ')';
+}
+
+/** Actividad aún no cobrada (no cancelada y sin señal de cobro). */
+function getUncollectedPendingSql(?string $alias = null): string {
+    return '(NOT ' . getCancelledStatusSql($alias) . ' AND NOT ' . getCollectedSaleSql($alias) . ')';
+}
+
+/** Estado "efectivo" para UI/tabla, no solo el status crudo sincronizado. */
+function getEffectiveStatusSql(?string $alias = null): string {
+    return '(CASE '
+        . 'WHEN ' . getCancelledStatusSql($alias) . " THEN 'canceled' "
+        . 'WHEN ' . getCollectedSaleSql($alias) . " THEN 'closed' "
+        . "ELSE 'open' END)";
+}
+
+/**
+ * Cruza folio / numcheque / sr_ticket_id entre dos filas sr_sales (trim + #).
+ */
+function getSrSaleTicketIdentityMatchSql(string $oAlias = 'o', string $cAlias = 'c'): string {
+    $o = $oAlias;
+    $c = $cAlias;
+    $openSrId = "NULLIF(TRIM(REPLACE(CAST({$o}.sr_ticket_id AS CHAR), '#', '')), '')";
+    $openFolio = "NULLIF(TRIM(REPLACE(CAST({$o}.folio AS CHAR), '#', '')), '')";
+    $openTicket = "NULLIF(TRIM(REPLACE(CAST({$o}.ticket_number AS CHAR), '#', '')), '')";
+    $closedSrId = "NULLIF(TRIM(REPLACE(CAST({$c}.sr_ticket_id AS CHAR), '#', '')), '')";
+    $closedFolio = "NULLIF(TRIM(REPLACE(CAST({$c}.folio AS CHAR), '#', '')), '')";
+    $closedTicket = "NULLIF(TRIM(REPLACE(CAST({$c}.ticket_number AS CHAR), '#', '')), '')";
+    return "(
+        ($openSrId IS NOT NULL AND ($openSrId = $closedSrId OR $openSrId = $closedFolio OR $openSrId = $closedTicket))
+        OR
+        ($openFolio IS NOT NULL AND ($openFolio = $closedSrId OR $openFolio = $closedFolio OR $openFolio = $closedTicket))
+        OR
+        ($openTicket IS NOT NULL AND ($openTicket = $closedSrId OR $openTicket = $closedFolio OR $openTicket = $closedTicket))
+    )";
+}
+
+/**
+ * Un pendiente (o) ya está cubierto por un cobro (c) aunque SR haya generado otro sr_ticket_id
+ * (p. ej. tempcheques vs cheques): identidad cruzada O huella mesa+total+comensales+mismo día operativo.
+ */
+function getSrSalePendingSupersededByCollectedMatchSql(string $oAlias = 'o', string $cAlias = 'c'): string {
+    $o = $oAlias;
+    $c = $cAlias;
+    $ident = getSrSaleTicketIdentityMatchSql($o, $c);
+    $sameOpDay = "DATE(DATE_SUB({$c}.sale_datetime, INTERVAL 8 HOUR)) = DATE(DATE_SUB({$o}.sale_datetime, INTERVAL 8 HOUR))";
+    $sameTable = "(TRIM(COALESCE({$o}.table_number,'')) <> '' AND TRIM(COALESCE({$o}.table_number,'')) = TRIM(COALESCE({$c}.table_number,'')))";
+    $sameWaiter = "(TRIM(COALESCE({$o}.waiter_name,'')) <> '' AND TRIM(COALESCE({$o}.waiter_name,'')) = TRIM(COALESCE({$c}.waiter_name,'')))";
+    $weak = "(
+        {$sameOpDay}
+        AND ABS(COALESCE({$o}.total,0) - COALESCE({$c}.total,0)) <= 0.02
+        AND COALESCE({$o}.total,0) > 0.005
+        AND ({$sameTable} OR {$sameWaiter})
+        AND TIMESTAMPDIFF(MINUTE, {$o}.sale_datetime, {$c}.sale_datetime) BETWEEN -180 AND 4320
+    )";
+    return "((( {$ident} ) AND ({$c}.sale_datetime >= {$o}.sale_datetime)) OR ({$weak}))";
+}
+
 function getStatusCondition($statusFilter) {
     // Normalizar variantes reales que llegan desde sincronización
     // open: open, abierto, pending
     // closed: closed, cerrado, cobrado, pagado, paid
     // cancelled: cancelled, canceled, cancelado
     if ($statusFilter === 'open') {
-        return "AND LOWER(COALESCE(status,'')) IN ('open','abierto','pending')";
+        return 'AND ' . getUncollectedPendingSql();
     }
     if ($statusFilter === 'closed') {
-        return "AND LOWER(COALESCE(status,'')) IN ('closed','cerrado','cobrado','pagado','paid')";
+        return 'AND ' . getCollectedSaleSql();
     }
     // 'all' = abiertos + cerrados (excluye cancelados)
-    return "AND LOWER(COALESCE(status,'')) NOT IN ('cancelled','canceled','cancelado')";
+    return 'AND NOT (' . getCancelledStatusSql() . ')';
 }
 
-function getCancellations($pdo, $start = null, $end = null, $limit = 50) {
+function getCancellations($pdo, $start = null, $end = null, $limit = null) {
     try {
         if ($start && $end) {
             $sql = "SELECT ticket_number, amount, user_name, reason, cancel_date
                     FROM sr_cancellations
                     WHERE cancel_date BETWEEN ? AND ?
-                    ORDER BY cancel_date DESC
-                    LIMIT ?";
+                    ORDER BY cancel_date DESC";
+            $params = [$start, $end];
+            if ($limit !== null && (int)$limit > 0) {
+                $sql .= ' LIMIT ?';
+                $params[] = (int)$limit;
+            }
             $stmt = $pdo->prepare($sql);
-            $stmt->execute([$start, $end, $limit]);
+            $stmt->execute($params);
         } else {
             $sql = "SELECT ticket_number, amount, user_name, reason, cancel_date
                     FROM sr_cancellations
-                    ORDER BY cancel_date DESC
-                    LIMIT ?";
+                    ORDER BY cancel_date DESC";
+            $params = [];
+            if ($limit !== null && (int)$limit > 0) {
+                $sql .= ' LIMIT ?';
+                $params[] = (int)$limit;
+            }
             $stmt = $pdo->prepare($sql);
-            $stmt->execute([$limit]);
+            $stmt->execute($params);
         }
         $results = $stmt->fetchAll(PDO::FETCH_ASSOC);
         return array_map(function($r) {
@@ -302,35 +611,29 @@ function getCancellations($pdo, $start = null, $end = null, $limit = 50) {
 }
 
 function getOpenStats($pdo, $todayStart, $todayEnd) {
-    $ticketKeyExpr = "COALESCE(
-        NULLIF(TRIM(REPLACE(CAST(sr_ticket_id AS CHAR), '#', '')), ''),
-        NULLIF(TRIM(REPLACE(CAST(folio AS CHAR), '#', '')), ''),
-        NULLIF(TRIM(REPLACE(CAST(ticket_number AS CHAR), '#', '')), '')
-    )";
+    $openSrId = "NULLIF(TRIM(REPLACE(CAST(o.sr_ticket_id AS CHAR), '#', '')), '')";
+    $openFolio = "NULLIF(TRIM(REPLACE(CAST(o.folio AS CHAR), '#', '')), '')";
+    $openTicket = "NULLIF(TRIM(REPLACE(CAST(o.ticket_number AS CHAR), '#', '')), '')";
+    $supersedes = getSrSalePendingSupersededByCollectedMatchSql('o', 'c');
     $sql = "SELECT COUNT(*) as total_checks, 
                    COALESCE(SUM(o.total), 0) as total_sales,
                    COALESCE(SUM(COALESCE(o.tip, 0)), 0) as total_tips,
                    COALESCE(AVG(o.total), 0) as average_ticket, 
                    COALESCE(SUM(o.covers), 0) as total_covers
             FROM sr_sales o
-            WHERE LOWER(COALESCE(o.status,'')) IN ('open','abierto','pending')
+            WHERE " . getUncollectedPendingSql('o') . "
               AND o.sale_datetime BETWEEN ? AND ?
               AND (
-                ($ticketKeyExpr) IS NULL
+                ($openSrId IS NULL AND $openFolio IS NULL AND $openTicket IS NULL)
                 OR NOT EXISTS (
                   SELECT 1
                   FROM sr_sales c
-                  WHERE LOWER(COALESCE(c.status,'')) IN ('closed','cerrado','cobrado','pagado','paid')
-                    AND c.sale_datetime BETWEEN ? AND ?
-                    AND COALESCE(
-                      NULLIF(TRIM(REPLACE(CAST(c.sr_ticket_id AS CHAR), '#', '')), ''),
-                      NULLIF(TRIM(REPLACE(CAST(c.folio AS CHAR), '#', '')), ''),
-                      NULLIF(TRIM(REPLACE(CAST(c.ticket_number AS CHAR), '#', '')), '')
-                    ) = ($ticketKeyExpr)
+                  WHERE " . getCollectedSaleSql('c') . "
+                    AND ($supersedes)
                 )
               )";
     $stmt = $pdo->prepare($sql);
-    $stmt->execute([$todayStart, $todayEnd, $todayStart, $todayEnd]);
+    $stmt->execute([$todayStart, $todayEnd]);
     $result = $stmt->fetch(PDO::FETCH_ASSOC);
     return [
         'total' => floatval($result['total_sales']),
@@ -342,35 +645,29 @@ function getOpenStats($pdo, $todayStart, $todayEnd) {
 }
 
 function getHistoricalOpenStats($pdo, $todayStart) {
-    $ticketKeyExpr = "COALESCE(
-        NULLIF(TRIM(REPLACE(CAST(sr_ticket_id AS CHAR), '#', '')), ''),
-        NULLIF(TRIM(REPLACE(CAST(folio AS CHAR), '#', '')), ''),
-        NULLIF(TRIM(REPLACE(CAST(ticket_number AS CHAR), '#', '')), '')
-    )";
+    $openSrId = "NULLIF(TRIM(REPLACE(CAST(o.sr_ticket_id AS CHAR), '#', '')), '')";
+    $openFolio = "NULLIF(TRIM(REPLACE(CAST(o.folio AS CHAR), '#', '')), '')";
+    $openTicket = "NULLIF(TRIM(REPLACE(CAST(o.ticket_number AS CHAR), '#', '')), '')";
+    $supersedes = getSrSalePendingSupersededByCollectedMatchSql('o', 'c');
     $sql = "SELECT COUNT(*) as total_checks, 
                    COALESCE(SUM(o.total), 0) as total_sales,
                    COALESCE(SUM(COALESCE(o.tip, 0)), 0) as total_tips,
                    COALESCE(AVG(o.total), 0) as average_ticket, 
                    COALESCE(SUM(o.covers), 0) as total_covers
             FROM sr_sales o
-            WHERE LOWER(COALESCE(o.status,'')) IN ('open','abierto','pending')
+            WHERE " . getUncollectedPendingSql('o') . "
               AND o.sale_datetime < ?
               AND (
-                ($ticketKeyExpr) IS NULL
+                ($openSrId IS NULL AND $openFolio IS NULL AND $openTicket IS NULL)
                 OR NOT EXISTS (
                   SELECT 1
                   FROM sr_sales c
-                  WHERE LOWER(COALESCE(c.status,'')) IN ('closed','cerrado','cobrado','pagado','paid')
-                    AND c.sale_datetime < ?
-                    AND COALESCE(
-                      NULLIF(TRIM(REPLACE(CAST(c.sr_ticket_id AS CHAR), '#', '')), ''),
-                      NULLIF(TRIM(REPLACE(CAST(c.folio AS CHAR), '#', '')), ''),
-                      NULLIF(TRIM(REPLACE(CAST(c.ticket_number AS CHAR), '#', '')), '')
-                    ) = ($ticketKeyExpr)
+                  WHERE " . getCollectedSaleSql('c') . "
+                    AND ($supersedes)
                 )
               )";
     $stmt = $pdo->prepare($sql);
-    $stmt->execute([$todayStart, $todayStart]);
+    $stmt->execute([$todayStart]);
     $result = $stmt->fetch(PDO::FETCH_ASSOC);
     return [
         'total' => floatval($result['total_sales']),
@@ -381,7 +678,7 @@ function getHistoricalOpenStats($pdo, $todayStart) {
     ];
 }
 
-function getSalesStats($pdo, $start, $end) {
+function getSalesStats($pdo, $start, $end, bool $includeOpen = true) {
     // Replica exacta del reporte SoftRestaurant "Ventas por día sin impuestos":
     // - TOTAL CON IMPUESTOS = SUM(total) donde pagado=1, cancelado=0, NO cortesía
     // - Cortesía = ticket donde discount >= (subtotal + tax) → total cobrado = 0 o casi 0
@@ -420,23 +717,46 @@ function getSalesStats($pdo, $start, $end) {
                 COALESCE(SUM(COALESCE(cash_amount,0)+COALESCE(card_amount,0)+COALESCE(voucher_amount,0)+COALESCE(other_amount,0)), 0) as total_collected
             FROM sr_sales
             WHERE sale_datetime BETWEEN ? AND ?
-              AND status = 'closed'";
+              AND NOT (" . getCancelledStatusSql() . ")
+              AND " . getCollectedSaleSql();
 
     $stmt = $pdo->prepare($sql);
     $stmt->execute([$start, $end]);
     $result = $stmt->fetch(PDO::FETCH_ASSOC);
 
-    // Cancelados
-    $stmtC = $pdo->prepare("SELECT COUNT(*) as n, COALESCE(SUM(total),0) as amt, COALESCE(SUM(tip),0) as tips
-                             FROM sr_sales WHERE sale_datetime BETWEEN ? AND ? AND status='cancelled'");
+    // Cancelados (misma familia de valores que el resto de la API)
+    $stmtC = $pdo->prepare(
+        'SELECT COUNT(*) as n, COALESCE(SUM(total),0) as amt, COALESCE(SUM(tip),0) as tips
+         FROM sr_sales WHERE sale_datetime BETWEEN ? AND ? AND ' . getCancelledStatusSql(),
+    );
     $stmtC->execute([$start, $end]);
     $cancelled = $stmtC->fetch(PDO::FETCH_ASSOC);
 
-    // Abiertos
-    $stmtO = $pdo->prepare("SELECT COUNT(*) as n, COALESCE(SUM(total),0) as amt
-                             FROM sr_sales WHERE sale_datetime BETWEEN ? AND ? AND status='open'");
-    $stmtO->execute([$start, $end]);
-    $open = $stmtO->fetch(PDO::FETCH_ASSOC);
+    $open = ['n' => 0, 'amt' => 0];
+    if ($includeOpen) {
+        // Abiertos / en curso: excluir tickets que ya tienen contraparte cobrada.
+        $openSrId = "NULLIF(TRIM(REPLACE(CAST(o.sr_ticket_id AS CHAR), '#', '')), '')";
+        $openFolio = "NULLIF(TRIM(REPLACE(CAST(o.folio AS CHAR), '#', '')), '')";
+        $openTicket = "NULLIF(TRIM(REPLACE(CAST(o.ticket_number AS CHAR), '#', '')), '')";
+        $supersedes = getSrSalePendingSupersededByCollectedMatchSql('o', 'c');
+        $stmtO = $pdo->prepare(
+            'SELECT COUNT(*) as n, COALESCE(SUM(o.total),0) as amt
+             FROM sr_sales o
+             WHERE o.sale_datetime BETWEEN ? AND ?
+               AND ' . getUncollectedPendingSql('o') . '
+               AND (
+                 (' . $openSrId . ' IS NULL AND ' . $openFolio . ' IS NULL AND ' . $openTicket . ' IS NULL)
+                 OR NOT EXISTS (
+                    SELECT 1
+                    FROM sr_sales c
+                    WHERE ' . getCollectedSaleSql('c') . '
+                      AND (' . $supersedes . ')
+                 )
+               )',
+        );
+        $stmtO->execute([$start, $end]);
+        $open = $stmtO->fetch(PDO::FETCH_ASSOC);
+    }
 
     return [
         'total'           => floatval($result['net_sales']),      // TOTAL CON IMPUESTOS (igual que SR)
@@ -463,7 +783,7 @@ function getSalesStats($pdo, $start, $end) {
     ];
 }
 
-function getPeriodComparison($pdo, $start, $end) {
+function getPeriodComparison($pdo, $start, $end, bool $includeOpen = false) {
     $startTs = strtotime($start);
     $endTs = strtotime($end);
 
@@ -475,8 +795,8 @@ function getPeriodComparison($pdo, $start, $end) {
     $prevEndTs = $startTs - 1;
     $prevStartTs = $prevEndTs - ($durationSeconds - 1);
 
-    $current = getSalesStats($pdo, date('Y-m-d H:i:s', $startTs), date('Y-m-d H:i:s', $endTs));
-    $previous = getSalesStats($pdo, date('Y-m-d H:i:s', $prevStartTs), date('Y-m-d H:i:s', $prevEndTs));
+    $current = getSalesStats($pdo, date('Y-m-d H:i:s', $startTs), date('Y-m-d H:i:s', $endTs), $includeOpen);
+    $previous = getSalesStats($pdo, date('Y-m-d H:i:s', $prevStartTs), date('Y-m-d H:i:s', $prevEndTs), $includeOpen);
 
     $currentTotal = floatval($current['total'] ?? 0);
     $previousTotal = floatval($previous['total'] ?? 0);
@@ -498,8 +818,9 @@ function getPeriodComparison($pdo, $start, $end) {
     ];
 }
 
-function getSales($pdo, $start, $end, $statusFilter = 'closed') {
+function getSales($pdo, $start, $end, $statusFilter = 'closed', int $rowLimit = 2500) {
     $statusCond = getStatusCondition($statusFilter);
+    $lim = max(100, min(5000, $rowLimit));
     $sql = "SELECT 
                 sr_ticket_id,
                 folio,
@@ -515,12 +836,12 @@ function getSales($pdo, $start, $end, $statusFilter = 'closed') {
                 table_number,
                 covers,
                 payment_type,
-                status
+                " . getEffectiveStatusSql() . " AS status
             FROM sr_sales
             WHERE sale_datetime BETWEEN ? AND ?
               $statusCond
             ORDER BY sale_datetime DESC
-            LIMIT 100";
+            LIMIT " . (int)$lim;
     
     $stmt = $pdo->prepare($sql);
     $stmt->execute([$start, $end]);
@@ -597,6 +918,142 @@ function getDailySales($pdo, $start, $end, $statusFilter = 'closed') {
     }, $results);
 }
 
+/**
+ * Desglose diario con split Comida / Bebida.
+ * Intenta categorizar por: sr_ticket_items.category, sr_products.category o sr_sale_items + sr_products JOIN.
+ * Categorías de bebida: contiene "bebida", "drink", "refresco", "cerveza", "cocktail", "coctel", "vino", "licor", "copa", "shot", "café", "te ", "agua", "juice", "jugo", "smoothie", "bar".
+ */
+function getDailySalesWithCategories($pdo, $start, $end, $statusFilter = 'closed') {
+    $statusCond = getStatusCondition($statusFilter);
+    $statusCondS = $statusCond ? str_replace('AND status', 'AND s.status', $statusCond) : '';
+
+    // Bebida keywords (case-insensitive match)
+    $bebidaKeywords = "'bebida','drink','refresco','cerveza','cocktail','coctel','vino','licor','copa','shot','café','cafe','te','agua','juice','jugo','smoothie','bar','mezcal','tequila','whisky','ron','brandy','vodka','gin','margarita','michelada','carajillo','limonada','horchata','soda','sprite','coca'";
+
+    $bebidaRegex = 'bebida|drink|refresco|cerveza|cocktail|coctel|vino|licor|copa|shot|caf[eé]|agua|juice|jugo|smoothie|bar|mezcal|tequila|whisky|ron|brandy|vodka|gin|margarita|michelada|carajillo|limonada|horchata|soda|sprite|coca';
+
+    $results = [];
+    try {
+        // Strategy: sr_ticket_items has category directly; join to sr_sales for date/status
+        $sql = "
+            SELECT
+                DATE(DATE_SUB(s.sale_datetime, INTERVAL 8 HOUR)) AS sale_date,
+                CASE
+                    WHEN LOWER(COALESCE(ti.category, '')) REGEXP '$bebidaRegex'
+                      OR LOWER(COALESCE(ti.product_name, '')) REGEXP '$bebidaRegex'
+                    THEN 'bebida'
+                    ELSE 'comida'
+                END AS tipo,
+                SUM(ti.subtotal) AS total,
+                SUM(ti.qty) AS qty
+            FROM sr_ticket_items ti
+            INNER JOIN sr_sales s ON (
+                REPLACE(TRIM(CAST(ti.folio AS CHAR)), '#', '') = REPLACE(TRIM(CAST(s.folio AS CHAR)), '#', '')
+                OR REPLACE(TRIM(CAST(ti.folio AS CHAR)), '#', '') = REPLACE(TRIM(CAST(s.ticket_number AS CHAR)), '#', '')
+                OR REPLACE(TRIM(CAST(ti.folio AS CHAR)), '#', '') = REPLACE(TRIM(CAST(s.sr_ticket_id AS CHAR)), '#', '')
+            )
+            WHERE s.sale_datetime BETWEEN ? AND ?
+              $statusCondS
+              AND ti.product_name IS NOT NULL AND ti.product_name != ''
+            GROUP BY sale_date, tipo
+            ORDER BY sale_date, tipo
+        ";
+        $stmt = $pdo->prepare($sql);
+        $stmt->execute([$start, $end]);
+        $results = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    } catch (Exception $e) {
+        $results = [];
+    }
+
+    // If sr_ticket_items is empty, try sr_sale_items + sr_products
+    if (empty($results)) {
+        try {
+            $sql = "
+                SELECT
+                    DATE(DATE_SUB(s.sale_datetime, INTERVAL 8 HOUR)) AS sale_date,
+                    CASE
+                        WHEN LOWER(COALESCE(p.category, '')) REGEXP 'bebida|drink|refresco|cerveza|cocktail|coctel|vino|licor|copa|shot|caf[eé]|agua|juice|jugo|smoothie|bar|mezcal|tequila|whisky|ron|brandy|vodka|gin|margarita|michelada|carajillo|limonada|horchata|soda|sprite|coca'
+                        THEN 'bebida'
+                        ELSE 'comida'
+                    END AS tipo,
+                    SUM(si.subtotal) AS total,
+                    SUM(si.quantity) AS qty
+                FROM sr_sale_items si
+                INNER JOIN sr_sales s ON si.sr_ticket_id = s.sr_ticket_id
+                LEFT JOIN sr_products p ON si.product_name = p.product_name
+                WHERE s.sale_datetime BETWEEN ? AND ?
+                  $statusCondS
+                  AND si.product_name IS NOT NULL AND si.product_name != ''
+                GROUP BY sale_date, tipo
+                ORDER BY sale_date, tipo
+            ";
+            $stmt = $pdo->prepare($sql);
+            $stmt->execute([$start, $end]);
+            $results = $stmt->fetchAll(PDO::FETCH_ASSOC);
+        } catch (Exception $e) {
+            $results = [];
+        }
+    }
+
+    // Pivot: group by date, split comida/bebida
+    $daily = [];
+    foreach ($results as $r) {
+        $d = $r['sale_date'];
+        if (!isset($daily[$d])) $daily[$d] = ['date' => $d, 'comida' => 0, 'bebida' => 0, 'total' => 0];
+        $tipo = $r['tipo'] ?? 'comida';
+        $daily[$d][$tipo] += floatval($r['total']);
+        $daily[$d]['total'] += floatval($r['total']);
+    }
+    return array_values($daily);
+}
+
+/**
+ * Obtiene ventas diarias para el mismo rango (mes/día) en múltiples años.
+ * $years = [2026, 2025, 2024, ...], $monthDay format: 'MM-DD' to 'MM-DD'.
+ */
+function getYearOverYearDaily($pdo, $startMD, $endMD, $years, $statusFilter = 'closed') {
+    $shiftHour = 8;
+    $statusCond = getStatusCondition($statusFilter);
+    $result = [];
+
+    foreach ($years as $yr) {
+        $yr = (int)$yr;
+        $s = "$yr-$startMD 0" . $shiftHour . ":00:00";
+        $e = "$yr-$endMD " . sprintf('%02d', $shiftHour) . ":00:00";
+        // end is next day at shift hour
+        $endDate = date('Y-m-d', strtotime("$yr-$endMD") + 86400);
+        $e = "$endDate " . sprintf('%02d', $shiftHour) . ":00:00";
+
+        try {
+            $sql = "SELECT
+                        DATE(DATE_SUB(sale_datetime, INTERVAL $shiftHour HOUR)) AS sale_date,
+                        COUNT(*) AS checks,
+                        SUM(total) AS total
+                    FROM sr_sales
+                    WHERE sale_datetime BETWEEN ? AND ?
+                      $statusCond
+                    GROUP BY sale_date
+                    ORDER BY sale_date";
+            $stmt = $pdo->prepare($sql);
+            $stmt->execute([$s, $e]);
+            $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
+            $yearData = [];
+            foreach ($rows as $r) {
+                $yearData[] = [
+                    'date' => $r['sale_date'],
+                    'day' => date('d', strtotime($r['sale_date'])),
+                    'checks' => intval($r['checks']),
+                    'total' => floatval($r['total']),
+                ];
+            }
+            $result[$yr] = $yearData;
+        } catch (Exception $ex) {
+            $result[$yr] = [];
+        }
+    }
+    return $result;
+}
+
 function getTopProducts($pdo, $start, $end, $statusFilter = 'closed') {
     $cond = getStatusCondition($statusFilter);
     $statusCond = $cond ? str_replace('AND status', 'AND s.status', $cond) : '';
@@ -645,7 +1102,7 @@ function getTopProducts($pdo, $start, $end, $statusFilter = 'closed') {
                   AND si.product_name != ''
                 GROUP BY si.product_name
                 ORDER BY total_qty DESC, total_sales DESC
-                LIMIT 10";
+                LIMIT 150";
         $stmt = $pdo->prepare($sql);
         $stmt->execute([$start, $end]);
         $results = $stmt->fetchAll(PDO::FETCH_ASSOC);
@@ -669,7 +1126,7 @@ function getTopProducts($pdo, $start, $end, $statusFilter = 'closed') {
                       AND si.product_name != ''
                     GROUP BY si.product_name
                     ORDER BY total_qty DESC, total_sales DESC
-                    LIMIT 10";
+                    LIMIT 150";
             $stmt = $pdo->prepare($sql);
             $stmt->execute([$start, $end]);
             $results = $stmt->fetchAll(PDO::FETCH_ASSOC);
@@ -699,7 +1156,7 @@ function getTopProducts($pdo, $start, $end, $statusFilter = 'closed') {
                       AND ti.product_name != ''
                     GROUP BY ti.product_name
                     ORDER BY total_qty DESC, total_sales DESC
-                    LIMIT 10";
+                    LIMIT 150";
             $stmt = $pdo->prepare($sql);
             $stmt->execute([$start, $end]);
             $results = $stmt->fetchAll(PDO::FETCH_ASSOC);
@@ -736,7 +1193,8 @@ function getWaiterPerformance($pdo, $start, $end, $statusFilter = 'closed') {
               $statusCond
               AND waiter_name IS NOT NULL
             GROUP BY waiter_name
-            ORDER BY total DESC";
+            ORDER BY total DESC
+            LIMIT 200";
     
     $stmt = $pdo->prepare($sql);
     $stmt->execute([$start, $end]);
@@ -754,62 +1212,365 @@ function getWaiterPerformance($pdo, $start, $end, $statusFilter = 'closed') {
     }, $results);
 }
 
-function getPaymentMethods($pdo, $start, $end, $statusFilter = 'closed') {
+function sr_cheque_payments_table_exists(PDO $pdo): bool {
+    try {
+        $r = $pdo->query(
+            "SELECT 1 FROM information_schema.tables
+             WHERE table_schema = DATABASE() AND table_name = 'sr_cheque_payments' LIMIT 1"
+        );
+        return $r && (bool)$r->fetchColumn();
+    } catch (Throwable $e) {
+        return false;
+    }
+}
+
+/**
+ * idformadepago SR estándar: 1 efectivo, 2 tarjeta, 3 vales, resto → otros.
+ * En instalaciones personalizadas SR suele usar otros IDs; si todo cae en "otros"
+ * pero sr_sales tiene cash_amount/card_amount, getPaymentMethods hace fallback.
+ */
+function map_sr_forma_pago_bucket(string $rawId): string {
+    $t = strtolower(trim($rawId));
+    if ($t === 'efectivo' || $t === 'cash' || $t === 'contado') {
+        return 'cash';
+    }
+    if (str_contains($t, 'tarjeta') || str_contains($t, 'card') || $t === 'tc' || $t === 'td') {
+        return 'card';
+    }
+    if (str_contains($t, 'vale') || $t === 'voucher') {
+        return 'voucher';
+    }
+    $v = (float)preg_replace('/[^\d.-]/', '', $rawId);
+    if (abs($v - 1) < 0.05) {
+        return 'cash';
+    }
+    if (abs($v - 2) < 0.05) {
+        return 'card';
+    }
+    if (abs($v - 3) < 0.05) {
+        return 'voucher';
+    }
+
+    return 'other';
+}
+
+function map_payment_line_bucket(string $rawId, string $reference = ''): string {
+    $bucket = map_sr_forma_pago_bucket($rawId);
+    if ($bucket !== 'other') {
+        return $bucket;
+    }
+    $txt = strtolower(trim($rawId . ' ' . $reference));
+    if ($txt === '') {
+        return 'other';
+    }
+    if (str_contains($txt, 'visa') || str_contains($txt, 'master') || str_contains($txt, 'mastercard')
+        || str_contains($txt, 'amex') || str_contains($txt, 'american') || str_contains($txt, 'tarjeta')
+        || str_contains($txt, 'credito') || str_contains($txt, 'debito') || str_contains($txt, 'card')) {
+        return 'card';
+    }
+    if (str_contains($txt, 'efectivo') || str_contains($txt, 'cash') || str_contains($txt, 'contado')) {
+        return 'cash';
+    }
+    if (str_contains($txt, 'vale') || str_contains($txt, 'voucher')) {
+        return 'voucher';
+    }
+    return 'other';
+}
+
+function detect_card_brand(string $rawId, string $reference = ''): ?string {
+    $txt = strtolower(trim($rawId . ' ' . $reference));
+    if ($txt === '') {
+        return null;
+    }
+    if (str_contains($txt, 'master') || str_contains($txt, 'mastercard')) {
+        return 'Mastercard';
+    }
+    if (str_contains($txt, 'visa')) {
+        return 'Visa';
+    }
+    if (str_contains($txt, 'amex') || str_contains($txt, 'american express')) {
+        return 'Amex';
+    }
+    return null;
+}
+
+function aggregate_payment_lines_rows(array $rows): ?array {
+    if (!$rows || count($rows) === 0) {
+        return null;
+    }
+    $agg = [
+        'cash'    => ['v' => 0.0, 'c' => 0],
+        'card'    => ['v' => 0.0, 'c' => 0],
+        'voucher' => ['v' => 0.0, 'c' => 0],
+        'other'   => ['v' => 0.0, 'c' => 0],
+    ];
+    $cardBrands = [];
+    foreach ($rows as $row) {
+        $idf = (string)($row['idf'] ?? '');
+        $ref = (string)($row['ref'] ?? '');
+        $amt = floatval($row['amt'] ?? 0);
+        $cnt = intval($row['cnt'] ?? 0);
+        if ($amt < 0.000001) {
+            continue;
+        }
+        $bucket = map_payment_line_bucket($idf, $ref);
+        $agg[$bucket]['v'] += $amt;
+        $agg[$bucket]['c'] += max($cnt, 1);
+        if ($bucket === 'card') {
+            $brand = detect_card_brand($idf, $ref);
+            if ($brand !== null) {
+                if (!isset($cardBrands[$brand])) {
+                    $cardBrands[$brand] = 0.0;
+                }
+                $cardBrands[$brand] += $amt;
+            }
+        }
+    }
+    $totalAgg = $agg['cash']['v'] + $agg['card']['v'] + $agg['voucher']['v'] + $agg['other']['v'];
+    if ($totalAgg < 0.01) {
+        return null;
+    }
+    arsort($cardBrands);
+    $brands = array_keys($cardBrands);
+    $cardLabel = 'Tarjeta';
+    if (count($brands) > 0) {
+        $top = array_slice($brands, 0, 2);
+        $cardLabel = 'Tarjeta (' . implode(', ', $top) . (count($brands) > 2 ? ' +' . (count($brands) - 2) : '') . ')';
+    }
+    $order = [
+        'cash'    => 'Efectivo',
+        'card'    => $cardLabel,
+        'voucher' => 'Vales',
+        'other'   => 'Transferencia / Otros',
+    ];
+    $methods = [];
+    foreach ($order as $key => $label) {
+        $v = $agg[$key]['v'];
+        $c = $agg[$key]['c'];
+        if ($v > 0.005) {
+            $methods[] = ['name' => $label, 'count' => $c, 'value' => $v];
+        }
+    }
+    return count($methods) > 0 ? $methods : null;
+}
+
+/**
+ * Desglose por líneas chequespagos persistidas (sync). null = no hay tabla o sin datos útiles.
+ */
+function try_payment_methods_from_sr_cheque_payments(PDO $pdo, string $start, string $end, string $statusFilter = 'closed'): ?array {
+    if (!sr_cheque_payments_table_exists($pdo)) {
+        return null;
+    }
     $statusCond = getStatusCondition($statusFilter);
-    
-    // Sumar montos reales de pago — excluir cortesías (total=0, subtotal>0)
+    $join = "REPLACE(TRIM(CAST(s.sr_ticket_id AS CHAR)), '#', '') = REPLACE(TRIM(CAST(p.folio AS CHAR)), '#', '')
+        OR REPLACE(TRIM(CAST(IFNULL(s.folio,'') AS CHAR)), '#', '') = REPLACE(TRIM(CAST(p.folio AS CHAR)), '#', '')
+        OR REPLACE(TRIM(CAST(IFNULL(s.ticket_number,'') AS CHAR)), '#', '') = REPLACE(TRIM(CAST(p.folio AS CHAR)), '#', '')";
+    $sql = "SELECT TRIM(CAST(p.id_forma_pago AS CHAR(64))) AS idf,
+                   TRIM(COALESCE(CAST(p.reference AS CHAR(255)), '')) AS ref,
+                   SUM(p.amount) AS amt,
+                   COUNT(*) AS cnt
+            FROM sr_cheque_payments p
+            INNER JOIN sr_sales s ON ($join)
+            WHERE s.sale_datetime BETWEEN ? AND ?
+              $statusCond
+            GROUP BY TRIM(CAST(p.id_forma_pago AS CHAR(64))), TRIM(COALESCE(CAST(p.reference AS CHAR(255)), ''))";
+    try {
+        $stmt = $pdo->prepare($sql);
+        $stmt->execute([$start, $end]);
+        $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    } catch (Throwable $e) {
+        return null;
+    }
+    return aggregate_payment_lines_rows($rows);
+}
+
+/**
+ * Fallback por datetime de pago cuando el join por folio no encuentra coincidencias.
+ * Útil en ambientes donde folio/sr_ticket_id no empatan 1:1 pero sí hay líneas de cobro con fecha correcta.
+ */
+function try_payment_methods_from_sr_cheque_payments_by_datetime(PDO $pdo, string $start, string $end): ?array {
+    if (!sr_cheque_payments_table_exists($pdo)) {
+        return null;
+    }
+    $sql = "SELECT TRIM(CAST(p.id_forma_pago AS CHAR(64))) AS idf,
+                   TRIM(COALESCE(CAST(p.reference AS CHAR(255)), '')) AS ref,
+                   SUM(p.amount) AS amt,
+                   COUNT(*) AS cnt
+            FROM sr_cheque_payments p
+            WHERE p.payment_datetime BETWEEN ? AND ?
+              AND COALESCE(p.amount,0) > 0.0001
+            GROUP BY TRIM(CAST(p.id_forma_pago AS CHAR(64))), TRIM(COALESCE(CAST(p.reference AS CHAR(255)), ''))";
+    try {
+        $stmt = $pdo->prepare($sql);
+        $stmt->execute([$start, $end]);
+        $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    } catch (Throwable $e) {
+        return null;
+    }
+    return aggregate_payment_lines_rows($rows);
+}
+
+/** Desglose por columnas de sr_sales (sync) + imputación por payment_type. */
+function getPaymentMethodsFromSrSalesColumns(PDO $pdo, string $start, string $end, string $statusFilter = 'closed'): array
+{
+    $statusCond = getStatusCondition($statusFilter);
+    $nc = 'NOT (total=0 AND COALESCE(subtotal,0)>0)';
+    $pt = 'LOWER(TRIM(COALESCE(payment_type,\'\')))';
+    // SR / BD locales usan enum español (efectivo, tarjeta, transferencia, otro) además de inglés.
+    $ptCash = "({$pt} IN ('cash','efectivo','contado'))";
+    $ptCard = "({$pt} IN ('card','tarjeta','tc','td','credito','debito'))";
+    $ptVoucher = "({$pt} IN ('voucher','vale','vales'))";
+    $ptTransfer = "({$pt} IN ('transfer','otros','transferencia','otro'))";
+    // Sin columnas de pago: imputar desde total si status cerrado O si SR ya dejó forma de pago distinta de pending
+    // Paréntesis: ( split AND ( status OR ( total AND ( ptCash OR … ) ) ) ) — 4 cierres tras el grupo de pt*.
+    $imputeWhen = '(' . getPaymentSplitZeroOrEmptySql() . ' AND ('
+        . getClosedStatusSql()
+        . " OR (COALESCE(total,0) > 0.005 AND ({$ptCash} OR {$ptCard} OR {$ptVoucher} OR {$ptTransfer}))))";
+    $imCash = "(($nc) AND (COALESCE(cash_amount,0) > 0.005 OR ($imputeWhen AND {$ptCash})))";
+    $imCard = "(($nc) AND (COALESCE(card_amount,0) > 0.005 OR ($imputeWhen AND {$ptCard})))";
+    $imVoucher = "(($nc) AND (COALESCE(voucher_amount,0) > 0.005 OR ($imputeWhen AND {$ptVoucher})))";
+    // No contar other_amount como "otros" si el ticket es efectivo/tarjeta/vale (evita doble conteo con columnas en 0).
+    $imOther = "(($nc) AND (
+        (COALESCE(other_amount,0) > 0.005 AND NOT ({$ptCash}) AND NOT ({$ptCard}) AND NOT ({$ptVoucher}))
+        OR ($imputeWhen AND {$ptTransfer})
+    ))";
+
     $sql = "SELECT 
-                COALESCE(SUM(CASE WHEN NOT (total=0 AND COALESCE(subtotal,0)>0) THEN cash_amount ELSE 0 END), 0) as cash_total,
-                COALESCE(SUM(CASE WHEN NOT (total=0 AND COALESCE(subtotal,0)>0) THEN card_amount ELSE 0 END), 0) as card_total,
-                COALESCE(SUM(CASE WHEN NOT (total=0 AND COALESCE(subtotal,0)>0) THEN voucher_amount ELSE 0 END), 0) as voucher_total,
-                COALESCE(SUM(CASE WHEN NOT (total=0 AND COALESCE(subtotal,0)>0) THEN other_amount ELSE 0 END), 0) as other_total,
-                COUNT(CASE WHEN cash_amount > 0 AND NOT (total=0 AND COALESCE(subtotal,0)>0) THEN 1 END) as cash_count,
-                COUNT(CASE WHEN card_amount > 0 AND NOT (total=0 AND COALESCE(subtotal,0)>0) THEN 1 END) as card_count,
-                COUNT(CASE WHEN voucher_amount > 0 AND NOT (total=0 AND COALESCE(subtotal,0)>0) THEN 1 END) as voucher_count,
-                COUNT(CASE WHEN other_amount > 0 AND NOT (total=0 AND COALESCE(subtotal,0)>0) THEN 1 END) as other_count
+                COALESCE(SUM(CASE WHEN $nc THEN GREATEST(COALESCE(cash_amount,0), CASE WHEN $imputeWhen AND {$ptCash} THEN COALESCE(total,0) ELSE 0 END) ELSE 0 END), 0) as cash_total,
+                COALESCE(SUM(CASE WHEN $nc THEN GREATEST(COALESCE(card_amount,0), CASE WHEN $imputeWhen AND {$ptCard} THEN COALESCE(total,0) ELSE 0 END) ELSE 0 END), 0) as card_total,
+                COALESCE(SUM(CASE WHEN $nc THEN GREATEST(COALESCE(voucher_amount,0), CASE WHEN $imputeWhen AND {$ptVoucher} THEN COALESCE(total,0) ELSE 0 END) ELSE 0 END), 0) as voucher_total,
+                COALESCE(SUM(CASE WHEN $nc THEN GREATEST(COALESCE(other_amount,0), CASE WHEN $imputeWhen AND {$ptTransfer} THEN COALESCE(total,0) ELSE 0 END) ELSE 0 END), 0) as other_total,
+                COUNT(CASE WHEN $imCash THEN 1 END) as cash_count,
+                COUNT(CASE WHEN $imCard THEN 1 END) as card_count,
+                COUNT(CASE WHEN $imVoucher THEN 1 END) as voucher_count,
+                COUNT(CASE WHEN $imOther THEN 1 END) as other_count
             FROM sr_sales
             WHERE sale_datetime BETWEEN ? AND ?
               $statusCond";
-    
+
     $stmt = $pdo->prepare($sql);
     $stmt->execute([$start, $end]);
     $result = $stmt->fetch(PDO::FETCH_ASSOC);
-    
+
     $methods = [];
-    
+
     if ($result['cash_total'] > 0) {
         $methods[] = [
             'name' => 'Efectivo',
             'count' => intval($result['cash_count']),
-            'value' => floatval($result['cash_total'])
+            'value' => floatval($result['cash_total']),
         ];
     }
-    
+
     if ($result['card_total'] > 0) {
         $methods[] = [
             'name' => 'Tarjeta',
             'count' => intval($result['card_count']),
-            'value' => floatval($result['card_total'])
+            'value' => floatval($result['card_total']),
         ];
     }
-    
+
     if ($result['voucher_total'] > 0) {
         $methods[] = [
             'name' => 'Vales',
             'count' => intval($result['voucher_count']),
-            'value' => floatval($result['voucher_total'])
+            'value' => floatval($result['voucher_total']),
         ];
     }
-    
+
     if ($result['other_total'] > 0) {
         $methods[] = [
             'name' => 'Transferencia / Otros',
             'count' => intval($result['other_count']),
-            'value' => floatval($result['other_total'])
+            'value' => floatval($result['other_total']),
         ];
     }
-    
+
+    if (count($methods) === 0) {
+        $stmtFb = $pdo->prepare(
+            'SELECT COUNT(*) AS n, COALESCE(SUM(total), 0) AS v FROM sr_sales
+             WHERE sale_datetime BETWEEN ? AND ?
+               AND ' . getCollectedSaleSql() . '
+               AND NOT (total = 0 AND COALESCE(subtotal, 0) > 0)'
+        );
+        $stmtFb->execute([$start, $end]);
+        $fb = $stmtFb->fetch(PDO::FETCH_ASSOC);
+        $v = floatval($fb['v'] ?? 0);
+        if ($v > 0.005) {
+            $methods[] = [
+                'name' => 'Sin desglose en POS (cobros sin detalle)',
+                'count' => intval($fb['n'] ?? 0),
+                'value' => $v,
+            ];
+        }
+    }
+
     return $methods;
+}
+
+function payment_methods_list_has_cash_or_card(array $methods): bool
+{
+    foreach ($methods as $m) {
+        $n = $m['name'] ?? '';
+        if (($n === 'Efectivo' || $n === 'Tarjeta') && floatval($m['value'] ?? 0) > 0.005) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+function getPaymentMethods($pdo, $start, $end, $statusFilter = 'closed', bool $includePaymentLines = true) {
+    $fromCols = getPaymentMethodsFromSrSalesColumns($pdo, $start, $end, $statusFilter);
+    // Fuente principal: columnas ya normalizadas en sr_sales.
+    // Las líneas de sr_cheque_payments pueden venir incompletas en algunos entornos.
+    if (!$includePaymentLines || count($fromCols) > 0) {
+        return $fromCols;
+    }
+    $fromLines = try_payment_methods_from_sr_cheque_payments($pdo, $start, $end, $statusFilter);
+    if ($fromLines === null) {
+        $fromLinesByDt = try_payment_methods_from_sr_cheque_payments_by_datetime($pdo, $start, $end);
+        return $fromLinesByDt ?? $fromCols;
+    }
+
+    return $fromLines;
+}
+
+function getCardPaymentBreakdown(PDO $pdo, string $start, string $end): array
+{
+    $sumSplit = '(COALESCE(cash_amount,0)+COALESCE(card_amount,0)+COALESCE(voucher_amount,0)+COALESCE(other_amount,0))';
+    $pt = 'LOWER(TRIM(COALESCE(payment_type,\'\')))';
+    $sql = "SELECT
+                COALESCE(SUM(CASE WHEN x.card_ratio > 0.0001 THEN x.card_amount ELSE 0 END), 0) AS card_total,
+                COALESCE(SUM(CASE WHEN x.card_ratio > 0.0001 THEN x.tip * x.card_ratio ELSE 0 END), 0) AS card_tip,
+                COUNT(CASE WHEN x.card_ratio > 0.0001 THEN 1 END) AS card_checks
+            FROM (
+                SELECT
+                    COALESCE(card_amount,0) AS card_amount,
+                    COALESCE(tip,0) AS tip,
+                    CASE
+                        WHEN $sumSplit > 0.005 THEN COALESCE(card_amount,0) / $sumSplit
+                        WHEN ($pt IN ('card','tarjeta','tc','td','credito','debito') AND COALESCE(total,0) > 0.005) THEN 1
+                        ELSE 0
+                    END AS card_ratio
+                FROM sr_sales
+                WHERE sale_datetime BETWEEN ? AND ?
+                  AND NOT (" . getCancelledStatusSql() . ")
+                  AND " . getCollectedSaleSql() . "
+                  AND NOT (total = 0 AND COALESCE(subtotal,0) > 0)
+            ) x";
+    $stmt = $pdo->prepare($sql);
+    $stmt->execute([$start, $end]);
+    $r = $stmt->fetch(PDO::FETCH_ASSOC) ?: [];
+    $cardTotal = floatval($r['card_total'] ?? 0);
+    $cardTip = floatval($r['card_tip'] ?? 0);
+    $cardSales = max(0.0, $cardTotal - $cardTip);
+    return [
+        'card_total' => round($cardTotal, 2),
+        'card_sales' => round($cardSales, 2),
+        'card_tip' => round($cardTip, 2),
+        'card_checks' => intval($r['card_checks'] ?? 0),
+    ];
 }
 
 function getDetailedAnalytics($pdo, $start, $end, $statusFilter = 'closed') {
@@ -859,7 +1620,7 @@ function getDetailedAnalytics($pdo, $start, $end, $statusFilter = 'closed') {
                   AND i.product_name != ''
                 GROUP BY i.product_name
                 ORDER BY total_qty DESC
-                LIMIT 5";
+                LIMIT 80";
         $stmt = $pdo->prepare($sql);
         $stmt->execute([$start, $end]);
         $topProducts = $stmt->fetchAll(PDO::FETCH_ASSOC);
@@ -876,7 +1637,7 @@ function getDetailedAnalytics($pdo, $start, $end, $statusFilter = 'closed') {
                    AND i.product_name != ''
                  GROUP BY i.product_name
                  ORDER BY total_qty ASC
-                 LIMIT 5";
+                 LIMIT 80";
         $stmt2 = $pdo->prepare($sql2);
         $stmt2->execute([$start, $end]);
         $bottomProducts = $stmt2->fetchAll(PDO::FETCH_ASSOC);
@@ -903,7 +1664,7 @@ function getDetailedAnalytics($pdo, $start, $end, $statusFilter = 'closed') {
                        OR i.product_name LIKE '%JUGO%')
                 GROUP BY i.product_name
                 ORDER BY total_qty DESC
-                LIMIT 5";
+                LIMIT 50";
         $stmt = $pdo->prepare($sql);
         $stmt->execute([$start, $end]);
         $topBeverages = $stmt->fetchAll(PDO::FETCH_ASSOC);
@@ -923,7 +1684,7 @@ function getDetailedAnalytics($pdo, $start, $end, $statusFilter = 'closed') {
                         OR i.product_name LIKE '%JUGO%')
                  GROUP BY i.product_name
                  ORDER BY total_qty ASC
-                 LIMIT 5";
+                 LIMIT 50";
         $stmt2 = $pdo->prepare($sql2);
         $stmt2->execute([$start, $end]);
         $bottomBeverages = $stmt2->fetchAll(PDO::FETCH_ASSOC);
@@ -942,10 +1703,10 @@ function getDetailedAnalytics($pdo, $start, $end, $statusFilter = 'closed') {
     try {
         $sql = "SELECT 
                     COALESCE(SUM(tip), 0) as total_tips,
-                    COALESCE(SUM(CASE WHEN status = 'closed' THEN tip ELSE 0 END), 0) as paid_tips,
-                    COALESCE(SUM(CASE WHEN status = 'open' THEN tip ELSE 0 END), 0) as unpaid_tips,
-                    COUNT(CASE WHEN status = 'closed' AND tip > 0 THEN 1 END) as paid_count,
-                    COUNT(CASE WHEN status = 'open' AND tip > 0 THEN 1 END) as unpaid_count
+                    COALESCE(SUM(CASE WHEN " . getCollectedSaleSql() . " THEN tip ELSE 0 END), 0) as paid_tips,
+                    COALESCE(SUM(CASE WHEN " . getUncollectedPendingSql() . " THEN tip ELSE 0 END), 0) as unpaid_tips,
+                    COUNT(CASE WHEN " . getCollectedSaleSql() . " AND tip > 0 THEN 1 END) as paid_count,
+                    COUNT(CASE WHEN " . getUncollectedPendingSql() . " AND tip > 0 THEN 1 END) as unpaid_count
                 FROM sr_sales
                 WHERE sale_datetime BETWEEN ? AND ?
                   AND tip > 0";
@@ -976,7 +1737,7 @@ function getDetailedAnalytics($pdo, $start, $end, $statusFilter = 'closed') {
                 WHERE sale_datetime BETWEEN ? AND ?
                   $statusCond
                 GROUP BY HOUR(sale_datetime)
-                ORDER BY tickets DESC
+                ORDER BY sales DESC, tickets DESC
                 LIMIT 1";
         $stmt = $pdo->prepare($sql);
         $stmt->execute([$start, $end]);
@@ -999,7 +1760,7 @@ function getDetailedAnalytics($pdo, $start, $end, $statusFilter = 'closed') {
                 FROM sr_cancellations
                 WHERE cancel_date BETWEEN ? AND ?
                 ORDER BY cancel_date DESC
-                LIMIT 20";
+                LIMIT 300";
         $stmt = $pdo->prepare($sql);
         $stmt->execute([$start, $end]);
         $periodCancellations = $stmt->fetchAll(PDO::FETCH_ASSOC);
@@ -1124,10 +1885,5 @@ function getDetailedAnalytics($pdo, $start, $end, $statusFilter = 'closed') {
         'peak_hour' => $peakHour,
         'cancellations' => $periodCancellations,
         'payment_breakdown' => $paymentBreakdown,
-        'debug' => [
-            'sql_top' => $sql,
-            'params' => [$start, $end],
-            'status_cond' => $statusCond
-        ]
     ];
 }

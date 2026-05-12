@@ -3,15 +3,17 @@
  * Script para verificar tickets de hoy en SoftRestaurant
  */
 
-$serverName = "100.84.227.35\NATIONALSOFT";
-$database = "softrestaurant8pro";
-$username = "usuario_web";
-$password = "Bon1f4c10s2024!";
+$dsn = "sqlsrv:Server=100.84.227.35\\NATIONALSOFT;Database=softrestaurant8pro;Encrypt=false;TrustServerCertificate=true";
+$user = 'usuario_web';
+$pass = getenv('SR_PASS') ?: '';
+
+if ($pass === '') {
+    fwrite(STDERR, "SR_PASS debe estar definido en el entorno (sin commitear el valor).\n");
+    exit(1);
+}
 
 try {
-    $conn = new PDO("sqlsrv:server=$serverName;Database=$database", $username, $password);
-    $conn->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
-    
+    $conn = new PDO($dsn, $user, $pass, [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION]);
     echo "=== TICKETS DE HOY (2026-04-08) ===\n\n";
     
     $sql = "SELECT TOP 20

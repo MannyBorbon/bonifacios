@@ -81,18 +81,22 @@ try {
     }
 
     $publicPath = '/uploads/reservation-deposits/' . $safeName;
+    // Comprobante: columna `deposit_status` (enum), no `status` de la reserva (ver docs/repositorio-esquemas-datos.md).
     $updateSql = "UPDATE special_reservations
-                  SET status = 'uploaded',
+                  SET deposit_status = 'uploaded',
+                      deposit_screenshot = ?,
+                      deposit_uploaded_at = NOW(),
                       notes = CONCAT(IFNULL(notes, ''), '\nComprobante: ', ?),
                       updated_at = NOW()
                   WHERE id = ?";
     $updateStmt = $conn->prepare($updateSql);
-    $updateStmt->bind_param('si', $publicPath, $reservationId);
+    $updateStmt->bind_param('ssi', $publicPath, $publicPath, $reservationId);
     $updateStmt->execute();
 
     echo json_encode([
         'success' => true,
         'message' => 'Comprobante enviado correctamente',
+        'deposit_status' => 'uploaded',
         'deposit_screenshot' => $publicPath
     ]);
 } catch (Throwable $e) {

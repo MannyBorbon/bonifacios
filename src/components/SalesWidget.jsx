@@ -13,26 +13,47 @@ export default function SalesWidget() {
 
   useEffect(() => {
     loadData();
-    const interval = setInterval(() => {
+    const tick = () => {
+      if (typeof document !== 'undefined' && document.hidden) {
+        return;
+      }
       loadData();
       setLastUpdate(new Date());
-    }, 30000); // Actualizar cada 30 segundos
-    return () => clearInterval(interval);
+    };
+    const interval = setInterval(tick, 30000);
+    const onVis = () => {
+      if (typeof document !== 'undefined' && !document.hidden) {
+        loadData();
+        setLastUpdate(new Date());
+      }
+    };
+    if (typeof document !== 'undefined') {
+      document.addEventListener('visibilitychange', onVis);
+    }
+    return () => {
+      clearInterval(interval);
+      if (typeof document !== 'undefined') {
+        document.removeEventListener('visibilitychange', onVis);
+      }
+    };
   }, []);
 
   const loadData = async () => {
     try {
-      const res = await fetch(`${import.meta.env.VITE_API_URL}/softrestaurant/sales.php?range=today`, {
-        credentials: 'include'
-      });
+      const res = await fetch(
+        `${import.meta.env.VITE_API_URL}/softrestaurant/sales.php?range=today&sections=core`,
+        { credentials: 'include' }
+      );
       const data = await res.json();
       
       if (data.success) {
-        const todayStats = data.stats.today;
+        const emptyStats = { total: 0, checks: 0, average: 0, covers: 0 };
+        const todayStats = data?.stats?.today || data?.current_stats || emptyStats;
+        const yesterdayStats = data?.stats?.yesterday || emptyStats;
         const openAmount = data.open_stats?.total || 0;
         setStats({
-          today: { ...todayStats, total: (todayStats.total || 0) + openAmount, openAmount },
-          yesterday: data.stats.yesterday
+          today: { ...emptyStats, ...todayStats, total: (todayStats.total || 0) + openAmount, openAmount },
+          yesterday: { ...emptyStats, ...yesterdayStats }
         });
         setHourlyData(data.hourly || []);
       }
@@ -103,7 +124,7 @@ export default function SalesWidget() {
 
       {/* Mini gráfica */}
       <div className="mb-4 h-16">
-        <ResponsiveContainer width="100%" height="100%">
+        <ResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={64}>
           <LineChart data={hourlyData.filter(h => h.total > 0)}>
             <Line 
               type="monotone" 

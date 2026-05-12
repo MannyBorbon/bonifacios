@@ -6,7 +6,7 @@
 
 $dsn  = "sqlsrv:Server=100.84.227.35\\NATIONALSOFT;Database=softrestaurant8pro;Encrypt=false;TrustServerCertificate=true";
 $user = 'usuario_web';
-$pass = 'Filipenses4:8@';
+$pass = getenv('SR_PASS') ?: '';
 
 echo "=== CHECK CHEQUES ABRIL 2025 ===\n\n";
 

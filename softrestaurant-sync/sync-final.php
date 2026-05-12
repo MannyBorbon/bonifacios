@@ -4,7 +4,7 @@
  * BONIFACIOS - Sync FINAL
  * ============================================================
  * Campos verificados en documentacion.md linea 913:
- * - cheques.pagado       (no 'estatus')
+ * - cheques.pagado       (principal; si queda 0 pero hay cobro en efectivo/tarjeta/vales/otros → cerrado vía srChequeIsPaid)
  * - cheques.folio        (PK, usada para JOINs)
  * - cheques.nopersonas   (no 'numpersonas')
  * - cheques.cancelado    (campo separado)
@@ -54,6 +54,91 @@ class SyncFinal {
         }
     }
 
+    /**
+     * Cuenta cobrada en SR: pagado=1, o estatus=1 en esquemas alternos, o desglose de medios de pago > 0.
+     * tempcheques se envía con efectivo/tarjeta en 0 → permanece abierto.
+     */
+    private function srChequeIsPaid(array $r): bool {
+        if (intval($r['cancelado'] ?? 0) !== 0) {
+            return false;
+        }
+        if (intval($r['pagado'] ?? 0) === 1) {
+            return true;
+        }
+        if (isset($r['estatus']) && intval($r['estatus']) === 1) {
+            return true;
+        }
+        $ef = floatval($r['efectivo'] ?? 0);
+        $ta = floatval($r['tarjeta'] ?? 0);
+        $va = floatval($r['vales'] ?? 0);
+        $ot = floatval($r['otros'] ?? 0);
+        return ($ef + $ta + $va + $ot) > 0.0001;
+    }
+
+    /**
+     * Misma lógica que sync-historico: agregación chequespagos + fallback a columnas del cheque.
+     */
+    private function sqlChequespagosAggJoin(): string {
+        $id = 'LOWER(LTRIM(RTRIM(CAST(idformadepago AS NVARCHAR(120)))))';
+        $tryf = 'TRY_CAST(LTRIM(RTRIM(CAST(idformadepago AS NVARCHAR(120)))) AS float)';
+
+        return "LEFT JOIN (
+                            SELECT folio,
+                                SUM(CASE
+                                    WHEN ISNUMERIC(idformadepago) = 1 AND {$tryf} = 1 THEN importe
+                                    WHEN {$id} IN (N'efectivo', N'cash', N'contado') THEN importe
+                                    ELSE 0 END) AS pago_efectivo,
+                                SUM(CASE
+                                    WHEN ISNUMERIC(idformadepago) = 1 AND {$tryf} = 2 THEN importe
+                                    WHEN {$id} IN (N'card', N'tarjeta', N'tc', N'td', N'credito', N'debito')
+                                         OR {$id} LIKE N'%tarjeta%' THEN importe
+                                    ELSE 0 END) AS pago_tarjeta,
+                                SUM(CASE
+                                    WHEN ISNUMERIC(idformadepago) = 1 AND {$tryf} = 3 THEN importe
+                                    WHEN {$id} IN (N'vale', N'vales', N'voucher')
+                                         OR ({$id} LIKE N'%vale%' AND {$id} NOT LIKE N'%tarjeta%') THEN importe
+                                    ELSE 0 END) AS pago_vales,
+                                SUM(CASE
+                                    WHEN (ISNUMERIC(idformadepago) = 1 AND {$tryf} IN (1, 2, 3))
+                                         OR {$id} IN (N'efectivo', N'cash', N'contado', N'card', N'tarjeta', N'tc', N'td', N'credito', N'debito', N'vale', N'vales', N'voucher')
+                                         OR {$id} LIKE N'%tarjeta%'
+                                         OR ({$id} LIKE N'%vale%' AND {$id} NOT LIKE N'%tarjeta%')
+                                    THEN 0
+                                    ELSE importe
+                                END) AS pago_otros
+                            FROM chequespagos
+                            GROUP BY folio
+                        ) p ON p.folio = c.folio";
+    }
+
+    private function sqlMisclassifiedChequespagosCondition(): string {
+        return '(ISNULL(p.pago_efectivo,0)+ISNULL(p.pago_tarjeta,0)+ISNULL(p.pago_vales,0)) < 0.01 AND ISNULL(p.pago_otros,0) > 0.01 AND (ISNULL(c.efectivo,0)+ISNULL(c.tarjeta,0)+ISNULL(c.vales,0)+ISNULL(c.otros,0)) > 0.01';
+    }
+
+    private function sqlEffectiveEfectivoExpr(): string {
+        $c = $this->sqlMisclassifiedChequespagosCondition();
+
+        return "CASE WHEN {$c} THEN ISNULL(c.efectivo,0) ELSE COALESCE(p.pago_efectivo, c.efectivo, 0) END";
+    }
+
+    private function sqlEffectiveTarjetaExpr(): string {
+        $c = $this->sqlMisclassifiedChequespagosCondition();
+
+        return "CASE WHEN {$c} THEN ISNULL(c.tarjeta,0) ELSE COALESCE(p.pago_tarjeta, c.tarjeta, 0) END";
+    }
+
+    private function sqlEffectiveValesExpr(): string {
+        $c = $this->sqlMisclassifiedChequespagosCondition();
+
+        return "CASE WHEN {$c} THEN ISNULL(c.vales,0) ELSE COALESCE(p.pago_vales, c.vales, 0) END";
+    }
+
+    private function sqlEffectiveOtrosExpr(): string {
+        $c = $this->sqlMisclassifiedChequespagosCondition();
+
+        return "CASE WHEN {$c} THEN ISNULL(c.otros,0) ELSE COALESCE(p.pago_otros, c.otros, 0) END";
+    }
+
     public function run(): void {
         while (true) {
             $t = microtime(true);
@@ -68,6 +153,15 @@ class SyncFinal {
                 $this->syncShifts();
                 $this->syncAttendance();
                 $this->syncTicketItems();
+                if (method_exists($this, 'syncPosTableLiveFromSr')) {
+                    try {
+                        $this->syncPosTableLiveFromSr();
+                    } catch (Throwable $e) {
+                        $this->log("[MAPAS] ERROR no bloqueante: " . $e->getMessage());
+                    }
+                } else {
+                    $this->log("[MAPAS] SKIP: método syncPosTableLiveFromSr no definido.");
+                }
                 $this->saveState();
                 $this->conn = null;
             }
@@ -121,27 +215,31 @@ class SyncFinal {
     // Se ejecuta incluso durante la carga historica
     private function syncToday(): void {
         try {
-            $h = (int)date('H');
-            $shiftDate  = ($h < 8) ? date('Y-m-d', strtotime('-1 day')) : date('Y-m-d');
-            $todayStart = $shiftDate . ' 08:00:00';
-            $todayEnd   = date('Y-m-d', strtotime($shiftDate . ' +1 day')) . ' 07:59:59';
-
-            $Y1 = (int)date('Y', strtotime($todayStart));
-            $M1 = (int)date('n', strtotime($todayStart));
-            $D1 = (int)date('j', strtotime($todayStart));
-            $Y2 = (int)date('Y', strtotime($todayEnd));
-            $M2 = (int)date('n', strtotime($todayEnd));
-            $D2 = (int)date('j', strtotime($todayEnd));
-
+            // Turno actual (08:00–07:59) calculado con GETDATE() del SQL Server para evitar
+            // desfases de zona horaria entre el PC del sync y el servidor SQL.
             $dateFilterToday = "
                 (
-                    (YEAR(c.fecha) = $Y1 AND MONTH(c.fecha) = $M1 AND DAY(c.fecha) = $D1
-                     AND DATEPART(HOUR,c.fecha) >= 8)
-                    OR
-                    (YEAR(c.fecha) = $Y2 AND MONTH(c.fecha) = $M2 AND DAY(c.fecha) = $D2
-                     AND DATEPART(HOUR,c.fecha) < 8)
+                    c.fecha >= DATEADD(HOUR, 8, CAST(
+                        CASE
+                            WHEN DATEPART(HOUR, GETDATE()) < 8 THEN DATEADD(DAY,-1, CONVERT(date, GETDATE()))
+                            ELSE CONVERT(date, GETDATE())
+                        END
+                    AS datetime))
+                    AND
+                    c.fecha < DATEADD(HOUR, 8, CAST(
+                        CASE
+                            WHEN DATEPART(HOUR, GETDATE()) < 8 THEN CONVERT(date, GETDATE())
+                            ELSE DATEADD(DAY,1, CONVERT(date, GETDATE()))
+                        END
+                    AS datetime))
                 )
             ";
+
+            $pJoin = $this->sqlChequespagosAggJoin();
+            $eEf = $this->sqlEffectiveEfectivoExpr();
+            $eTa = $this->sqlEffectiveTarjetaExpr();
+            $eVa = $this->sqlEffectiveValesExpr();
+            $eOt = $this->sqlEffectiveOtrosExpr();
 
             $sql = "
                 SELECT
@@ -157,12 +255,13 @@ class SyncFinal {
                     ISNULL(c.propinaincluida,0) AS propinaincluida,
                     c.idmesero, m.nombre AS nombre_mesero,
                     c.nopersonas, c.pagado, c.cancelado,
-                    ISNULL(c.efectivo,0) AS efectivo,
-                    ISNULL(c.tarjeta,0)  AS tarjeta,
-                    ISNULL(c.vales,0)    AS vales,
-                    ISNULL(c.otros,0)    AS otros
+                    {$eEf} AS efectivo,
+                    {$eTa} AS tarjeta,
+                    {$eVa} AS vales,
+                    {$eOt} AS otros
                 FROM cheques c
                 LEFT JOIN meseros m ON c.idmesero = m.idmesero
+                {$pJoin}
                 WHERE c.cancelado = 0
                   AND ($dateFilterToday)
                 ORDER BY c.fecha ASC
@@ -194,7 +293,7 @@ class SyncFinal {
                 $fechaObj = $this->toDatetime($r['fecha']);
                 if (!$fechaObj) continue;
                 $dt     = $fechaObj->format('Y-m-d H:i:s');
-                $isPaid = intval($r['pagado']) === 1;
+                $isPaid = $this->srChequeIsPaid($r);
                 $ef = floatval($r['efectivo']); $ta = floatval($r['tarjeta']);
                 $va = floatval($r['vales']);     $ot = floatval($r['otros']);
                 if (!$isPaid) { $pType = 'pending'; }
@@ -228,8 +327,66 @@ class SyncFinal {
                 $this->sendToAPI('sales', $data);
                 $this->log("[HOY] " . count($data) . " tickets del turno actual sincronizados.");
             }
+            $this->syncChequePaymentLinesForCheques($dateFilterToday);
         } catch (Throwable $e) {
             $this->log("[HOY] ERROR: " . $e->getMessage());
+        }
+    }
+
+    /**
+     * Envía líneas de chequespagos al API (sr_cheque_payments) para desglose Efectivo/Tarjeta en dashboard.
+     * @param string $sqlFilterOnChequeC Condición SQL sobre c (incluye prefijo c.) ya entre paréntesis o expresión completa.
+     */
+    private function syncChequePaymentLinesForCheques(string $sqlFilterOnChequeC): void {
+        try {
+            if (!$this->conn) {
+                return;
+            }
+            $sql = "
+                SELECT
+                    p.folio,
+                    CAST(p.idformadepago AS VARCHAR(20)) AS idformadepago,
+                    ISNULL(p.importe, 0) AS importe,
+                    CAST(ISNULL(p.referencia, '') AS VARCHAR(250)) AS referencia,
+                    c.fecha AS cheque_fecha,
+                    ROW_NUMBER() OVER (PARTITION BY p.folio ORDER BY p.idformadepago, p.importe) AS line_rn
+                FROM chequespagos p
+                INNER JOIN cheques c ON c.folio = p.folio AND c.cancelado = 0
+                WHERE ABS(ISNULL(p.importe, 0)) > 0.00001
+                  AND ($sqlFilterOnChequeC)
+            ";
+            $stmt = $this->conn->query($sql);
+            if (!$stmt) {
+                return;
+            }
+            $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
+            $payload = [];
+            foreach ($rows as $r) {
+                $folio = trim(str_replace(["\r", "\n", "\t"], '', (string)($r['folio'] ?? '')));
+                $rn    = (int)($r['line_rn'] ?? 0);
+                if ($folio === '' || $rn < 1) {
+                    continue;
+                }
+                $fo    = $this->toDatetime($r['cheque_fecha'] ?? null);
+                $dtStr = $fo ? $fo->format('Y-m-d H:i:s') : date('Y-m-d H:i:s');
+                $payload[] = [
+                    'folio'              => $folio,
+                    'line_id'            => $folio . ':' . $rn,
+                    'id_forma_pago'      => trim((string)($r['idformadepago'] ?? '')),
+                    'amount'             => floatval($r['importe'] ?? 0),
+                    'reference'          => trim((string)($r['referencia'] ?? '')),
+                    'payment_datetime'   => $dtStr,
+                ];
+            }
+            if (count($payload) === 0) {
+                return;
+            }
+            foreach (array_chunk($payload, 400) as $chunk) {
+                $this->sendToAPI('cheque_payments', $chunk);
+            }
+            $this->log('[PAGOS-LINEAS] ' . count($payload) . ' líneas chequespagos → API.');
+        } catch (Throwable $e) {
+            $this->log('[PAGOS-LINEAS] ERROR: ' . $e->getMessage());
         }
     }
 
@@ -293,9 +450,15 @@ class SyncFinal {
                     AND DATEPART(SECOND, c.fecha) > $S)
             ";
 
+            $pJoin = $this->sqlChequespagosAggJoin();
+            $eEf = $this->sqlEffectiveEfectivoExpr();
+            $eTa = $this->sqlEffectiveTarjetaExpr();
+            $eVa = $this->sqlEffectiveValesExpr();
+            $eOt = $this->sqlEffectiveOtrosExpr();
+
             if ($this->initialLoad) {
                 $sql = "
-                    SELECT TOP 1000
+                    SELECT TOP 50
                         c.folio,
                         c.numcheque,
                         c.fecha,
@@ -313,14 +476,18 @@ class SyncFinal {
                         c.nopersonas,
                         c.pagado,
                         c.cancelado,
-                        ISNULL(c.efectivo,0) AS efectivo,
-                        ISNULL(c.tarjeta,0)  AS tarjeta,
-                        ISNULL(c.vales,0)    AS vales,
-                        ISNULL(c.otros,0)    AS otros
+                        {$eEf} AS efectivo,
+                        {$eTa} AS tarjeta,
+                        {$eVa} AS vales,
+                        {$eOt} AS otros
                     FROM cheques c
                     LEFT JOIN meseros m ON c.idmesero = m.idmesero
-                    WHERE c.pagado = 1
-                      AND c.cancelado = 0
+                    {$pJoin}
+                    WHERE c.cancelado = 0
+                      AND (
+                          ISNULL(c.pagado, 0) = 1
+                          OR ( {$eEf} + {$eTa} + {$eVa} + {$eOt} ) > 0.0001
+                      )
                       AND ($dateFilter)
                     ORDER BY c.fecha ASC
                 ";
@@ -328,26 +495,22 @@ class SyncFinal {
                 $open = [];
 
             } else {
-                // Tiempo real: solo buscar tickets del turno actual (8AM-7:59AM)
-                $h = (int)date('H');
-                $shiftDate  = ($h < 8) ? date('Y-m-d', strtotime('-1 day')) : date('Y-m-d');
-                $todayStart = $shiftDate . ' 08:00:00';
-                $todayEnd   = date('Y-m-d', strtotime($shiftDate . ' +1 day')) . ' 07:59:59';
-
-                $Y1 = (int)date('Y', strtotime($todayStart));
-                $M1 = (int)date('n', strtotime($todayStart));
-                $D1 = (int)date('j', strtotime($todayStart));
-                $Y2 = (int)date('Y', strtotime($todayEnd));
-                $M2 = (int)date('n', strtotime($todayEnd));
-                $D2 = (int)date('j', strtotime($todayEnd));
-
+                // Tiempo real: turno actual (08:00–07:59) con GETDATE() del SQL Server.
                 $dateFilterToday = "
                     (
-                        (YEAR(c.fecha) = $Y1 AND MONTH(c.fecha) = $M1 AND DAY(c.fecha) = $D1
-                         AND DATEPART(HOUR,c.fecha) >= 8)
-                        OR
-                        (YEAR(c.fecha) = $Y2 AND MONTH(c.fecha) = $M2 AND DAY(c.fecha) = $D2
-                         AND DATEPART(HOUR,c.fecha) < 8)
+                        c.fecha >= DATEADD(HOUR, 8, CAST(
+                            CASE
+                                WHEN DATEPART(HOUR, GETDATE()) < 8 THEN DATEADD(DAY,-1, CONVERT(date, GETDATE()))
+                                ELSE CONVERT(date, GETDATE())
+                            END
+                        AS datetime))
+                        AND
+                        c.fecha < DATEADD(HOUR, 8, CAST(
+                            CASE
+                                WHEN DATEPART(HOUR, GETDATE()) < 8 THEN CONVERT(date, GETDATE())
+                                ELSE DATEADD(DAY,1, CONVERT(date, GETDATE()))
+                            END
+                        AS datetime))
                     )
                 ";
                 
@@ -368,14 +531,18 @@ class SyncFinal {
                         c.nopersonas,
                         c.pagado,
                         c.cancelado,
-                        ISNULL(c.efectivo,0) AS efectivo,
-                        ISNULL(c.tarjeta,0)  AS tarjeta,
-                        ISNULL(c.vales,0)    AS vales,
-                        ISNULL(c.otros,0)    AS otros
+                        {$eEf} AS efectivo,
+                        {$eTa} AS tarjeta,
+                        {$eVa} AS vales,
+                        {$eOt} AS otros
                     FROM cheques c
                     LEFT JOIN meseros m ON c.idmesero = m.idmesero
-                    WHERE c.pagado = 1
-                      AND c.cancelado = 0
+                    {$pJoin}
+                    WHERE c.cancelado = 0
+                      AND (
+                          ISNULL(c.pagado, 0) = 1
+                          OR ( {$eEf} + {$eTa} + {$eVa} + {$eOt} ) > 0.0001
+                      )
                       AND ($dateFilterToday)
                     ORDER BY c.fecha ASC
                 ";
@@ -437,7 +604,7 @@ class SyncFinal {
                 $dt     = $fechaObj->format('Y-m-d H:i:s');
                 $date   = $fechaObj->format('Y-m-d');
                 $time   = $fechaObj->format('H:i:s');
-                $isPaid = intval($r['pagado']) === 1;
+                $isPaid = $this->srChequeIsPaid($r);
 
                 $ef = floatval($r['efectivo'] ?? 0);
                 $ta = floatval($r['tarjeta']  ?? 0);
@@ -483,7 +650,7 @@ class SyncFinal {
                     'other_amount'   => $ot,
                     'opened_at'      => $dt,
                     'closed_at'      => $isPaid ? $dt : null,
-                    'items'          => $this->getTicketItems($tid),
+                    'items'          => [],
                 ];
 
                 if ($isPaid && $dt > $lastClosedDate) {
@@ -496,6 +663,11 @@ class SyncFinal {
                 $nClosed = count($data) - $nOpen;
                 $this->sendToAPI('sales', $data);
                 $this->log("[VENTAS] Enviados: $nClosed cerrados + $nOpen abiertos. Ultimo: $lastClosedDate");
+                if ($this->initialLoad) {
+                    $this->syncChequePaymentLinesForCheques($dateFilter);
+                } else {
+                    $this->syncChequePaymentLinesForCheques($dateFilterToday);
+                }
             }
 
             $this->state['sales'] = $lastClosedDate;
@@ -614,13 +786,24 @@ class SyncFinal {
             } catch (Throwable $e) {}
             $this->log("[ITEMS] Columnas productos: name=$nameCol family=$familyCol");
 
-            // Obtener folios del turno actual
-            $h = (int)date('H');
-            $shiftDate  = ($h < 8) ? date('Y-m-d', strtotime('-1 day')) : date('Y-m-d');
-            $todayStart = $shiftDate . ' 08:00:00';
-            $todayEnd   = date('Y-m-d', strtotime($shiftDate . ' +1 day')) . ' 07:59:59';
-            $Y1=(int)date('Y',strtotime($todayStart)); $M1=(int)date('n',strtotime($todayStart)); $D1=(int)date('j',strtotime($todayStart));
-            $Y2=(int)date('Y',strtotime($todayEnd));   $M2=(int)date('n',strtotime($todayEnd));   $D2=(int)date('j',strtotime($todayEnd));
+            // Obtener folios del turno actual con GETDATE() del SQL Server.
+            $itemsDateFilter = "
+                (
+                    c.fecha >= DATEADD(HOUR, 8, CAST(
+                        CASE
+                            WHEN DATEPART(HOUR, GETDATE()) < 8 THEN DATEADD(DAY,-1, CONVERT(date, GETDATE()))
+                            ELSE CONVERT(date, GETDATE())
+                        END
+                    AS datetime))
+                    AND
+                    c.fecha < DATEADD(HOUR, 8, CAST(
+                        CASE
+                            WHEN DATEPART(HOUR, GETDATE()) < 8 THEN CONVERT(date, GETDATE())
+                            ELSE DATEADD(DAY,1, CONVERT(date, GETDATE()))
+                        END
+                    AS datetime))
+                )
+            ";
 
             $categorySelect = $familyCol
                 ? "ISNULL(CAST(p.$familyCol AS VARCHAR(100)), '') AS category,"
@@ -639,11 +822,7 @@ class SyncFinal {
                 FROM cheqdet d
                 LEFT JOIN productos p ON p.idproducto = d.idproducto
                 INNER JOIN cheques c ON c.folio = d.foliodet
-                WHERE (
-                    (YEAR(c.fecha)=$Y1 AND MONTH(c.fecha)=$M1 AND DAY(c.fecha)=$D1 AND DATEPART(HOUR,c.fecha)>=8)
-                    OR
-                    (YEAR(c.fecha)=$Y2 AND MONTH(c.fecha)=$M2 AND DAY(c.fecha)=$D2 AND DATEPART(HOUR,c.fecha)<8)
-                )
+                WHERE ($itemsDateFilter)
                 AND d.idproducto IS NOT NULL
                 ORDER BY d.foliodet
             ";
@@ -839,6 +1018,180 @@ class SyncFinal {
     }
 
     // =========================================================
+    // MESAS (POS / RESERVACIONES)
+    // =========================================================
+    private function allDashboardTableCodes(): array
+    {
+        $codes = [];
+        for ($i = 1; $i <= 11; $i++) $codes[] = 'M' . $i;
+        for ($i = 16; $i <= 22; $i++) $codes[] = 'T' . $i;
+        for ($i = 1; $i <= 8; $i++) $codes[] = 'TB' . $i;
+        for ($i = 1; $i <= 5; $i++) {
+            $codes[] = 'BARR-I' . $i;
+            $codes[] = 'BARR-E' . $i;
+        }
+        return $codes;
+    }
+
+    private function canonicalVenueTableCode(string $raw): ?string
+    {
+        $s = strtoupper(trim(preg_replace('/\s+/', '', $raw)));
+        if ($s === '') return null;
+        if (preg_match('/^WEB-/i', $s)) return $s;
+        $s = preg_replace('/P\d+$/i', '', $s); // M2P4 -> M2
+
+        if (preg_match('/^M0*(\d+)$/', $s, $m)) {
+            $n = (int)$m[1];
+            return ($n >= 1 && $n <= 11) ? ('M' . $n) : null;
+        }
+        if (preg_match('/^T0*(\d+)$/', $s, $m)) {
+            $n = (int)$m[1];
+            return ($n >= 16 && $n <= 22) ? ('T' . $n) : null;
+        }
+        if (preg_match('/^TB0*(\d+)$/', $s, $m)) {
+            $n = (int)$m[1];
+            return ($n >= 1 && $n <= 8) ? ('TB' . $n) : null;
+        }
+        if (preg_match('/^BARR-I[1-5]$/', $s) || preg_match('/^BARR-E[1-5]$/', $s)) {
+            return $s;
+        }
+        if (preg_match('/^B-(\d+)$/', $s, $m)) {
+            $tb = (int)$m[1] - 10; // B-11..B-18 -> TB1..TB8
+            return ($tb >= 1 && $tb <= 8) ? ('TB' . $tb) : null;
+        }
+        if (preg_match('/^CD-(\d+)$/', $s, $m)) {
+            $n = (int)$m[1];
+            return ($n >= 1 && $n <= 11) ? ('M' . $n) : null;
+        }
+        if (preg_match('/^TA-(\d+)$/', $s, $m)) {
+            $n = (int)$m[1];
+            if ($n >= 16 && $n <= 22) return 'T' . $n;
+            return ($n === 15) ? 'T16' : null;
+        }
+        if (preg_match('/^TB-(\d+)$/', $s, $m)) {
+            $n = (int)$m[1];
+            return ($n >= 1 && $n <= 8) ? ('TB' . $n) : null;
+        }
+        if (preg_match('/^(\d{1,2})$/', $s, $m)) {
+            $n = (int)$m[1];
+            if ($n >= 1 && $n <= 11) return 'M' . $n;
+            if ($n >= 16 && $n <= 22) return 'T' . $n;
+            if ($n === 15) return 'T16';
+        }
+        return null;
+    }
+
+    private function buildMesaSistemaLookup(): array
+    {
+        $map = [];
+        try {
+            $sql = "
+                SELECT LTRIM(RTRIM(CAST(idmesa AS NVARCHAR(100)))) AS idm,
+                       LTRIM(RTRIM(CAST(ISNULL(idmesasistema, N'') AS NVARCHAR(100)))) AS sis
+                FROM mesas
+            ";
+            $rows = $this->conn->query($sql)->fetchAll(PDO::FETCH_ASSOC);
+            foreach ($rows as $row) {
+                $idm = strtoupper(preg_replace('/\s+/', '', (string)($row['idm'] ?? '')));
+                $sis = strtoupper(preg_replace('/\s+/', '', (string)($row['sis'] ?? '')));
+                $target = $sis !== '' ? $sis : $idm;
+                if ($target === '') continue;
+                if ($idm !== '') $map[$idm] = $target;
+                if ($sis !== '') $map[$sis] = $target;
+            }
+        } catch (Throwable $e) {
+            $this->log("[MAPAS] sin catálogo mesas: " . $e->getMessage());
+        }
+        return $map;
+    }
+
+    private function resolveMesaForPosMap(array $lookup, string $mesaRaw): string
+    {
+        $k = strtoupper(preg_replace('/\s+/', '', trim($mesaRaw)));
+        if ($k === '') return '';
+        return $lookup[$k] ?? $k;
+    }
+
+    private function syncPosTableLiveFromSr(): void
+    {
+        $codes = $this->allDashboardTableCodes();
+        $states = array_fill_keys($codes, 'free');
+        $prio = ['free' => 0, 'open_ticket' => 1, 'printed_unpaid' => 2];
+        $lookup = $this->buildMesaSistemaLookup();
+
+        $sql = "
+            SELECT src, folio, mesa_raw, impreso, impresiones, pagado, cancelado
+            FROM (
+                SELECT
+                    'temp' AS src,
+                    LTRIM(RTRIM(CAST(t.folio AS NVARCHAR(50)))) AS folio,
+                    LTRIM(RTRIM(CAST(t.mesa AS NVARCHAR(100)))) AS mesa_raw,
+                    ISNULL(t.impreso, 0) AS impreso,
+                    ISNULL(t.impresiones, 0) AS impresiones,
+                    ISNULL(t.pagado, 0) AS pagado,
+                    ISNULL(t.cancelado, 0) AS cancelado
+                FROM tempcheques t
+                WHERE ISNULL(t.cancelado, 0) = 0
+                  AND ISNULL(t.pagado, 0) = 0
+
+                UNION ALL
+
+                SELECT
+                    'cheques' AS src,
+                    LTRIM(RTRIM(CAST(c.folio AS NVARCHAR(50)))) AS folio,
+                    LTRIM(RTRIM(CAST(c.mesa AS NVARCHAR(100)))) AS mesa_raw,
+                    ISNULL(c.impreso, 0) AS impreso,
+                    ISNULL(c.impresiones, 0) AS impresiones,
+                    ISNULL(c.pagado, 0) AS pagado,
+                    ISNULL(c.cancelado, 0) AS cancelado
+                FROM cheques c
+                WHERE ISNULL(c.cancelado, 0) = 0
+                  AND ISNULL(c.pagado, 0) = 0
+                  AND c.fecha >= DATEADD(DAY, -21, CAST(GETDATE() AS DATETIME))
+            ) x
+            WHERE NULLIF(LTRIM(RTRIM(mesa_raw)), '') IS NOT NULL
+        ";
+
+        $rows = $this->conn->query($sql)->fetchAll(PDO::FETCH_ASSOC);
+        $byFolio = [];
+        foreach ($rows as $r) {
+            $folio = preg_replace('/\s+/', '', strtoupper(trim((string)($r['folio'] ?? ''))));
+            if ($folio === '') continue;
+            $src = (string)($r['src'] ?? 'cheques');
+            if ($src === 'temp' || !isset($byFolio[$folio])) {
+                $byFolio[$folio] = $r;
+            }
+        }
+
+        $skipNoCanon = [];
+        foreach (array_values($byFolio) as $r) {
+            if ((int)($r['cancelado'] ?? 0) !== 0 || (int)($r['pagado'] ?? 0) === 1) continue;
+            $resolved = $this->resolveMesaForPosMap($lookup, (string)($r['mesa_raw'] ?? ''));
+            $canon = $this->canonicalVenueTableCode($resolved);
+            if ($canon === null || !array_key_exists($canon, $states)) {
+                if ($resolved !== '') $skipNoCanon[] = $resolved;
+                continue;
+            }
+            $printed = ((int)($r['impreso'] ?? 0) >= 1) || ((int)($r['impresiones'] ?? 0) >= 1);
+            $state = $printed ? 'printed_unpaid' : 'open_ticket';
+            if ($prio[$state] > $prio[$states[$canon]]) $states[$canon] = $state;
+        }
+
+        $payload = [];
+        $busy = 0;
+        foreach ($states as $code => $st) {
+            $payload[] = ['table_code' => $code, 'state' => $st];
+            if ($st !== 'free') $busy++;
+        }
+        if (!empty($skipNoCanon)) {
+            $this->log("[MAPAS] sin mapeo plano: " . implode(' | ', array_slice(array_values(array_unique($skipNoCanon)), 0, 10)));
+        }
+        $this->sendToAPI('pos_table_states', $payload);
+        $this->log("[MAPAS] cheques abiertos detectados: " . count($byFolio));
+        $this->log("[MAPAS] pos_table_states: {$busy} ocupadas, " . count($payload) . " codigos.");
+    }
+
+    // =========================================================
     // ESTADO
     // =========================================================
     private function loadState(): void {
@@ -860,6 +1213,10 @@ class SyncFinal {
             'data'          => $data,
             'sync_datetime' => date('Y-m-d H:i:s'),
         ]);
+        if ($payload === false || $payload === null) {
+            $this->log("  [JSON ERROR] json_encode falló: " . json_last_error_msg());
+            return [];
+        }
         $ch = curl_init(API_URL);
         curl_setopt_array($ch, [
             CURLOPT_POST           => true,
@@ -868,28 +1225,32 @@ class SyncFinal {
             CURLOPT_HTTPHEADER     => [
                 'Content-Type: application/json',
                 'X-API-Key: ' . API_KEY,
+                'Content-Length: ' . strlen($payload),
             ],
-            CURLOPT_TIMEOUT        => 30,
+            CURLOPT_TIMEOUT        => 60,
             CURLOPT_SSL_VERIFYPEER => false,
+            CURLOPT_SSL_VERIFYHOST => false,
         ]);
         $res      = curl_exec($ch);
         $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
         $curlErr  = curl_error($ch);
-        curl_close($ch);
+        @curl_close($ch);
 
         if ($curlErr) {
             $this->log("  [CURL ERROR] $curlErr");
             return [];
         }
-        $decoded = json_decode($res, true);
-        if ($decoded) {
+        $bodyLen = strlen((string)$res);
+        $decoded = json_decode((string)$res, true);
+        if (is_array($decoded)) {
             $ins  = $decoded['inserted'] ?? '?';
             $upd  = $decoded['updated']  ?? '?';
             $fail = $decoded['failed']   ?? '?';
             $this->log("  [API $httpCode] inserted=$ins updated=$upd failed=$fail");
+            if (!empty($decoded['error']))      $this->log("  [API ERR] " . $decoded['error']);
             if (!empty($decoded['last_error'])) $this->log("  [API ERR] " . $decoded['last_error']);
         } else {
-            $this->log("  [API $httpCode] RAW: " . substr($res, 0, 200));
+            $this->log("  [API $httpCode] body={$bodyLen}B RAW: " . substr((string)$res, 0, 300));
         }
         return $decoded ?? [];
     }

@@ -18,13 +18,26 @@ if (!isset($data['email_id'])) {
 
 $emailId = intval($data['email_id']);
 
-// IMAP configuration for Hostinger
-$hostname = '{imap.hostinger.com:993/imap/ssl}INBOX';
-$username = 'info@bonifaciossancarlos.com';
-$password = 'Filipenses4:8@';
+// IMAP configuration from environment
+$hostname = getenv('IMAP_HOST') ?: '{imap.hostinger.com:993/imap/ssl}INBOX';
+$username = getenv('IMAP_USER') ?: '';
+$password = getenv('IMAP_PASS') ?: '';
+
+if ($username === '' || $password === '') {
+    http_response_code(500);
+    echo json_encode([
+        'success' => false,
+        'error' => 'Configuracion IMAP incompleta',
+        'required_env' => ['IMAP_USER', 'IMAP_PASS']
+    ]);
+    exit();
+}
 
 try {
-    $inbox = imap_open($hostname, $username, $password) or die('Cannot connect to email: ' . imap_last_error());
+    $inbox = imap_open($hostname, $username, $password);
+    if (!$inbox) {
+        throw new Exception('Cannot connect to email');
+    }
     
     // Get email header
     $overview = imap_fetch_overview($inbox, $emailId, 0);

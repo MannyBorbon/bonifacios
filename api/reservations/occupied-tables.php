@@ -9,20 +9,33 @@ try {
     $conn = getConnection();
     
     $date = trim((string)($_GET['date'] ?? ''));
+    $time = trim((string)($_GET['time'] ?? ''));
     $eventTypeId = trim((string)($_GET['event_type_id'] ?? ''));
     $event = trim((string)($_GET['event'] ?? ''));
 
     try {
         $conn->query("ALTER TABLE special_reservations ADD COLUMN event_type_id INT NULL AFTER occasion");
     } catch (Throwable $e) { /* ignore */ }
+
+    try {
+        $conn->query(
+            'ALTER TABLE special_reservations ADD COLUMN secondary_table_code VARCHAR(32) NULL DEFAULT NULL AFTER table_code',
+        );
+    } catch (Throwable $e) { /* ignore */
+    }
     
-    $sql = "SELECT sr.id, sr.customer_name, sr.phone, sr.email, sr.guests, sr.reservation_date, sr.reservation_time, sr.table_code, sr.notes, sr.occasion, sr.event_type_id, sr.status, sr.created_at, sr.updated_at,
+    $sql = "SELECT sr.id, sr.customer_name, sr.phone, sr.email, sr.guests, sr.reservation_date, sr.reservation_time, sr.table_code,
+                   sr.secondary_table_code, sr.notes, sr.occasion, sr.event_type_id, sr.status, sr.deposit_status,
+                   sr.created_at, sr.updated_at,
                    ret.name AS event_type_name, ret.slug AS event_type_slug
             FROM special_reservations sr
             LEFT JOIN reservation_event_types ret ON ret.id = sr.event_type_id
-            WHERE sr.status IN ('pending', 'confirmed', 'uploaded')";
+            WHERE sr.status NOT IN ('cancelled','completed')
+              AND (sr.status IN ('pending','confirmed') OR sr.deposit_status IN ('uploaded','confirmed'))";
 
-    $allSql = "SELECT sr.id, sr.customer_name, sr.phone, sr.email, sr.guests, sr.reservation_date, sr.reservation_time, sr.table_code, sr.notes, sr.occasion, sr.event_type_id, sr.status, sr.created_at, sr.updated_at,
+    $allSql = "SELECT sr.id, sr.customer_name, sr.phone, sr.email, sr.guests, sr.reservation_date, sr.reservation_time, sr.table_code,
+                      sr.secondary_table_code, sr.notes, sr.occasion, sr.event_type_id, sr.status, sr.deposit_status,
+                      sr.created_at, sr.updated_at,
                       ret.name AS event_type_name, ret.slug AS event_type_slug
                FROM special_reservations sr
                LEFT JOIN reservation_event_types ret ON ret.id = sr.event_type_id
@@ -42,8 +55,36 @@ try {
         $types .= 'i';
         $params[] = intval($eventTypeId);
     } elseif ($event === 'mothers_day') {
-        $sql .= " AND (sr.occasion = 'Dia de las Madres' OR ret.slug = 'dia-madres')";
-        $allSql .= " AND (sr.occasion = 'Dia de las Madres' OR ret.slug = 'dia-madres')";
+        $sql .= " AND (sr.occasion = 'Dia de las Madres' OR sr.occasion = 'Día de las Madres' OR ret.slug = 'dia-madres')";
+        $allSql .= " AND (sr.occasion = 'Dia de las Madres' OR sr.occasion = 'Día de las Madres' OR ret.slug = 'dia-madres')";
+    } elseif ($event === 'general') {
+        $sql .= " AND (
+            ret.slug = 'general'
+            OR (
+                sr.event_type_id IS NULL
+                AND (ret.slug IS NULL OR ret.slug = '' OR ret.slug NOT IN ('dia-madres'))
+                AND (sr.occasion IS NULL OR (sr.occasion != 'Dia de las Madres' AND sr.occasion != 'Día de las Madres'))
+            )
+        )";
+        $allSql .= " AND (
+            ret.slug = 'general'
+            OR (
+                sr.event_type_id IS NULL
+                AND (ret.slug IS NULL OR ret.slug = '' OR ret.slug NOT IN ('dia-madres'))
+                AND (sr.occasion IS NULL OR (sr.occasion != 'Dia de las Madres' AND sr.occasion != 'Día de las Madres'))
+            )
+        )";
+    } elseif ($event === 'normal') {
+        $sql .= " AND ((sr.occasion IS NULL OR (sr.occasion != 'Dia de las Madres' AND sr.occasion != 'Día de las Madres')) AND (ret.slug IS NULL OR ret.slug != 'dia-madres'))";
+        $allSql .= " AND ((sr.occasion IS NULL OR (sr.occasion != 'Dia de las Madres' AND sr.occasion != 'Día de las Madres')) AND (ret.slug IS NULL OR ret.slug != 'dia-madres'))";
+    }
+
+    if ($time !== '') {
+        $hm = strlen($time) >= 5 ? substr($time, 0, 5) : $time;
+        $sql .= " AND DATE_FORMAT(sr.reservation_time, '%H:%i') = ?";
+        $allSql .= " AND DATE_FORMAT(sr.reservation_time, '%H:%i') = ?";
+        $types .= 's';
+        $params[] = $hm;
     }
 
     $sql .= " ORDER BY sr.reservation_date ASC, sr.reservation_time ASC";
@@ -81,6 +122,7 @@ try {
     // Debug: Agregar información adicional
     $debugInfo = [
         'query_date' => $date,
+        'query_time' => $time,
         'query_event_type_id' => $eventTypeId,
         'sql_query' => $sql,
         'filtered_results_count' => count($occupiedTables),

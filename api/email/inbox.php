@@ -8,10 +8,20 @@ if (!isset($_SESSION['user_id'])) {
     exit();
 }
 
-// IMAP configuration for Hostinger
-$hostname = '{imap.hostinger.com:993/imap/ssl}INBOX';
-$username = 'info@bonifaciossancarlos.com';
-$password = 'Filipenses4:8@';
+// IMAP configuration from environment (never hardcode credentials in code)
+$hostname = getenv('IMAP_HOST') ?: '{imap.hostinger.com:993/imap/ssl}INBOX';
+$username = getenv('IMAP_USER') ?: '';
+$password = getenv('IMAP_PASS') ?: '';
+
+if ($username === '' || $password === '') {
+    http_response_code(500);
+    echo json_encode([
+        'success' => false,
+        'error' => 'Configuracion IMAP incompleta',
+        'required_env' => ['IMAP_USER', 'IMAP_PASS']
+    ]);
+    exit();
+}
 
 try {
     // Connect to mailbox
@@ -87,8 +97,8 @@ try {
 } catch (Exception $e) {
     http_response_code(500);
     echo json_encode([
-        'error' => 'Error al conectar con el correo: ' . $e->getMessage(),
-        'note' => 'Asegúrate de actualizar la contraseña en inbox.php'
+        'success' => false,
+        'error' => 'Error al conectar con el correo'
     ]);
 }
 ?>

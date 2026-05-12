@@ -1,52 +1,61 @@
 <?php
 /**
- * API simplificada para obtener asistencia de un empleado específico
- * Parámetros: id, sr_id, name, start, end
+ * API para obtener asistencia de un empleado (requiere autenticación).
+ * Parámetros: id, sr_id, name, start, end (fechas YYYY-MM-DD).
  */
 
 require_once __DIR__ . '/../config/database.php';
 
-header('Content-Type: application/json');
-header('Access-Control-Allow-Origin: *');
-header('Access-Control-Allow-Methods: GET, OPTIONS');
-header('Access-Control-Allow-Headers: Content-Type');
-header('Access-Control-Allow-Credentials: true');
-
-if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') { 
-    http_response_code(200);
-    exit(0); 
+if ($_SERVER['REQUEST_METHOD'] !== 'GET') {
+    http_response_code(405);
+    echo json_encode(['success' => false, 'error' => 'Método no permitido']);
+    exit;
 }
+
+requireAuth();
+
+$isYmd = static function ($s) {
+    return is_string($s) && preg_match('/^\d{4}-\d{2}-\d{2}$/', $s) === 1;
+};
 
 try {
     $pdo = getPDO();
-    
+
     $empId = $_GET['id'] ?? null;
     $srId = $_GET['sr_id'] ?? null;
-    $name = $_GET['name'] ?? null;
+    $name = isset($_GET['name']) ? trim((string) $_GET['name']) : null;
     $startDate = $_GET['start'] ?? date('Y-m-d', strtotime('-7 days'));
     $endDate = $_GET['end'] ?? date('Y-m-d');
 
-    if (!$empId && !$srId && !$name) {
+    if (!$isYmd($startDate) || !$isYmd($endDate)) {
+        http_response_code(400);
         echo json_encode([
             'success' => false,
-            'error' => 'Se requiere id, sr_id o name del empleado'
+            'error'   => 'Las fechas start y end deben ser YYYY-MM-DD',
         ]);
         exit;
     }
 
-    // Construir query dinámicamente
-    $conditions = ["a.attendance_date BETWEEN ? AND ?"];
+    if (!$empId && !$srId && ($name === null || $name === '')) {
+        echo json_encode([
+            'success' => false,
+            'error'   => 'Se requiere id, sr_id o name del empleado',
+        ]);
+        exit;
+    }
+
+    $conditions = ['a.attendance_date BETWEEN ? AND ?'];
     $params = [$startDate, $endDate];
 
     if ($empId) {
-        $conditions[] = "a.employee_id = ?";
+        $conditions[] = 'a.employee_id = ?';
         $params[] = $empId;
     } elseif ($srId) {
-        $conditions[] = "a.sr_employee_id = ?";
+        $conditions[] = 'a.sr_employee_id = ?';
         $params[] = $srId;
-    } elseif ($name) {
-        $conditions[] = "a.employee_name LIKE ?";
-        $params[] = "%$name%";
+    } else {
+        $conditions[] = 'a.employee_name LIKE ?';
+        $params[] = '%' . $name . '%';
     }
 
     $whereClause = implode(' AND ', $conditions);
@@ -66,14 +75,13 @@ try {
                 a.notes,
                 a.created_at
             FROM sr_attendance a
-            WHERE $whereClause
+            WHERE {$whereClause}
             ORDER BY a.attendance_date DESC";
 
     $stmt = $pdo->prepare($sql);
     $stmt->execute($params);
     $records = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
-    // Calcular estadísticas
     $totalMinutes = 0;
     $daysPresent = 0;
     $daysLate = 0;
@@ -81,32 +89,37 @@ try {
 
     foreach ($records as $record) {
         if ($record['minutes_worked']) {
-            $totalMinutes += $record['minutes_worked'];
+            $totalMinutes += (int) $record['minutes_worked'];
         }
-        if ($record['status'] === 'present') $daysPresent++;
-        if ($record['status'] === 'late') $daysLate++;
-        if ($record['status'] === 'absent') $daysAbsent++;
+        if ($record['status'] === 'present') {
+            $daysPresent++;
+        }
+        if ($record['status'] === 'late') {
+            $daysLate++;
+        }
+        if ($record['status'] === 'absent') {
+            $daysAbsent++;
+        }
     }
 
     echo json_encode([
         'success' => true,
-        'data' => $records,
+        'data'    => $records,
         'summary' => [
             'total_records' => count($records),
-            'days_present' => $daysPresent,
-            'days_late' => $daysLate,
-            'days_absent' => $daysAbsent,
-            'total_hours' => round($totalMinutes / 60, 2),
-            'start_date' => $startDate,
-            'end_date' => $endDate
-        ]
+            'days_present'  => $daysPresent,
+            'days_late'     => $daysLate,
+            'days_absent'   => $daysAbsent,
+            'total_hours'   => round($totalMinutes / 60, 2),
+            'start_date'    => $startDate,
+            'end_date'      => $endDate,
+        ],
     ]);
-
-} catch (Exception $e) {
+} catch (Throwable $e) {
+    error_log('get-attendance.php: ' . $e->getMessage());
     http_response_code(500);
     echo json_encode([
         'success' => false,
-        'error' => $e->getMessage(),
-        'trace' => $e->getTraceAsString()
+        'error'   => 'Error interno',
     ]);
 }

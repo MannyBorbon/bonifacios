@@ -37,7 +37,7 @@ $to = $data['to'];
 $subject = $data['subject'];
 $message = $data['message'];
 $from = getenv('MAIL_FROM') ?: 'info@bonifaciossancarlos.com';
-$fromName = "Bonifacio's Restaurant";
+$fromName = getenv('SMTP_FROM_NAME') ?: "Bonifacio's Restaurant";
 $smtpUser = getenv('SMTP_USER') ?: $from;
 $smtpPass = getenv('SMTP_PASS') ?: '';
 $smtpHost = getenv('SMTP_HOST') ?: 'smtp.hostinger.com';
@@ -88,7 +88,7 @@ if (!$email_sent && class_exists('PHPMailer') && $smtpPass !== '') {
         $mail->SMTPSecure = PHPMailer::ENCRYPTION_STARTTLS;
         $mail->Port = $smtpPort;
         
-        $mail->setFrom($from, "Bonifacio\'s Restaurant");
+        $mail->setFrom($from, $fromName);
         $mail->addAddress($to);
         $mail->isHTML(true);
         $mail->Subject = $subject;

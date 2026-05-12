@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, lazy, Suspense, useCallback } from 'react'
 import 'react-quill-new/dist/quill.snow.css';
 import LocationMap from '../../components/LocationMap';
 import { geocodeAddress } from '../../utils/geo';
+import { ResponsiveContainer, BarChart, Bar, CartesianGrid, XAxis, YAxis, Tooltip } from 'recharts';
 const ReactQuill = lazy(() => import('react-quill-new'));
 
 function Employees() {
@@ -37,6 +38,25 @@ function Employees() {
   const [srEmployeeIds, setSrEmployeeIds] = useState([]);
   const [viewMode, setViewMode] = useState('personal'); // personal | horario | nomina
   const [scheduleWeekOffset, setScheduleWeekOffset] = useState(0);
+  const [scheduleReportLoading, setScheduleReportLoading] = useState(false);
+  const [scheduleReportSummary, setScheduleReportSummary] = useState(null);
+  const [periodReportStart, setPeriodReportStart] = useState(() => {
+    const d = new Date();
+    d.setDate(d.getDate() - 6);
+    return d.toISOString().slice(0, 10);
+  });
+  const [periodReportEnd, setPeriodReportEnd] = useState(() => new Date().toISOString().slice(0, 10));
+  const [selectedPeriodEmployees, setSelectedPeriodEmployees] = useState([]);
+  const [periodReportLoading, setPeriodReportLoading] = useState(false);
+  const [periodReportRows, setPeriodReportRows] = useState([]);
+  const [periodReportSummary, setPeriodReportSummary] = useState(null);
+  const [performanceLoading, setPerformanceLoading] = useState(false);
+  const [performanceReport, setPerformanceReport] = useState({
+    staff_performance: [],
+    role_summary: { mesero: { people: 0, total_sales: 0, checks: 0 }, bartender: { people: 0, total_sales: 0, checks: 0 } },
+    top_products: [],
+    bottom_products: [],
+  });
 
   const user = JSON.parse(localStorage.getItem('user') || '{}');
   const isAdmin = user.role === 'administrador';
@@ -120,7 +140,26 @@ function Employees() {
   };
 
   const getEmpKey = (item) => normalizeEmployeeId(item?.employee_number || item?.id || '');
-  const getWeekIndexFromJsDay = (jsDay) => (jsDay === 0 ? 6 : jsDay - 1);
+  // Fri=0, Sat=1, Sun=2, Mon=3, Tue=4, Wed=5, Thu=6
+  const PAYROLL_DAY_NAMES = ['Viernes','Sábado','Domingo','Lunes','Martes','Miércoles','Jueves'];
+  const getWeekIndexFromJsDay = (jsDay) => {
+    // jsDay: 0=Sun,1=Mon..5=Fri,6=Sat -> payroll: Fri=0,Sat=1,Sun=2,Mon=3,Tue=4,Wed=5,Thu=6
+    const map = [2, 3, 4, 5, 6, 0, 1]; // Sun,Mon,Tue,Wed,Thu,Fri,Sat
+    return map[jsDay];
+  };
+  const getWeekStartYmd = (offsetWeeks = 0) => {
+    const ref = new Date();
+    ref.setDate(ref.getDate() + (offsetWeeks * 7));
+    const jsDay = ref.getDay(); // 0=Sun
+    // Days since last Friday: (jsDay - 5 + 7) % 7
+    const diffToFriday = (jsDay - 5 + 7) % 7;
+    const friday = new Date(ref);
+    friday.setDate(ref.getDate() - diffToFriday);
+    const tzOffsetMs = friday.getTimezoneOffset() * 60000;
+    return new Date(friday.getTime() - tzOffsetMs).toISOString().slice(0, 10);
+  };
+  // Map payroll day index (0=Fri) to JS day offset from Friday
+  const payrollDayToJsOffset = (pIdx) => pIdx; // Fri+0=Fri, Fri+1=Sat, etc.
 
   const getAttendanceForItem = (item) => {
     const key = normalizeEmployeeId(item?.employee_number || '');
@@ -185,17 +224,24 @@ function Employees() {
         next[dayIndex].is_day_off = !next[dayIndex].entry && !next[dayIndex].exit;
         if (next[dayIndex].entry || next[dayIndex].exit) next[dayIndex].day_type = 'laboral';
       }
+      // Allow note field
+      if (field === 'note') {
+        next[dayIndex].note = value;
+      }
       return { ...prev, [key]: next, [nameKey]: next };
     });
   };
 
   const getPayrollDates = (offsetWeeks = 0) => {
+    // Payroll week: Friday to Thursday
     const today = new Date();
-    const currentDay = today.getDay(); 
-    const daysToLastThursday = (currentDay >= 4) ? currentDay - 4 : currentDay + 3;
-    const end = new Date(today);
-    end.setDate(today.getDate() - daysToLastThursday + (offsetWeeks * 7));
-    const start = new Date(end); start.setDate(end.getDate() - 6); 
+    const jsDay = today.getDay(); // 0=Sun
+    // Days since last Friday (if today is Fri, it's the current week start)
+    const daysSinceFri = (jsDay - 5 + 7) % 7;
+    const start = new Date(today);
+    start.setDate(today.getDate() - daysSinceFri + (offsetWeeks * 7));
+    const end = new Date(start);
+    end.setDate(start.getDate() + 6); // Thursday
     return { start: start.toISOString().split('T')[0], end: end.toISOString().split('T')[0], label: `${start.toLocaleDateString('es-MX', {day:'2-digit', month:'short'})} al ${end.toLocaleDateString('es-MX', {day:'2-digit', month:'short'})}` };
   };
 
@@ -297,9 +343,10 @@ function Employees() {
     setAttendanceLoading(p => ({ ...p, [empId]: false }));
   };
 
-  const loadSchedules = useCallback(async () => {
+  const loadSchedules = useCallback(async (weekOffset = 0) => {
+    const weekStart = getWeekStartYmd(weekOffset);
     try {
-      const res = await fetch(`${import.meta.env.VITE_API_URL}/employees/attendance-management.php?action=schedules`, { credentials: 'include' });
+      const res = await fetch(`${import.meta.env.VITE_API_URL}/employees/attendance-management.php?action=schedules&week_start=${encodeURIComponent(weekStart)}`, { credentials: 'include' });
       const result = await res.json();
       if (!result.success) return;
       const mapped = {};
@@ -311,6 +358,22 @@ function Employees() {
           entry: s.scheduled_start || '',
           exit: s.scheduled_end || '',
           is_day_off: Number(s.is_day_off) === 1 || (!s.scheduled_start && !s.scheduled_end),
+          day_type: s.day_type || (Number(s.is_day_off) === 1 ? 'descanso' : 'laboral')
+        };
+        if (!Number.isNaN(day) && day >= 0 && day <= 6) {
+          if (empKey) { if (!mapped[empKey]) mapped[empKey] = {}; mapped[empKey][day] = row; }
+          if (nameKey) { if (!mapped[nameKey]) mapped[nameKey] = {}; mapped[nameKey][day] = row; }
+        }
+      });
+      // Override with date-specific week assignments when available.
+      (result.overrides || []).forEach((s) => {
+        const empKey = normalizeEmployeeId(s.employee_id || '');
+        const nameKey = normalizeName(s.employee_name);
+        const day = Number(s.day_of_week);
+        const row = {
+          entry: s.scheduled_start && s.scheduled_start !== '00:00:00' ? String(s.scheduled_start).slice(0, 5) : '',
+          exit: s.scheduled_end && s.scheduled_end !== '00:00:00' ? String(s.scheduled_end).slice(0, 5) : '',
+          is_day_off: Number(s.is_day_off) === 1 || String(s.day_type || '') !== 'laboral',
           day_type: s.day_type || (Number(s.is_day_off) === 1 ? 'descanso' : 'laboral')
         };
         if (!Number.isNaN(day) && day >= 0 && day <= 6) {
@@ -344,7 +407,11 @@ function Employees() {
   const saveSchedule = async (item) => {
     const key = getEmpKey(item);
     const draft = getScheduleDraftForItem(item);
-    if (!key || !draft) return;
+    const weekStart = getWeekStartYmd(scheduleWeekOffset);
+    if (!key || !draft) {
+      alert('No se pudo identificar empleado para guardar horario');
+      return;
+    }
     setSavingSchedule(prev => ({ ...prev, [item.id]: true }));
     try {
       const schedules = Array.from({ length: 7 }, (_, day) => ({
@@ -356,20 +423,196 @@ function Employees() {
       }));
       const res = await fetch(`${import.meta.env.VITE_API_URL}/employees/attendance-management.php`, {
         method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'save_schedule', employee_id: key, employee_name: item.name || '', schedules })
+        body: JSON.stringify({ action: 'save_schedule', employee_id: key, employee_name: item.name || '', week_start: weekStart, schedules })
       });
-      if ((await res.json()).success) { setEmpSchedules(p => ({...p, [key]: draft})); alert('Horario guardado'); }
+      const result = await res.json();
+      if (result.success) {
+        setEmpSchedules(p => ({...p, [key]: draft, [normalizeName(item?.name)]: draft}));
+        alert(`Horario guardado para la semana ${weekStart}`);
+      } else {
+        alert(result.error || 'No se pudo guardar el horario');
+      }
     } catch { alert('Error al guardar horario'); }
     setSavingSchedule(prev => ({ ...prev, [item.id]: false }));
   };
 
+  const saveEmployeeStatus = async (item, newStatus) => {
+    try {
+      const res = await fetch(`${import.meta.env.VITE_API_URL}/employees/attendance-management.php`, {
+        method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'update_employee_status', employee_id: item.id, status: newStatus })
+      });
+      const result = await res.json();
+      if (result.success) {
+        loadExecutiveReport();
+      } else { alert(result.error || 'No se pudo actualizar status'); }
+    } catch { alert('Error al cambiar status'); }
+  };
+
+  const saveDayOverride = async (item, dayIndex, scheduleDate, overrideData) => {
+    const key = getEmpKey(item);
+    if (!key || !scheduleDate) { alert('No se pudo identificar empleado'); return; }
+    try {
+      const res = await fetch(`${import.meta.env.VITE_API_URL}/employees/attendance-management.php`, {
+        method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'save_day_override',
+          employee_id: key,
+          employee_name: item.name || '',
+          schedule_date: scheduleDate,
+          day_of_week: dayIndex,
+          day_type: overrideData.day_type || 'laboral',
+          scheduled_start: overrideData.entry || '00:00:00',
+          scheduled_end: overrideData.exit || '00:00:00',
+          note: overrideData.note || '',
+        })
+      });
+      const result = await res.json();
+      if (result.success) {
+        loadSchedules(scheduleWeekOffset);
+      } else { alert(result.error || 'No se pudo guardar override'); }
+    } catch { alert('Error al guardar corrección'); }
+  };
+
+  const exportScheduleReport = async () => {
+    const weekStart = getWeekStartYmd(scheduleWeekOffset);
+    setScheduleReportLoading(true);
+    try {
+      const res = await fetch(`${import.meta.env.VITE_API_URL}/employees/attendance-management.php?action=schedule_report&week_start=${encodeURIComponent(weekStart)}`, { credentials: 'include' });
+      const result = await res.json();
+      if (!result.success) {
+        alert(result.error || 'No se pudo generar reporte');
+        return;
+      }
+      setScheduleReportSummary(result.summary || null);
+      const header = ['Fecha', 'Empleado ID', 'Empleado', 'Tipo dia', 'Entrada programada', 'Salida programada', 'Poncho entrada', 'Poncho salida'];
+      const lines = [header.join(',')];
+      (result.rows || []).forEach((row) => {
+        const values = [
+          row.schedule_date || '',
+          row.employee_id || '',
+          row.employee_name || '',
+          row.day_type || '',
+          row.scheduled_start || '',
+          row.scheduled_end || '',
+          row.clock_in || '',
+          row.clock_out || ''
+        ].map((v) => `"${String(v).replace(/"/g, '""')}"`);
+        lines.push(values.join(','));
+      });
+      const blob = new Blob([lines.join('\n')], { type: 'text/csv;charset=utf-8;' });
+      const link = document.createElement('a');
+      link.href = URL.createObjectURL(blob);
+      link.download = `reporte_horarios_${weekStart}.csv`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(link.href);
+    } catch {
+      alert('Error al generar reporte de horarios');
+    } finally {
+      setScheduleReportLoading(false);
+    }
+  };
+
+  const togglePeriodEmployee = (empId) => {
+    setSelectedPeriodEmployees((prev) => {
+      if (prev.includes(empId)) return prev.filter((id) => id !== empId);
+      return [...prev, empId];
+    });
+  };
+
+  const generatePeriodEmployeeReport = async () => {
+    setPeriodReportLoading(true);
+    try {
+      const params = new URLSearchParams({
+        action: 'employee_period_report',
+        start_date: periodReportStart,
+        end_date: periodReportEnd,
+      });
+      if (selectedPeriodEmployees.length > 0) {
+        params.set('employee_ids', selectedPeriodEmployees.join(','));
+      }
+      const res = await fetch(`${import.meta.env.VITE_API_URL}/employees/attendance-management.php?${params.toString()}`, { credentials: 'include' });
+      const result = await res.json();
+      if (!result.success) {
+        alert(result.error || 'No se pudo generar el reporte');
+        return;
+      }
+      setPeriodReportRows(Array.isArray(result.rows) ? result.rows : []);
+      setPeriodReportSummary(result.summary || null);
+      loadPerformanceReport();
+    } catch {
+      alert('Error al generar reporte de periodo');
+    } finally {
+      setPeriodReportLoading(false);
+    }
+  };
+
+  const loadPerformanceReport = async () => {
+    setPerformanceLoading(true);
+    try {
+      const params = new URLSearchParams({
+        action: 'employee_performance_report',
+        start_date: periodReportStart,
+        end_date: periodReportEnd,
+      });
+      if (selectedPeriodEmployees.length > 0) params.set('employee_ids', selectedPeriodEmployees.join(','));
+      const res = await fetch(`${import.meta.env.VITE_API_URL}/employees/attendance-management.php?${params.toString()}`, { credentials: 'include' });
+      const result = await res.json();
+      if (result.success) {
+        setPerformanceReport({
+          staff_performance: Array.isArray(result.staff_performance) ? result.staff_performance : [],
+          role_summary: result.role_summary || { mesero: { people: 0, total_sales: 0, checks: 0 }, bartender: { people: 0, total_sales: 0, checks: 0 } },
+          top_products: Array.isArray(result.top_products) ? result.top_products : [],
+          bottom_products: Array.isArray(result.bottom_products) ? result.bottom_products : [],
+        });
+      }
+    } catch {
+      // silent
+    } finally {
+      setPerformanceLoading(false);
+    }
+  };
+
+  const exportPeriodEmployeeReportCsv = () => {
+    if (!periodReportRows.length) {
+      alert('Primero genera un reporte');
+      return;
+    }
+    const headers = [
+      'Empleado ID', 'Empleado', 'Puesto', 'Estatus', 'Periodo inicio', 'Periodo fin',
+      'Faltas', 'Ausencias', 'Enfermedades', 'Vacaciones', 'No iba y si estuvo',
+      'Dias programados', 'Horas programadas', 'Horas trabajadas', 'Balance horas',
+      'Salario diario', 'Nomina periodo', 'Nomina semanal'
+    ];
+    const lines = [headers.join(',')];
+    periodReportRows.forEach((r) => {
+      const values = [
+        r.employee_id, r.employee_name, r.position, r.status, r.period_start, r.period_end,
+        r.faltas, r.ausencias, r.enfermedades, r.vacaciones, r.unexpected_present,
+        r.scheduled_days, r.hours_scheduled, r.hours_worked, r.hours_balance,
+        r.daily_salary, r.payroll_period, r.payroll_weekly
+      ].map((v) => `"${String(v ?? '').replace(/"/g, '""')}"`);
+      lines.push(values.join(','));
+    });
+    const blob = new Blob([lines.join('\n')], { type: 'text/csv;charset=utf-8;' });
+    const link = document.createElement('a');
+    link.href = URL.createObjectURL(blob);
+    link.download = `reporte_empleados_${periodReportStart}_${periodReportEnd}.csv`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(link.href);
+  };
+
   useEffect(() => {
     loadExecutiveReport();
-    loadSchedules();
+    loadSchedules(scheduleWeekOffset);
     loadTodayAttendance();
     const timer = setInterval(loadTodayAttendance, 60000);
     return () => clearInterval(timer);
-  }, [loadSchedules, loadTodayAttendance]);
+  }, [loadSchedules, loadTodayAttendance, scheduleWeekOffset]);
 
   const loadNotes = async (id) => {
     try {
@@ -462,16 +705,16 @@ function Employees() {
           <h1 className="text-2xl sm:text-3xl font-black text-white tracking-tight leading-tight break-normal">COLABORADORES</h1>
           <p className="text-slate-500 text-[11px] sm:text-xs mt-1 uppercase tracking-wider sm:tracking-widest font-bold break-normal">Gestion de Expedientes y Liquidaciones</p>
         </div>
-        {isAdmin && <button onClick={() => setShowAddForm(!showAddForm)} className="bg-cyan-500 text-black px-4 sm:px-5 py-2.5 rounded-xl font-black text-xs hover:scale-105 transition-all shadow-lg shadow-cyan-500/20 self-start sm:self-auto">+ NUEVO INGRESO</button>}
+        {isAdmin && <button onClick={() => setShowAddForm(!showAddForm)} className="bg-cyan-500 text-black px-4 sm:px-5 py-2.5 rounded-xl font-black text-xs hover:scale-105 active:scale-95 transition-all shadow-lg shadow-cyan-500/20 self-start sm:self-auto touch-manipulation min-h-[44px]">+ NUEVO INGRESO</button>}
       </div>
 
       {showAddForm && (
         <div className="bg-[#040c1a] border border-cyan-500/20 p-6 rounded-2xl animate-in fade-in duration-300">
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            <input type="text" placeholder="Nombre completo" value={newPerson.name} onChange={e => setNewPerson({...newPerson, name: e.target.value})} className="bg-black/40 border border-slate-800 p-3 rounded-xl text-white outline-none focus:border-cyan-500 text-sm" />
-            <input type="text" placeholder="Puesto" value={newPerson.position} onChange={e => setNewPerson({...newPerson, position: e.target.value})} className="bg-black/40 border border-slate-800 p-3 rounded-xl text-white outline-none focus:border-cyan-500 text-sm" />
-            <input type="date" value={newPerson.start_date} onChange={e => setNewPerson({...newPerson, start_date: e.target.value})} className="bg-black/40 border border-slate-800 p-3 rounded-xl text-white outline-none focus:border-cyan-500 text-sm" />
-            <button onClick={handleAddPerson} className="md:col-span-3 bg-cyan-500/20 text-cyan-400 py-3 rounded-xl font-bold border border-cyan-500/30 hover:bg-cyan-500/30">DAR DE ALTA</button>
+            <input type="text" placeholder="Nombre completo" value={newPerson.name} onChange={e => setNewPerson({...newPerson, name: e.target.value})} className="bg-black/40 border border-slate-800 p-3 rounded-xl text-white outline-none focus:border-cyan-500 text-sm min-h-[44px]" />
+            <input type="text" placeholder="Puesto" value={newPerson.position} onChange={e => setNewPerson({...newPerson, position: e.target.value})} className="bg-black/40 border border-slate-800 p-3 rounded-xl text-white outline-none focus:border-cyan-500 text-sm min-h-[44px]" />
+            <input type="date" value={newPerson.start_date} onChange={e => setNewPerson({...newPerson, start_date: e.target.value})} className="bg-black/40 border border-slate-800 p-3 rounded-xl text-white outline-none focus:border-cyan-500 text-sm min-h-[44px]" />
+            <button onClick={handleAddPerson} className="md:col-span-3 bg-cyan-500/20 text-cyan-400 py-3 rounded-xl font-bold border border-cyan-500/30 hover:bg-cyan-500/30 active:scale-95 touch-manipulation min-h-[44px]">DAR DE ALTA</button>
           </div>
         </div>
       )}
@@ -483,7 +726,7 @@ function Employees() {
           { id: 'horario',  label: 'Horario',  icon: '' },
           { id: 'nomina',   label: 'Nomina',   icon: '' },
         ].map(v => (
-          <button key={v.id} onClick={() => setViewMode(v.id)} className={`w-full py-2.5 sm:py-3 rounded-xl text-[10px] sm:text-[11px] font-black uppercase tracking-wider sm:tracking-widest transition-all ${viewMode === v.id ? 'bg-cyan-500 text-black shadow-lg shadow-cyan-500/20' : 'text-slate-400 hover:bg-white/5'}`}>
+          <button key={v.id} onClick={() => setViewMode(v.id)} className={`w-full py-3 sm:py-3 rounded-xl text-[10px] sm:text-[11px] font-black uppercase tracking-wider sm:tracking-widest transition-all touch-manipulation min-h-[44px] active:scale-95 ${viewMode === v.id ? 'bg-cyan-500 text-black shadow-lg shadow-cyan-500/20' : 'text-slate-400 hover:bg-white/5'}`}>
             {v.label}
           </button>
         ))}
@@ -491,11 +734,11 @@ function Employees() {
 
       {viewMode === 'personal' && (<>
       {/* FILTROS */}
-      <div className="flex gap-4 bg-[#040c1a] p-4 rounded-xl border border-slate-800">
-        <select value={filterGender} onChange={e => setFilterGender(e.target.value)} className="bg-black/40 text-slate-300 text-xs p-2 rounded-lg border border-slate-700 outline-none">
+      <div className="flex flex-wrap gap-3 bg-[#040c1a] p-4 rounded-xl border border-slate-800">
+        <select value={filterGender} onChange={e => setFilterGender(e.target.value)} className="bg-black/40 text-slate-300 text-xs p-2.5 sm:p-2 rounded-lg border border-slate-700 outline-none min-h-[44px] sm:min-h-0 touch-manipulation">
           <option value="all">Género: Todos</option><option value="Masculino">Masculino</option><option value="Femenino">Femenino</option>
         </select>
-        <select value={filterAge} onChange={e => setFilterAge(e.target.value)} className="bg-black/40 text-slate-300 text-xs p-2 rounded-lg border border-slate-700 outline-none">
+        <select value={filterAge} onChange={e => setFilterAge(e.target.value)} className="bg-black/40 text-slate-300 text-xs p-2.5 sm:p-2 rounded-lg border border-slate-700 outline-none min-h-[44px] sm:min-h-0 touch-manipulation">
           <option value="all">Edad: Todas</option><option value="18-35">18-35 años</option><option value="36-54">36-54 años</option><option value="55-80">55+ años</option>
         </select>
       </div>
@@ -583,7 +826,15 @@ function Employees() {
                     </button>
                   </div>
                   <div className="min-w-0">
-                    <h3 className="text-white font-bold text-sm sm:text-base leading-tight truncate">{item.name}</h3>
+                    <div className="flex items-center gap-2">
+                      <h3 className="text-white font-bold text-sm sm:text-base leading-tight truncate">{item.name}</h3>
+                      {(() => {
+                        const st = (item.status || 'active').toLowerCase();
+                        const cfg = { active: { label: 'Activo', cls: 'bg-green-500/15 text-green-400 border-green-500/30' }, vacations: { label: 'Vacaciones', cls: 'bg-cyan-500/15 text-cyan-400 border-cyan-500/30' }, sick: { label: 'Enfermo', cls: 'bg-amber-500/15 text-amber-400 border-amber-500/30' }, eventual: { label: 'Eventual', cls: 'bg-violet-500/15 text-violet-400 border-violet-500/30' }, suspended: { label: 'Suspendido', cls: 'bg-rose-500/15 text-rose-400 border-rose-500/30' } };
+                        const c = cfg[st] || cfg.active;
+                        return <span className={`shrink-0 text-[8px] font-black uppercase px-1.5 py-0.5 rounded-md border ${c.cls}`}>{c.label}</span>;
+                      })()}
+                    </div>
                     <div className="flex items-center gap-1.5 sm:gap-2 mt-0.5 min-w-0">
                       <span className={`w-1.5 h-1.5 rounded-full ${isWorkingNowForItem(item, attendance) ? 'bg-green-500 animate-pulse' : 'bg-slate-600'}`} />
                       <p className="text-[9px] sm:text-[10px] text-slate-500 font-bold uppercase tracking-wide leading-tight break-words">{item.position} • {isWorkingNowForItem(item, attendance) ? 'En Turno' : 'Fuera'}</p>
@@ -591,6 +842,19 @@ function Employees() {
                   </div>
                 </div>
                 <div className="w-full sm:w-auto flex items-center justify-between sm:justify-end gap-3 sm:gap-6">
+                  <select
+                    value={item.status || 'active'}
+                    onClick={(e) => e.stopPropagation()}
+                    onChange={(e) => { e.stopPropagation(); saveEmployeeStatus(item, e.target.value); }}
+                    className="bg-black/40 border border-slate-700 text-slate-300 text-[10px] px-2 py-1.5 rounded-lg outline-none focus:border-cyan-500 min-h-[36px] touch-manipulation"
+                  >
+                    <option value="active">Activo</option>
+                    <option value="vacations">Vacaciones</option>
+                    <option value="sick">Enfermedad</option>
+                    <option value="eventual">Eventual</option>
+                    <option value="suspended">Suspendido</option>
+                    <option value="inactive">Inactivo (Baja)</option>
+                  </select>
                   <div className="text-right">
                     <p className="text-[8px] sm:text-[9px] text-slate-500 font-black uppercase">Neto Semanal</p>
                     <p className="text-base sm:text-lg font-black text-emerald-400 leading-none">${formatMoney(payroll.netPay)}</p>
@@ -601,14 +865,14 @@ function Employees() {
 
               {expanded && (
                 <div className="p-6 bg-black/40 border-t border-slate-800 animate-in slide-in-from-top-2 duration-200">
-                  <div className="flex gap-2 mb-6 border-b border-slate-800 overflow-x-auto pb-px">
+                  <div className="flex gap-1 mb-6 border-b border-slate-800 overflow-x-auto pb-px">
                     {['info', 'horario', 'nomina', 'reportes', 'notas'].map(t => (
                       <button key={t} onClick={() => {
                         setEmpTabs(p => ({...p, [item.id]: t}));
                         if(t === 'nomina') loadAttendance(item.id, item.employee_number, item.name);
                         if(t === 'reportes') loadReports(item.id);
                         if(t === 'notas') loadNotes(item.id);
-                      }} className={`px-5 py-2.5 text-[10px] font-black uppercase tracking-widest transition-all ${activeTab === t ? 'text-cyan-400 border-b-2 border-cyan-400' : 'text-slate-500 hover:text-slate-300'}`}>
+                      }} className={`px-4 sm:px-5 py-3 sm:py-2.5 text-[10px] font-black uppercase tracking-widest transition-all touch-manipulation min-h-[44px] sm:min-h-0 whitespace-nowrap ${activeTab === t ? 'text-cyan-400 border-b-2 border-cyan-400' : 'text-slate-500 hover:text-slate-300 active:text-slate-200'}`}>
                         {t === 'nomina' ? 'Liquidación / Nómina' : t}
                       </button>
                     ))}
@@ -731,7 +995,7 @@ function Employees() {
                           <div className="space-y-3">
                             <div className="flex justify-between text-xs"><span>Sueldo Base (7d)</span><span className="text-white font-mono">${formatMoney(payroll.baseWeekly)}</span></div>
                             <div className="flex justify-between text-xs text-red-400"><span>Faltas ({payroll.absences})</span><span className="font-mono">-${formatMoney(payroll.deduction)}</span></div>
-                            <div className="flex justify-between text-xs text-cyan-400"><span>Bonos/Extras</span><span className="font-mono">+${formatMoney(payroll.extraPay)}</span></div>
+                            <div className="flex justify-between text-xs text-cyan-400"><span>Hrs extra ({payroll.extraHours}h × $50)</span><span className="font-mono">+${formatMoney(payroll.extraPay)}</span></div>
                             <div className="pt-3 border-t border-slate-800 flex justify-between font-black text-white text-base"><span>PAGO NETO</span><span className="text-emerald-400 font-mono">${formatMoney(payroll.netPay)}</span></div>
                           </div>
                         </div>
@@ -759,12 +1023,22 @@ function Employees() {
                           <div><label className="text-[8px] text-slate-500 font-black uppercase mb-1 block">Nombre Completo</label>
                             <input type="text" value={editingReport[item.id]?.name ?? item.name ?? ''} onChange={e => handleReportEdit(item.id, 'name', e.target.value)} className="w-full bg-transparent border-b border-slate-700 text-white text-sm py-1 focus:border-cyan-500 outline-none" />
                           </div>
-                          <div className="grid grid-cols-2 gap-4">
+                          <div className="grid grid-cols-3 gap-4">
                             <div><label className="text-[8px] text-slate-500 font-black uppercase mb-1 block">Puesto</label>
                               <input type="text" value={editingReport[item.id]?.position ?? item.position ?? ''} onChange={e => handleReportEdit(item.id, 'position', e.target.value)} className="w-full bg-transparent border-b border-slate-700 text-white text-sm py-1 focus:border-cyan-500 outline-none" />
                             </div>
                             <div><label className="text-[8px] text-slate-500 font-black uppercase mb-1 block">Sueldo Diario</label>
                               <input type="number" value={editingReport[item.id]?.daily_salary ?? item.daily_salary ?? ''} onChange={e => handleReportEdit(item.id, 'daily_salary', e.target.value)} className="w-full bg-transparent border-b border-slate-700 text-white text-sm py-1 focus:border-cyan-500 outline-none" />
+                            </div>
+                            <div><label className="text-[8px] text-slate-500 font-black uppercase mb-1 block">Estatus</label>
+                              <select value={editingReport[item.id]?.status ?? item.status ?? 'active'} onChange={e => handleReportEdit(item.id, 'status', e.target.value)} className="w-full bg-black/40 border-b border-slate-700 text-white text-sm py-1 focus:border-cyan-500 outline-none">
+                                <option value="active">Activo</option>
+                                <option value="vacations">Vacaciones</option>
+                                <option value="sick">Enfermedad</option>
+                                <option value="eventual">Eventual</option>
+                                <option value="suspended">Suspendido</option>
+                                <option value="inactive">Inactivo (Baja)</option>
+                              </select>
                             </div>
                           </div>
                           <div className="grid grid-cols-2 gap-4">
@@ -854,7 +1128,7 @@ function Employees() {
                           <div className="space-y-2.5">
                             <div className="flex justify-between text-xs"><span className="text-slate-500">Sueldo Base (7d)</span><span className="text-white font-mono">${formatMoney(payroll.baseWeekly)}</span></div>
                             <div className="flex justify-between text-xs text-red-400"><span>Faltas ({payroll.absences})</span><span className="font-mono">-${formatMoney(payroll.deduction)}</span></div>
-                            <div className="flex justify-between text-xs text-cyan-400"><span>Bonos/Extras</span><span className="font-mono">+${formatMoney(payroll.extraPay)}</span></div>
+                            <div className="flex justify-between text-xs text-cyan-400"><span>Hrs extra ({payroll.extraHours}h × $50)</span><span className="font-mono">+${formatMoney(payroll.extraPay)}</span></div>
                             <div className="pt-3 border-t border-slate-800 flex justify-between font-black text-white text-base"><span>Pago Neto</span><span className="text-emerald-400 font-mono">${formatMoney(payroll.netPay)}</span></div>
                           </div>
                         </div>
@@ -893,45 +1167,64 @@ function Employees() {
                   )}
 
                   {activeTab === 'horario' && (
-                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 animate-in slide-in-from-bottom-2 duration-300">
-                      <div className="bg-[#0c1222] p-5 rounded-2xl border border-purple-500/20 shadow-2xl">
-                        <h4 className="text-[9px] font-black text-purple-400 uppercase mb-4 tracking-widest">Configuración de Horario Fijo</h4>
-                        <div className="space-y-2">
-                          {['Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado', 'Domingo'].map((day, dIdx) => (
-                            <div key={day} className="grid grid-cols-3 gap-3 items-center bg-black/30 p-2.5 rounded-xl border border-white/[0.03]">
-                              <div className="text-[10px] font-bold text-slate-400">{day}</div>
-                              <div className="flex gap-1.5 col-span-2">
+                    <div className="space-y-4 animate-in slide-in-from-bottom-2 duration-300">
+                      <div className="flex items-center justify-between">
+                        <div>
+                          <p className="text-[10px] text-purple-400 font-black uppercase tracking-widest">Horario Semanal (Vie — Jue)</p>
+                          <p className="text-[9px] text-slate-600 mt-0.5">{(() => {
+                            const ws = getWeekStartYmd(scheduleWeekOffset);
+                            const we = new Date(new Date(ws).getTime() + 6 * 86400000);
+                            return `${new Date(ws+'T12:00:00').toLocaleDateString('es-MX',{day:'2-digit',month:'short'})} — ${we.toLocaleDateString('es-MX',{day:'2-digit',month:'short',year:'numeric'})}`;
+                          })()}</p>
+                        </div>
+                        <div className="flex gap-1">
+                          <button onClick={() => setScheduleWeekOffset(p => p - 1)} className="text-[8px] bg-slate-800 text-slate-300 px-2 py-1.5 rounded hover:bg-cyan-500 hover:text-black touch-manipulation min-h-[36px]">←</button>
+                          <button onClick={() => setScheduleWeekOffset(0)} className="text-[8px] bg-slate-800 text-slate-300 px-2 py-1.5 rounded hover:bg-cyan-500 hover:text-black touch-manipulation min-h-[36px]">HOY</button>
+                          <button onClick={() => setScheduleWeekOffset(p => p + 1)} className="text-[8px] bg-slate-800 text-slate-300 px-2 py-1.5 rounded hover:bg-cyan-500 hover:text-black touch-manipulation min-h-[36px]">→</button>
+                        </div>
+                      </div>
+                      <div className="bg-[#0c1222] p-4 rounded-2xl border border-purple-500/20 shadow-2xl space-y-2">
+                        {PAYROLL_DAY_NAMES.map((dayName, dIdx) => {
+                          const draft = getScheduleDraftForItem(item)?.[dIdx] || {};
+                          const dayType = draft.day_type || 'laboral';
+                          const isLaboral = dayType === 'laboral';
+                          const wsYmd = getWeekStartYmd(scheduleWeekOffset);
+                          const dateObj = new Date(new Date(wsYmd+'T12:00:00').getTime() + dIdx * 86400000);
+                          const dateYmd = dateObj.toISOString().slice(0, 10);
+                          const dayTypeColors = { laboral: 'border-slate-700', descanso: 'border-blue-500/30 bg-blue-500/5', enfermedad: 'border-amber-500/30 bg-amber-500/5', vacaciones: 'border-cyan-500/30 bg-cyan-500/5', falta: 'border-red-500/30 bg-red-500/5', incapacidad: 'border-fuchsia-500/30 bg-fuchsia-500/5', permiso: 'border-violet-500/30 bg-violet-500/5' };
+                          return (
+                            <div key={dIdx} className={`rounded-xl border p-3 ${dayTypeColors[dayType] || 'border-slate-700'}`}>
+                              <div className="flex flex-col sm:flex-row sm:items-center gap-2">
+                                <div className="flex items-center gap-2 sm:w-28 shrink-0">
+                                  <p className="text-[10px] font-bold text-slate-300">{dayName}</p>
+                                  <p className="text-[9px] text-slate-600">{dateObj.toLocaleDateString('es-MX',{day:'2-digit',month:'short'})}</p>
+                                </div>
                                 <select
-                                  className="w-[120px] bg-slate-900 border border-slate-700 text-white text-[10px] p-1.5 rounded-lg outline-none focus:border-purple-500"
-                                  value={getScheduleDraftForItem(item)?.[dIdx]?.day_type || 'laboral'}
+                                  className="bg-slate-900 border border-slate-700 text-white text-[10px] p-1.5 rounded-lg outline-none focus:border-purple-500 min-h-[36px] touch-manipulation"
+                                  value={dayType}
                                   onChange={(e) => updateScheduleDraft(item, dIdx, 'day_type', e.target.value)}
                                 >
                                   <option value="laboral">Laboral</option>
                                   <option value="descanso">Descanso</option>
                                   <option value="enfermedad">Enfermedad</option>
+                                  <option value="vacaciones">Vacaciones</option>
+                                  <option value="falta">Falta</option>
+                                  <option value="incapacidad">Incapacidad</option>
+                                  <option value="permiso">Permiso</option>
                                 </select>
-                                <input
-                                  type="time"
-                                  disabled={(getScheduleDraftForItem(item)?.[dIdx]?.day_type || 'laboral') !== 'laboral'}
-                                  className="flex-1 bg-slate-900 border border-slate-700 text-white text-[10px] p-1.5 rounded-lg outline-none focus:border-purple-500 disabled:opacity-40"
-                                  value={getScheduleDraftForItem(item)?.[dIdx]?.entry || ''}
-                                  onChange={(e) => updateScheduleDraft(item, dIdx, 'entry', e.target.value)}
-                                />
-                                <input
-                                  type="time"
-                                  disabled={(getScheduleDraftForItem(item)?.[dIdx]?.day_type || 'laboral') !== 'laboral'}
-                                  className="flex-1 bg-slate-900 border border-slate-700 text-white text-[10px] p-1.5 rounded-lg outline-none focus:border-purple-500 disabled:opacity-40"
-                                  value={getScheduleDraftForItem(item)?.[dIdx]?.exit || ''}
-                                  onChange={(e) => updateScheduleDraft(item, dIdx, 'exit', e.target.value)}
-                                />
+                                <input type="time" disabled={!isLaboral} className="bg-slate-900 border border-slate-700 text-white text-[10px] p-1.5 rounded-lg outline-none focus:border-purple-500 disabled:opacity-30 min-h-[36px] touch-manipulation" value={draft.entry || ''} onChange={(e) => updateScheduleDraft(item, dIdx, 'entry', e.target.value)} />
+                                <span className="text-slate-600 text-[10px] hidden sm:inline">—</span>
+                                <input type="time" disabled={!isLaboral} className="bg-slate-900 border border-slate-700 text-white text-[10px] p-1.5 rounded-lg outline-none focus:border-purple-500 disabled:opacity-30 min-h-[36px] touch-manipulation" value={draft.exit || ''} onChange={(e) => updateScheduleDraft(item, dIdx, 'exit', e.target.value)} />
+                                <input type="text" placeholder="Nota..." className="flex-1 bg-slate-900 border border-slate-700 text-white text-[10px] p-1.5 rounded-lg outline-none focus:border-purple-500 min-h-[36px] touch-manipulation" value={draft.note || ''} onChange={(e) => updateScheduleDraft(item, dIdx, 'note', e.target.value)} />
+                                <button onClick={() => saveDayOverride(item, dIdx, dateYmd, draft)} className="bg-purple-500/20 text-purple-300 px-2 py-1.5 rounded-lg text-[9px] font-bold border border-purple-500/20 hover:bg-purple-500/30 min-h-[36px] touch-manipulation shrink-0" title="Guardar este día">💾</button>
                               </div>
                             </div>
-                          ))}
-                        </div>
-                        <button onClick={() => saveSchedule(item)} disabled={!!savingSchedule[item.id]} className="w-full mt-4 bg-purple-500/20 text-purple-400 py-3 rounded-xl text-[10px] font-black border border-purple-500/20 hover:bg-purple-500/30 transition-all">
-                          {savingSchedule[item.id] ? 'PROCESANDO...' : 'ACTUALIZAR HORARIO SEMANAL'}
-                        </button>
+                          );
+                        })}
                       </div>
+                      <button onClick={() => saveSchedule(item)} disabled={!!savingSchedule[item.id]} className="w-full bg-purple-500/20 text-purple-400 py-3 rounded-xl text-[10px] font-black border border-purple-500/20 hover:bg-purple-500/30 transition-all touch-manipulation min-h-[44px]">
+                        {savingSchedule[item.id] ? 'PROCESANDO...' : 'GUARDAR TODA LA SEMANA'}
+                      </button>
                     </div>
                   )}
 
@@ -1139,8 +1432,10 @@ function Employees() {
                                   <label className="text-[8px] text-slate-500 font-bold uppercase">Estatus</label>
                                   <select value={editingReport[item.id]?.status ?? item.status ?? ''} onChange={e => handleReportEdit(item.id, 'status', e.target.value)} className="bg-black/30 border-b border-slate-700 text-white w-full py-1.5 outline-none focus:border-cyan-500 text-xs">
                                     <option value="active">Activo</option>
-                                    <option value="vacaciones">Vacaciones</option>
+                                    <option value="vacations">Vacaciones</option>
+                                    <option value="sick">Enfermedad</option>
                                     <option value="eventual">Eventual</option>
+                                    <option value="suspended">Suspendido</option>
                                     <option value="inactive">Inactivo</option>
                                   </select>
                                 </div>
@@ -1214,63 +1509,98 @@ function Employees() {
       </>)}
       {/* END VIEW personal */}
 
-      {/* VIEW HORARIO: SEMANA ACTUAL POR DÍA */}
+      {/* VIEW HORARIO: SEMANA ACTUAL POR DÍA (Vie-Jue) */}
       {viewMode === 'horario' && (
         <div className="space-y-4">
-          <div className="flex items-center justify-between bg-[#040c1a] p-4 rounded-2xl border border-slate-800">
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 bg-[#040c1a] p-4 rounded-2xl border border-slate-800">
             <div>
-              <h2 className="text-white text-sm font-black uppercase tracking-widest">Horario Semanal</h2>
+              <h2 className="text-white text-sm font-black uppercase tracking-widest">Horario Semanal (Vie — Jue)</h2>
               <p className="text-[10px] text-slate-500 mt-1">{(() => {
-                const ref = new Date(); ref.setDate(ref.getDate() + scheduleWeekOffset * 7);
-                const day = ref.getDay();
-                const diffToMonday = (day + 6) % 7;
-                const monday = new Date(ref); monday.setDate(ref.getDate() - diffToMonday);
-                const sunday = new Date(monday); sunday.setDate(monday.getDate() + 6);
-                return `${monday.toLocaleDateString('es-MX',{day:'2-digit',month:'short'})} — ${sunday.toLocaleDateString('es-MX',{day:'2-digit',month:'short',year:'numeric'})}`;
+                const ws = getWeekStartYmd(scheduleWeekOffset);
+                const friday = new Date(ws + 'T12:00:00');
+                const thursday = new Date(friday.getTime() + 6 * 86400000);
+                return `${friday.toLocaleDateString('es-MX',{day:'2-digit',month:'short'})} — ${thursday.toLocaleDateString('es-MX',{day:'2-digit',month:'short',year:'numeric'})}`;
               })()}</p>
             </div>
-            <div className="flex gap-2">
-              <button onClick={() => setScheduleWeekOffset(p => p - 1)} className="px-3 py-2 rounded-lg bg-slate-800 text-slate-300 text-xs font-bold hover:bg-cyan-500 hover:text-black">← Anterior</button>
-              <button onClick={() => setScheduleWeekOffset(0)} className="px-3 py-2 rounded-lg bg-cyan-500/10 border border-cyan-500/30 text-cyan-400 text-xs font-bold">Actual</button>
-              <button onClick={() => setScheduleWeekOffset(p => p + 1)} className="px-3 py-2 rounded-lg bg-slate-800 text-slate-300 text-xs font-bold hover:bg-cyan-500 hover:text-black">Siguiente →</button>
+            <div className="flex flex-wrap gap-2">
+              <button onClick={() => setScheduleWeekOffset(p => p - 1)} className="px-3 py-2 rounded-lg bg-slate-800 text-slate-300 text-xs font-bold hover:bg-cyan-500 hover:text-black touch-manipulation min-h-[40px]">← Anterior</button>
+              <button onClick={() => setScheduleWeekOffset(0)} className="px-3 py-2 rounded-lg bg-cyan-500/10 border border-cyan-500/30 text-cyan-400 text-xs font-bold touch-manipulation min-h-[40px]">Actual</button>
+              <button onClick={() => setScheduleWeekOffset(p => p + 1)} className="px-3 py-2 rounded-lg bg-slate-800 text-slate-300 text-xs font-bold hover:bg-cyan-500 hover:text-black touch-manipulation min-h-[40px]">Siguiente →</button>
+              <button
+                onClick={exportScheduleReport}
+                disabled={scheduleReportLoading}
+                className="px-3 py-2 rounded-lg bg-emerald-500/10 border border-emerald-500/30 text-emerald-300 text-xs font-bold disabled:opacity-60 touch-manipulation min-h-[40px]"
+              >
+                {scheduleReportLoading ? 'Generando...' : 'Exportar CSV'}
+              </button>
             </div>
           </div>
+          {scheduleReportSummary && (
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+              <div className="rounded-xl border border-cyan-500/20 bg-cyan-500/5 p-2.5">
+                <p className="text-[9px] text-cyan-200/70 uppercase">Registros</p>
+                <p className="text-sm text-cyan-100 font-bold">{scheduleReportSummary.total_rows || 0}</p>
+              </div>
+              <div className="rounded-xl border border-emerald-500/20 bg-emerald-500/5 p-2.5">
+                <p className="text-[9px] text-emerald-200/70 uppercase">Laboral</p>
+                <p className="text-sm text-emerald-100 font-bold">{scheduleReportSummary.laboral || 0}</p>
+              </div>
+              <div className="rounded-xl border border-amber-500/20 bg-amber-500/5 p-2.5">
+                <p className="text-[9px] text-amber-200/70 uppercase">Descanso</p>
+                <p className="text-sm text-amber-100 font-bold">{scheduleReportSummary.descanso || 0}</p>
+              </div>
+              <div className="rounded-xl border border-rose-500/20 bg-rose-500/5 p-2.5">
+                <p className="text-[9px] text-rose-200/70 uppercase">Sin ponchar</p>
+                <p className="text-sm text-rose-100 font-bold">{scheduleReportSummary.scheduled_missing_clock_in || 0}</p>
+              </div>
+            </div>
+          )}
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-7 gap-3">
-            {['Lunes','Martes','Miércoles','Jueves','Viernes','Sábado','Domingo'].map((dayName, dIdx) => {
+            {PAYROLL_DAY_NAMES.map((dayName, dIdx) => {
               const today = new Date();
               const todayIdx = getWeekIndexFromJsDay(today.getDay());
               const isToday = scheduleWeekOffset === 0 && todayIdx === dIdx;
+              const wsYmd = getWeekStartYmd(scheduleWeekOffset);
+              const dateObj = new Date(new Date(wsYmd+'T12:00:00').getTime() + dIdx * 86400000);
               const employeesForDay = activeList.filter(emp => {
                 const sch = getScheduleForItem(emp)?.[dIdx];
                 return sch && !sch.is_day_off && (sch.entry || sch.exit);
               });
+              const dayTypeLabels = { laboral: '', descanso: 'DESC', enfermedad: 'ENF', vacaciones: 'VAC', falta: 'FALTA', incapacidad: 'INCAP', permiso: 'PERM' };
               return (
                 <div key={dIdx} className={`bg-[#040c1a] p-3 rounded-2xl border ${isToday ? 'border-cyan-500/60 shadow-lg shadow-cyan-500/10' : 'border-slate-800'}`}>
                   <div className="flex items-center justify-between mb-3 border-b border-slate-800 pb-2">
-                    <p className={`text-[10px] font-black uppercase tracking-widest ${isToday ? 'text-cyan-400' : 'text-slate-500'}`}>{dayName}</p>
+                    <div>
+                      <p className={`text-[10px] font-black uppercase tracking-widest ${isToday ? 'text-cyan-400' : 'text-slate-500'}`}>{dayName}</p>
+                      <p className="text-[9px] text-slate-600">{dateObj.toLocaleDateString('es-MX',{day:'2-digit',month:'short'})}</p>
+                    </div>
                     <span className="text-[9px] text-slate-600 font-mono">{employeesForDay.length}</span>
                   </div>
-                  <div className="space-y-2 max-h-96 overflow-y-auto">
+                  <div className="space-y-2 max-h-96 overflow-y-auto overscroll-contain">
                     {employeesForDay.length === 0 && (
                       <p className="text-[9px] text-slate-700 text-center py-6">Nadie programado</p>
                     )}
-                    {employeesForDay.map(emp => {
-                      const sch = getScheduleForItem(emp)[dIdx] || {};
+                    {activeList.map(emp => {
+                      const sch = getScheduleForItem(emp)?.[dIdx] || {};
+                      const dt = sch.day_type || (sch.is_day_off ? 'descanso' : (sch.entry ? 'laboral' : null));
+                      if (!dt) return null;
                       const att = isToday ? getAttendanceForItem(emp) : null;
-                      const isWorkingNow = isWorkingNowForItem(emp, att);
-                      const isLate = isToday && !att?.clock_in && sch.entry && (() => {
+                      const isWorkingNow = dt === 'laboral' && isWorkingNowForItem(emp, att);
+                      const isLate = isToday && dt === 'laboral' && !att?.clock_in && sch.entry && (() => {
                         const [eH, eM] = sch.entry.split(':').map(Number);
                         const eT = new Date(); eT.setHours(eH, eM, 0, 0);
                         return today > eT;
                       })();
+                      const dtLabel = dayTypeLabels[dt] || '';
+                      const dtColors = { descanso: 'text-blue-400', enfermedad: 'text-amber-400', vacaciones: 'text-cyan-400', falta: 'text-red-400', incapacidad: 'text-fuchsia-400', permiso: 'text-violet-400' };
                       return (
-                        <button key={emp.id} onClick={() => { setViewMode('personal'); setExpandedItems(p => ({...p, [emp.id]: true})); setEmpTabs(p => ({...p, [emp.id]: 'horario'})); }} className={`w-full text-left bg-black/30 hover:bg-cyan-500/10 border hover:border-cyan-500/30 p-2.5 rounded-xl transition-all ${isLate ? 'border-red-500/40 bg-red-500/5' : 'border-white/[0.03]'}`}>
+                        <button key={emp.id} onClick={() => { setViewMode('personal'); setExpandedItems(p => ({...p, [emp.id]: true})); setEmpTabs(p => ({...p, [emp.id]: 'horario'})); }} className={`w-full text-left bg-black/30 hover:bg-cyan-500/10 border hover:border-cyan-500/30 p-2.5 rounded-xl transition-all touch-manipulation ${isLate ? 'border-red-500/40 bg-red-500/5' : 'border-white/[0.03]'}`}>
                           <div className="flex items-center gap-2">
-                            <span className={`w-1.5 h-1.5 rounded-full ${isWorkingNow ? 'bg-green-500 animate-pulse' : isLate ? 'bg-red-500 animate-pulse' : 'bg-slate-600'}`} />
+                            <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${isWorkingNow ? 'bg-green-500 animate-pulse' : isLate ? 'bg-red-500 animate-pulse' : 'bg-slate-600'}`} />
                             <p className="text-[11px] text-white font-bold truncate flex-1">{emp.name}</p>
+                            {dtLabel && <span className={`text-[8px] font-black ${dtColors[dt] || 'text-slate-400'}`}>{dtLabel}</span>}
                           </div>
-                          <p className="text-[9px] text-slate-500 mt-1 ml-3.5 truncate">{emp.position}</p>
-                          <p className="text-[9px] text-cyan-400 font-mono mt-1 ml-3.5">{sch.entry || '--:--'} — {sch.exit || '--:--'}</p>
+                          {dt === 'laboral' && <p className="text-[9px] text-cyan-400 font-mono mt-1 ml-3.5">{sch.entry || '--:--'} — {sch.exit || '--:--'}</p>}
                         </button>
                       );
                     })}
@@ -1287,8 +1617,157 @@ function Employees() {
       {viewMode === 'nomina' && (
         <div className="space-y-3">
           <div className="bg-[#040c1a] p-4 rounded-2xl border border-slate-800">
-            <h2 className="text-white text-sm font-black uppercase tracking-widest">Nómina Semanal</h2>
-            <p className="text-[10px] text-slate-500 mt-1">Resumen rápido de pago para todos los colaboradores activos</p>
+            <h2 className="text-white text-sm font-black uppercase tracking-widest">Nómina Semanal (Vie — Jue)</h2>
+            <p className="text-[10px] text-slate-500 mt-1">Periodo de nómina: viernes a jueves · Hora extra: $50/hr · Resumen de pago para colaboradores activos</p>
+          </div>
+          <div className="bg-[#040c1a] p-4 rounded-2xl border border-cyan-500/20 space-y-3">
+            <div className="flex flex-col md:flex-row md:items-end gap-2">
+              <div>
+                <p className="text-[10px] text-slate-400 uppercase mb-1">Periodo inicio</p>
+                <input type="date" value={periodReportStart} onChange={(e) => setPeriodReportStart(e.target.value)} className="bg-black/40 border border-slate-700 text-white text-xs px-2.5 py-2 rounded-lg" />
+              </div>
+              <div>
+                <p className="text-[10px] text-slate-400 uppercase mb-1">Periodo fin</p>
+                <input type="date" value={periodReportEnd} onChange={(e) => setPeriodReportEnd(e.target.value)} className="bg-black/40 border border-slate-700 text-white text-xs px-2.5 py-2 rounded-lg" />
+              </div>
+              <button onClick={generatePeriodEmployeeReport} disabled={periodReportLoading} className="px-3 py-2 rounded-lg bg-cyan-500/10 border border-cyan-500/30 text-cyan-300 text-xs font-bold disabled:opacity-60">
+                {periodReportLoading ? 'Generando...' : 'Generar reporte del periodo'}
+              </button>
+              <button onClick={exportPeriodEmployeeReportCsv} className="px-3 py-2 rounded-lg bg-emerald-500/10 border border-emerald-500/30 text-emerald-300 text-xs font-bold">
+                Exportar CSV
+              </button>
+            </div>
+            <div className="rounded-xl border border-slate-800 bg-black/20 p-2.5">
+              <p className="text-[10px] text-slate-500 uppercase mb-2">Filtrar empleados (vacío = todos)</p>
+              <div className="max-h-28 overflow-y-auto grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
+                {activeList.map((emp) => {
+                  const idKey = String(emp.employee_number || emp.id || '');
+                  const selected = selectedPeriodEmployees.includes(idKey);
+                  return (
+                    <button
+                      key={`pick-${emp.id}`}
+                      onClick={() => togglePeriodEmployee(idKey)}
+                      className={`text-left rounded-lg border px-2.5 py-1.5 text-[10px] ${selected ? 'border-cyan-500/50 bg-cyan-500/10 text-cyan-200' : 'border-slate-700 bg-black/20 text-slate-300'}`}
+                    >
+                      <p className="font-bold truncate">{emp.name}</p>
+                      <p className="text-[9px] opacity-70 truncate">{emp.position}</p>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+            {periodReportSummary && (
+              <div className="grid grid-cols-2 md:grid-cols-5 gap-2">
+                <div className="rounded-lg border border-rose-500/20 bg-rose-500/5 p-2"><p className="text-[9px] text-rose-300/70 uppercase">Faltas</p><p className="text-sm text-rose-200 font-bold">{periodReportSummary.total_faltas || 0}</p></div>
+                <div className="rounded-lg border border-amber-500/20 bg-amber-500/5 p-2"><p className="text-[9px] text-amber-300/70 uppercase">Ausencias</p><p className="text-sm text-amber-200 font-bold">{periodReportSummary.total_ausencias || 0}</p></div>
+                <div className="rounded-lg border border-fuchsia-500/20 bg-fuchsia-500/5 p-2"><p className="text-[9px] text-fuchsia-300/70 uppercase">Enfermedades</p><p className="text-sm text-fuchsia-200 font-bold">{periodReportSummary.total_enfermedades || 0}</p></div>
+                <div className="rounded-lg border border-cyan-500/20 bg-cyan-500/5 p-2"><p className="text-[9px] text-cyan-300/70 uppercase">Vacaciones</p><p className="text-sm text-cyan-200 font-bold">{periodReportSummary.total_vacaciones || 0}</p></div>
+                <div className="rounded-lg border border-emerald-500/20 bg-emerald-500/5 p-2"><p className="text-[9px] text-emerald-300/70 uppercase">No iba y si estuvo</p><p className="text-sm text-emerald-200 font-bold">{periodReportSummary.total_unexpected_present || 0}</p></div>
+              </div>
+            )}
+            {periodReportRows.length > 0 && (
+              <div className="overflow-x-auto rounded-xl border border-slate-800">
+                <table className="min-w-full text-[10px]">
+                  <thead className="bg-black/40 text-slate-300">
+                    <tr>
+                      <th className="px-2 py-2 text-left">Empleado</th>
+                      <th className="px-2 py-2 text-right">Faltas</th>
+                      <th className="px-2 py-2 text-right">Ausencias</th>
+                      <th className="px-2 py-2 text-right">Enfermedad</th>
+                      <th className="px-2 py-2 text-right">Vacaciones</th>
+                      <th className="px-2 py-2 text-right">No iba y si estuvo</th>
+                      <th className="px-2 py-2 text-right">Horas</th>
+                      <th className="px-2 py-2 text-right">Nómina periodo</th>
+                      <th className="px-2 py-2 text-right">Nómina semanal</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {periodReportRows.map((row, idx) => (
+                      <tr key={`${row.employee_id}-${idx}`} className="border-t border-slate-800 text-slate-200">
+                        <td className="px-2 py-2">
+                          <p className="font-bold">{row.employee_name}</p>
+                          <p className="text-[9px] text-slate-500">{row.position}</p>
+                        </td>
+                        <td className="px-2 py-2 text-right text-rose-300">{row.faltas}</td>
+                        <td className="px-2 py-2 text-right text-amber-300">{row.ausencias}</td>
+                        <td className="px-2 py-2 text-right text-fuchsia-300">{row.enfermedades}</td>
+                        <td className="px-2 py-2 text-right text-cyan-300">{row.vacaciones}</td>
+                        <td className="px-2 py-2 text-right text-emerald-300">{row.unexpected_present || 0}</td>
+                        <td className="px-2 py-2 text-right">
+                          <p>{row.hours_worked} / {row.hours_scheduled}</p>
+                          <p className={`text-[9px] ${Number(row.hours_balance) < 0 ? 'text-rose-300' : 'text-emerald-300'}`}>{Number(row.hours_balance) >= 0 ? '+' : ''}{row.hours_balance}</p>
+                        </td>
+                        <td className="px-2 py-2 text-right text-white font-mono">${formatMoney(row.payroll_period)}</td>
+                        <td className="px-2 py-2 text-right text-emerald-300 font-mono">${formatMoney(row.payroll_weekly)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
+              <div className="rounded-xl border border-slate-800 bg-black/20 p-3">
+                <div className="flex items-center justify-between mb-2">
+                  <p className="text-[10px] text-slate-400 uppercase">Ventas por colaborador (mesero/bartender)</p>
+                  {performanceLoading && <span className="text-[10px] text-cyan-400">Cargando...</span>}
+                </div>
+                <div className="h-64">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <BarChart data={performanceReport.staff_performance.slice(0, 10)} margin={{ top: 10, right: 8, left: -20, bottom: 0 }}>
+                      <CartesianGrid strokeDasharray="3 3" stroke="rgba(148,163,184,0.15)" />
+                      <XAxis dataKey="employee_name" tick={{ fill: '#94a3b8', fontSize: 10 }} interval={0} angle={-20} textAnchor="end" height={60} />
+                      <YAxis tick={{ fill: '#94a3b8', fontSize: 10 }} />
+                      <Tooltip />
+                      <Bar dataKey="total_sales" fill="#22d3ee" name="Ventas" />
+                    </BarChart>
+                  </ResponsiveContainer>
+                </div>
+              </div>
+              <div className="rounded-xl border border-slate-800 bg-black/20 p-3">
+                <p className="text-[10px] text-slate-400 uppercase mb-2">Ticket promedio por colaborador</p>
+                <div className="h-64">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <BarChart data={performanceReport.staff_performance.slice(0, 10)} margin={{ top: 10, right: 8, left: -20, bottom: 0 }}>
+                      <CartesianGrid strokeDasharray="3 3" stroke="rgba(148,163,184,0.15)" />
+                      <XAxis dataKey="employee_name" tick={{ fill: '#94a3b8', fontSize: 10 }} interval={0} angle={-20} textAnchor="end" height={60} />
+                      <YAxis tick={{ fill: '#94a3b8', fontSize: 10 }} />
+                      <Tooltip />
+                      <Bar dataKey="avg_ticket" fill="#a78bfa" name="Ticket promedio" />
+                    </BarChart>
+                  </ResponsiveContainer>
+                </div>
+              </div>
+            </div>
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
+              <div className="rounded-xl border border-slate-800 bg-black/20 p-3">
+                <p className="text-[10px] text-slate-400 uppercase mb-2">Productos mas vendidos</p>
+                <div className="h-60">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <BarChart data={performanceReport.top_products.slice(0, 8)} margin={{ top: 10, right: 8, left: -20, bottom: 0 }}>
+                      <CartesianGrid strokeDasharray="3 3" stroke="rgba(148,163,184,0.15)" />
+                      <XAxis dataKey="product_name" tick={{ fill: '#94a3b8', fontSize: 10 }} interval={0} angle={-18} textAnchor="end" height={65} />
+                      <YAxis tick={{ fill: '#94a3b8', fontSize: 10 }} />
+                      <Tooltip />
+                      <Bar dataKey="total_qty" fill="#34d399" name="Cantidad" />
+                    </BarChart>
+                  </ResponsiveContainer>
+                </div>
+              </div>
+              <div className="rounded-xl border border-slate-800 bg-black/20 p-3">
+                <p className="text-[10px] text-slate-400 uppercase mb-2">Productos menos vendidos</p>
+                <div className="h-60">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <BarChart data={performanceReport.bottom_products.slice(0, 8)} margin={{ top: 10, right: 8, left: -20, bottom: 0 }}>
+                      <CartesianGrid strokeDasharray="3 3" stroke="rgba(148,163,184,0.15)" />
+                      <XAxis dataKey="product_name" tick={{ fill: '#94a3b8', fontSize: 10 }} interval={0} angle={-18} textAnchor="end" height={65} />
+                      <YAxis tick={{ fill: '#94a3b8', fontSize: 10 }} />
+                      <Tooltip />
+                      <Bar dataKey="total_qty" fill="#f59e0b" name="Cantidad" />
+                    </BarChart>
+                  </ResponsiveContainer>
+                </div>
+              </div>
+            </div>
           </div>
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
             {activeList.map(emp => {
@@ -1328,10 +1807,10 @@ function Employees() {
                   <div className="space-y-1.5">
                     <div className="flex justify-between text-[10px]"><span className="text-slate-500">Sueldo base (7d)</span><span className="text-white font-mono">${formatMoney(payroll.baseWeekly)}</span></div>
                     <div className="flex justify-between text-[10px]"><span className="text-red-400">Faltas ({payroll.absences})</span><span className="text-red-400 font-mono">-${formatMoney(payroll.deduction)}</span></div>
-                    <div className="flex justify-between text-[10px]"><span className="text-cyan-400">Extras</span><span className="text-cyan-400 font-mono">+${formatMoney(payroll.extraPay)}</span></div>
+                    <div className="flex justify-between text-[10px]"><span className="text-cyan-400">Hrs extra ({payroll.extraHours}h × $50)</span><span className="text-cyan-400 font-mono">+${formatMoney(payroll.extraPay)}</span></div>
                     <div className="flex justify-between pt-2 border-t border-slate-800 text-xs font-black"><span className="text-white">Neto</span><span className="text-emerald-400 font-mono">${formatMoney(payroll.netPay)}</span></div>
                   </div>
-                  <button onClick={() => { setViewMode('personal'); setExpandedItems(p => ({...p, [emp.id]: true})); setEmpTabs(p => ({...p, [emp.id]: 'nomina'})); loadAttendance(emp.id, emp.employee_number, emp.name); }} className="w-full mt-3 bg-cyan-500/10 text-cyan-400 py-2 rounded-lg text-[9px] font-black border border-cyan-500/20 hover:bg-cyan-500/20 uppercase tracking-widest">Ver detalle</button>
+                  <button onClick={() => { setViewMode('personal'); setExpandedItems(p => ({...p, [emp.id]: true})); setEmpTabs(p => ({...p, [emp.id]: 'nomina'})); loadAttendance(emp.id, emp.employee_number, emp.name); }} className="w-full mt-3 bg-cyan-500/10 text-cyan-400 py-2 rounded-lg text-[9px] font-black border border-cyan-500/20 hover:bg-cyan-500/20 uppercase tracking-widest touch-manipulation min-h-[40px]">Ver detalle</button>
                 </div>
               );
             })}

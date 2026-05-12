@@ -22,15 +22,27 @@ try {
         exit;
     }
 
+    $clearTable = ($status === 'completed' || $status === 'cancelled');
+
     if ($extraNote !== '') {
-        $sql = "UPDATE special_reservations
-                SET status = ?, notes = CONCAT(COALESCE(notes,''), CASE WHEN COALESCE(notes,'') = '' THEN '' ELSE '\n\n' END, ?), updated_at = NOW()
-                WHERE id = ?";
+        if ($clearTable) {
+            $sql = "UPDATE special_reservations
+                    SET status = ?, table_code = NULL, notes = CONCAT(COALESCE(notes,''), CASE WHEN COALESCE(notes,'') = '' THEN '' ELSE '\n\n' END, ?), updated_at = NOW()
+                    WHERE id = ?";
+        } else {
+            $sql = "UPDATE special_reservations
+                    SET status = ?, notes = CONCAT(COALESCE(notes,''), CASE WHEN COALESCE(notes,'') = '' THEN '' ELSE '\n\n' END, ?), updated_at = NOW()
+                    WHERE id = ?";
+        }
         $stmt = $conn->prepare($sql);
         $noteWithPrefix = '[ADMIN] ' . $extraNote;
         $stmt->bind_param('ssi', $status, $noteWithPrefix, $id);
     } else {
-        $sql = "UPDATE special_reservations SET status = ?, updated_at = NOW() WHERE id = ?";
+        if ($clearTable) {
+            $sql = 'UPDATE special_reservations SET status = ?, table_code = NULL, updated_at = NOW() WHERE id = ?';
+        } else {
+            $sql = 'UPDATE special_reservations SET status = ?, updated_at = NOW() WHERE id = ?';
+        }
         $stmt = $conn->prepare($sql);
         $stmt->bind_param('si', $status, $id);
     }

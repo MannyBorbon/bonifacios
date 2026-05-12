@@ -9,7 +9,7 @@ echo "=== DEBUG COMPLETO - " . date('Y-m-d H:i:s') . " ===\n\n";
 echo "0. Columnas de cheqdet:\n";
 try {
     $dsn0  = "sqlsrv:Server=100.84.227.35\\NATIONALSOFT;Database=softrestaurant8pro;Encrypt=false;TrustServerCertificate=true";
-    $conn0 = new PDO($dsn0, 'usuario_web', 'Filipenses4:8@', [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION]);
+    $conn0 = new PDO($dsn0, 'usuario_web', getenv('SR_PASS') ?: '', [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION]);
     $cols = $conn0->query("SELECT COLUMN_NAME, DATA_TYPE FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'cheqdet' ORDER BY ORDINAL_POSITION")->fetchAll(PDO::FETCH_ASSOC);
     foreach ($cols as $c) { echo "   {$c['COLUMN_NAME']} ({$c['DATA_TYPE']})\n"; }
     echo "\n-- MUESTRA cheqdet (1 fila):\n";
@@ -21,7 +21,7 @@ try {
 echo "\n1. SQL Server - Ventas de hoy:\n";
 try {
     $dsn  = "sqlsrv:Server=100.84.227.35\\NATIONALSOFT;Database=softrestaurant8pro;Encrypt=false;TrustServerCertificate=true";
-    $conn = new PDO($dsn, 'usuario_web', 'Filipenses4:8@', [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION]);
+    $conn = new PDO($dsn, 'usuario_web', getenv('SR_PASS') ?: '', [PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION]);
     
     $r = $conn->query("
         SELECT COUNT(*) as n, SUM(total) as suma,

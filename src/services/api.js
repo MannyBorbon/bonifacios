@@ -124,19 +124,51 @@ export const quotesAPI = {
 export const meetingsAPI = {
   getMeetings: () => api.get('/meetings/meetings.php?action=list'),
   getRoom: (id) => api.get(`/meetings/meetings.php?action=room&id=${id}`),
+  getMessages: (meetingId) => api.get(`/meetings/meetings.php?action=messages&meeting_id=${meetingId}`),
   createMeeting: (data) => api.post('/meetings/meetings.php', { action: 'create', ...data }),
   startMeeting: (id) => api.post('/meetings/meetings.php', { action: 'start', id }),
   endMeeting: (id) => api.post('/meetings/meetings.php', { action: 'end', id }),
   joinMeeting: (id) => api.post('/meetings/meetings.php', { action: 'join', id }),
   leaveMeeting: (id) => api.post('/meetings/meetings.php', { action: 'leave', id }),
   deleteMeeting: (id) => api.post('/meetings/meetings.php', { action: 'delete', id }),
+  sendMessage: (meeting_id, content) => api.post('/meetings/meetings.php', { action: 'send_message', meeting_id, content }),
+  setParticipantRole: (meeting_id, user_id, participant_role) => api.post('/meetings/meetings.php', { action: 'set_participant_role', meeting_id, user_id, participant_role }),
+  removeParticipant: (meeting_id, user_id) => api.post('/meetings/meetings.php', { action: 'remove_participant', meeting_id, user_id }),
+  updateAttendees: (meeting_id, attendee_ids) => api.post('/meetings/meetings.php', { action: 'update_attendees', meeting_id, attendee_ids }),
   getMinutes: (meetingId) => api.get(`/meetings/minutes.php?meeting_id=${meetingId}`),
   saveMinutes: (data) => api.post('/meetings/minutes.php', data),
+  getIceServers: () => api.get('/meetings/ice-servers.php'),
+  pollSignals: (meetingId) => api.get(`/meetings/webrtc.php?meeting_id=${meetingId}`),
+  sendSignal: (data) => api.post('/meetings/webrtc.php', data),
+  cleanupSignals: (meetingId) => api.post('/meetings/webrtc.php', { action: 'cleanup', meeting_id: meetingId }),
+};
+
+export const pushNotificationsAPI = {
+  getStatus: () => api.get('/notifications/push-subscriptions.php'),
+  register: (token, platform = 'web') => api.post('/notifications/push-subscriptions.php', {
+    action: 'register',
+    token,
+    platform,
+    user_agent: navigator.userAgent || '',
+  }),
+  unregister: (token) => api.post('/notifications/push-subscriptions.php', {
+    action: 'unregister',
+    token,
+  }),
 };
 
 export const userPermissionsAPI = {
   getPermissions: () => api.get('/users/edit-permissions.php'),
   setPermission: (username, canEdit) => api.post('/users/edit-permissions.php', { username, can_edit: canEdit }),
+};
+
+export const notificationsAPI = {
+  getUnread: () => api.get('/notifications/notifications.php?action=unread'),
+  getAll: (limit = 50) => api.get(`/notifications/notifications.php?action=all&limit=${limit}`),
+  getMeetingReminders: () => api.get('/notifications/notifications.php?action=meeting_reminders'),
+  markRead: (id) => api.post('/notifications/notifications.php', { action: 'mark_read', id }),
+  markAllRead: () => api.post('/notifications/notifications.php', { action: 'mark_all_read' }),
+  dismissMeetingReminders: () => api.post('/notifications/notifications.php', { action: 'dismiss_meeting_reminders' }),
 };
 
 export const calendarAPI = {
@@ -152,6 +184,63 @@ export const reservationsAPI = {
   list: (params = {}) => api.get('/reservations/list.php', { params }),
   get: (id) => api.get(`/reservations/get.php?id=${id}`),
   updateStatus: (data) => api.post('/reservations/update-status.php', data),
+};
+
+// Workspace foundation contracts (stubs for next iteration)
+export const workspaceBoardsAPI = {
+  list: () => api.get('/workspace/boards.php'),
+  listUsers: () => api.get('/workspace/boards.php', { params: { users: 1 } }),
+  create: (payload) => api.post('/workspace/boards.php', { action: 'create_board', ...payload }),
+  createCard: (payload) => api.post('/workspace/boards.php', { action: 'create_card', ...payload }),
+  createColumn: (payload) => api.post('/workspace/boards.php', { action: 'create_column', ...payload }),
+  deleteColumn: (payload) => api.post('/workspace/boards.php', { action: 'delete_column', ...payload }),
+  updateBoard: (payload) => api.post('/workspace/boards.php', { action: 'update_board', ...payload }),
+  updateColumn: (payload) => api.post('/workspace/boards.php', { action: 'update_column', ...payload }),
+  updateCard: (payload) => api.post('/workspace/boards.php', { action: 'update_card', ...payload }),
+  deleteCard: (payload) => api.post('/workspace/boards.php', { action: 'delete_card', ...payload }),
+  getCardDetail: (payload) => api.post('/workspace/boards.php', { action: 'get_card_detail', ...payload }),
+  addChecklistItem: (payload) => api.post('/workspace/boards.php', { action: 'add_checklist_item', ...payload }),
+  toggleChecklistItem: (payload) => api.post('/workspace/boards.php', { action: 'toggle_checklist_item', ...payload }),
+  deleteChecklistItem: (payload) => api.post('/workspace/boards.php', { action: 'delete_checklist_item', ...payload }),
+  addComment: (payload) => api.post('/workspace/boards.php', { action: 'add_comment', ...payload }),
+  moveCard: (payload) => api.post('/workspace/boards.php', { action: 'move_card', ...payload }),
+  update: (id, payload) => api.post('/workspace/boards.php', { action: 'update_board', board_id: id, ...(payload || {}) }),
+  archive: (id) => api.post('/workspace/boards.php', { action: 'archive_board', board_id: id }),
+};
+
+export const workspaceListsAPI = {
+  listGroups: () => api.get('/workspace/lists.php'),
+  createGroup: (payload) => api.post('/workspace/lists.php', { action: 'create_list', ...payload }),
+  updateGroup: (payload) => api.post('/workspace/lists.php', { action: 'update_list', ...payload }),
+  deleteGroup: (payload) => api.post('/workspace/lists.php', { action: 'delete_list', ...payload }),
+  listItems: (groupId) => api.get('/workspace/lists.php', { params: { listId: groupId } }),
+  saveItem: (payload) => api.post('/workspace/lists.php', { action: 'add_item', ...payload }),
+  updateItem: (payload) => api.post('/workspace/lists.php', { action: 'update_item', ...payload }),
+  deleteItem: (payload) => api.post('/workspace/lists.php', { action: 'delete_item', ...payload }),
+  toggleItem: (payload) => api.post('/workspace/lists.php', { action: 'toggle_item', ...payload }),
+};
+
+export const workspaceNotesAPI = {
+  list: () => api.get('/workspace/notes.php'),
+  create: (payload) => api.post('/workspace/notes.php', { action: 'create_note', ...payload }),
+  togglePin: (payload) => api.post('/workspace/notes.php', { action: 'toggle_pin', ...payload }),
+  update: (id, payload) => api.post('/workspace/notes.php', { action: 'update_note', note_id: id, ...(payload || {}) }),
+  remove: (id) => api.post('/workspace/notes.php', { action: 'delete_note', note_id: id }),
+};
+
+export const workspaceSocialAPI = {
+  list: () => api.get('/workspace/social.php'),
+  createPost: (payload) => api.post('/workspace/social.php', { action: 'create_post', ...payload }),
+  uploadAttachment: (formData) => api.post('/workspace/social.php', formData, { headers: { 'Content-Type': 'multipart/form-data' } }),
+  createComment: (payload) => api.post('/workspace/social.php', { action: 'create_comment', ...payload }),
+  togglePin: (payload) => api.post('/workspace/social.php', { action: 'toggle_pin', ...payload }),
+  toggleReaction: (payload) => api.post('/workspace/social.php', { action: 'toggle_reaction', ...payload }),
+  markMentionsSeen: () => api.post('/workspace/social.php', { action: 'mark_mentions_seen' }),
+  markMentionSeen: (payload) => api.post('/workspace/social.php', { action: 'mark_mention_seen', ...payload }),
+};
+
+export const workspaceAssistantAPI = {
+  ask: (question) => api.post('/workspace/assistant.php', { action: 'ask', question }),
 };
 
 export default api;

@@ -29,14 +29,14 @@ export default function Communities() {
   )
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6 pb-[calc(env(safe-area-inset-bottom)+1rem)]">
       {/* Header */}
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between gap-3">
         <div>
           <h1 className="text-2xl font-light text-white mb-1">Comunidades</h1>
           <p className="text-sm text-slate-400">{communities.length} comunidades registradas</p>
         </div>
-        <Link to="/admin/dashboard" className="px-4 py-2 rounded-lg border border-slate-600/50 bg-slate-700/20 text-slate-300 hover:bg-slate-700/40 transition-all text-sm">
+        <Link to="/admin/dashboard" className="px-4 py-2.5 sm:py-2 rounded-xl border border-slate-600/50 bg-slate-700/20 text-slate-300 hover:bg-slate-700/40 active:scale-95 transition-all text-sm touch-manipulation min-h-[44px] flex items-center">
           ← Volver
         </Link>
       </div>

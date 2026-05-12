@@ -5,7 +5,7 @@
  */
 define('SR_DSN',  "sqlsrv:Server=100.84.227.35\\NATIONALSOFT;Database=softrestaurant8pro;Encrypt=false;TrustServerCertificate=true;LoginTimeout=30");
 define('SR_USER', 'usuario_web');
-define('SR_PASS', 'Filipenses4:8@');
+define('SR_PASS', getenv('SR_PASS') ?: '');
 
 try {
     $conn = new PDO(SR_DSN, SR_USER, SR_PASS, [

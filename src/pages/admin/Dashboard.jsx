@@ -4,6 +4,7 @@ import { analyticsAPI, siteAnalyticsAPI, userStatusAPI, quotesAPI, userPermissio
 import SalesWidget from '../../components/SalesWidget';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, AreaChart, Area } from 'recharts';
 import AdminDashboard from './AdminDashboard';
+import MeetingReminderPopup from '../../components/MeetingReminderPopup';
 
 function ViewerDashboard() {
   const [data, setData] = useState(null);
@@ -18,6 +19,8 @@ function ViewerDashboard() {
   const [unreadChat, setUnreadChat] = useState(0);
   const [editPerms, setEditPerms] = useState([]);
   const [permSaving, setPermSaving] = useState({});
+  const [opIndicators, setOpIndicators] = useState([]);
+  const [dailyOpsReport, setDailyOpsReport] = useState(null);
   const user = JSON.parse(localStorage.getItem('user') || '{}');
   const isAdmin = user.role === 'administrador';
   const isManuelOrMisael = ['manuel','misael'].includes(user.username?.toLowerCase());
@@ -109,6 +112,7 @@ function ViewerDashboard() {
     loadMyPermissions();
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
+
   const loadMyPermissions = async () => {
     try {
       const res = await authAPI.getMe();
@@ -191,6 +195,8 @@ function ViewerDashboard() {
       loadInbox();
       loadQuotesStats();
       loadUnreadChat();
+      loadOperationalIndicators();
+      loadDailyOpsReport();
     } catch (error) {
       console.error('Error loading dashboard:', error);
     } finally {
@@ -234,6 +240,26 @@ function ViewerDashboard() {
       console.error('Error loading inbox:', error);
     }
   };
+  const loadOperationalIndicators = async () => {
+    try {
+      const today = new Date().toISOString().slice(0, 10);
+      const response = await fetch(`${import.meta.env.VITE_API_URL}/dashboard/operational-checklist.php?date=${today}`, { credentials: 'include' });
+      const result = await response.json();
+      if (result.success) setOpIndicators(Array.isArray(result.indicators) ? result.indicators : []);
+    } catch (error) {
+      console.error('Error loading operational indicators:', error);
+    }
+  };
+  const loadDailyOpsReport = async () => {
+    try {
+      const today = new Date().toISOString().slice(0, 10);
+      const response = await fetch(`${import.meta.env.VITE_API_URL}/dashboard/operational-checklist.php?action=daily_report&date=${today}`, { credentials: 'include' });
+      const result = await response.json();
+      if (result.success) setDailyOpsReport(result);
+    } catch (error) {
+      console.error('Error loading daily ops report:', error);
+    }
+  };
 
   if (loading) {
     return (
@@ -254,8 +280,9 @@ function ViewerDashboard() {
   }
 
   const now = new Date();
-  const timeStr = now.toLocaleTimeString('es-MX', { timeZone: 'America/Hermosillo', hour: '2-digit', minute: '2-digit' });
-  const dateStr = now.toLocaleDateString('es-MX', { timeZone: 'America/Hermosillo', weekday: 'short', day: 'numeric', month: 'short' });
+  const hour = now.getHours();
+  const greeting = hour < 12 ? 'Buenos días' : hour < 18 ? 'Buenas tardes' : 'Buenas noches';
+  const dateStr = now.toLocaleDateString('es-MX', { timeZone: 'America/Hermosillo', weekday: 'long', day: 'numeric', month: 'long' });
   const blockedModuleClass = 'opacity-40 grayscale pointer-events-none cursor-not-allowed';
   const moduleEnabledMap = {
     '/admin/applications': canApplications,
@@ -264,293 +291,225 @@ function ViewerDashboard() {
     '/admin/sales': canSales,
   };
   const isModuleEnabled = (to) => (moduleEnabledMap[to] ?? true);
+  const unreadInbox = inbox.filter((email) => !email.seen).length;
 
   const ModuleLink = ({ to, enabled = true, className = '', children }) => {
     if (!enabled) return null;
     return <Link to={to} className={className}>{children}</Link>;
   };
 
+  // Action cards — only show items that need attention
+  const actionCards = [
+    { id: 'a1', label: 'Solicitudes', count: data?.stats.pendingApplications || 0, total: data?.stats.totalApplications || 0, to: '/admin/applications', enabled: isModuleEnabled('/admin/applications'), icon: '📋', color: 'from-orange-500/10 to-orange-600/5 border-orange-500/20', accent: 'text-orange-400', badge: 'bg-orange-500/20 text-orange-300' },
+    { id: 'a2', label: 'Mensajes', count: unreadChat, total: null, to: '/admin/messages', enabled: true, icon: '💬', color: 'from-blue-500/10 to-blue-600/5 border-blue-500/20', accent: 'text-blue-400', badge: 'bg-blue-500/20 text-blue-300' },
+    { id: 'a3', label: 'Cotizaciones', count: quotesStats?.pending_quotes || 0, total: quotesStats?.total_quotes || 0, to: '/admin/quotes', enabled: isModuleEnabled('/admin/quotes'), icon: '📊', color: 'from-violet-500/10 to-violet-600/5 border-violet-500/20', accent: 'text-violet-400', badge: 'bg-violet-500/20 text-violet-300' },
+    { id: 'a4', label: 'Correos', count: unreadInbox, total: inbox.length, to: '/admin/inbox', enabled: true, icon: '📧', color: 'from-cyan-500/10 to-cyan-600/5 border-cyan-500/20', accent: 'text-cyan-400', badge: 'bg-cyan-500/20 text-cyan-300' },
+  ].filter(c => c.enabled);
+
+  const quickNav = [
+    { label: 'Workspace', to: '/admin/workspace', icon: '🏢' },
+    { label: 'Reuniones', to: '/admin/meetings', icon: '📹' },
+    { label: 'Reservaciones', to: '/admin/reservations', icon: '📅' },
+    { label: 'Ventas', to: '/admin/sales', icon: '💰', enabled: canSales },
+    ...(isAdmin ? [{ label: 'Empleados', to: '/admin/employees', icon: '👥' }, { label: 'Analytics', to: '/admin/analytics', icon: '📈' }] : []),
+  ].filter(n => n.enabled !== false);
+
   return (
-    <div className="space-y-4 p-1">
+    <div className="space-y-5 p-1 pb-[calc(env(safe-area-inset-bottom)+2rem)]">
 
-      {/* ── SALES WIDGET (visible para todos los viewers) ── */}
-      <div className={!canSales ? blockedModuleClass : ''} title={!canSales ? 'Funcion desactivada por permisos' : ''}>
-        <SalesWidget />
-      </div>
-
-      {/* ── ROW 1: Header + Hero Metric + Glowing Radar ── */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-
-        {/* Left: Title + Onsite Toggle */}
-        <div className="flex flex-col justify-between gap-3">
+      {/* ── GREETING ── */}
+      <div className="rounded-2xl border border-slate-700/30 bg-gradient-to-br from-[#040c1a] to-[#060f20] p-5 sm:p-6">
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
           <div>
-            <p className="text-[10px] uppercase tracking-[0.35em] text-cyan-500/50 mb-1">Panel de Control</p>
-            <h1 className="text-xl sm:text-2xl font-light text-white tracking-wide leading-tight">
-              {user.full_name || user.username}
+            <h1 className="text-lg sm:text-xl font-light text-white">
+              {greeting}, <span className="font-medium bg-gradient-to-r from-cyan-300 to-blue-400 bg-clip-text text-transparent">{user.full_name || user.username}</span>
             </h1>
-            <p className="text-xs text-slate-500 mt-0.5">{dateStr} · {timeStr}</p>
+            <p className="text-xs text-slate-500 mt-1 capitalize">{dateStr}</p>
           </div>
-
-          {/* Manuel onsite toggle */}
-          {isManuel && (
-            <button
-              onClick={toggleOnsite}
-              disabled={onsiteLoading}
-              className={`relative flex items-center gap-2.5 rounded-xl px-4 py-3 text-sm font-medium transition-all duration-500 w-full justify-between ${
-                manuelOnsite
-                  ? 'border border-green-500/30 bg-green-500/8 text-green-400 shadow-lg shadow-green-500/10'
-                  : 'border border-red-500/20 bg-red-500/5 text-red-400/70'
-              } ${onsiteLoading ? 'opacity-50 cursor-wait' : 'cursor-pointer hover:scale-[1.01]'}`}
-            >
-              <div>
-                <p className="text-[10px] uppercase tracking-widest opacity-60 text-left">Presencia</p>
-                <p className="text-sm">{manuelOnsite ? 'En el Restaurante' : 'Fuera del Restaurante'}</p>
-              </div>
-              <span className={`h-3 w-3 rounded-full flex-shrink-0 ${manuelOnsite ? 'bg-green-400 animate-pulse' : 'bg-red-400/50'}`} />
-            </button>
-          )}
-
-          {/* Misael: ver estado Manuel */}
-          {isMisael && (
-            <div className={`relative rounded-xl px-4 py-3 border ${manuelOnsite ? 'border-green-500/20 bg-green-500/5' : 'border-slate-700/40 bg-white/[0.02]'}`}>
-              <p className="text-[10px] uppercase tracking-widest text-slate-500 mb-1.5">Estado de Manuel</p>
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <span className={`h-2.5 w-2.5 rounded-full ${manuelOnsite ? 'bg-green-400 animate-pulse' : 'bg-slate-600'}`} />
-                  <span className={`text-sm ${manuelOnsite ? 'text-green-400' : 'text-slate-500'}`}>{manuelOnsite ? 'En sitio' : 'Fuera'}</span>
-                </div>
-                <button onClick={loadOnsiteStatus} className="text-[10px] text-cyan-500/40 hover:text-cyan-400 transition-colors uppercase tracking-widest">actualizar</button>
-              </div>
-              {onsiteUpdatedAt && <p className="text-[9px] text-slate-700 mt-1.5">Desde: {new Date(onsiteUpdatedAt).toLocaleTimeString('es-MX', { timeZone: 'America/Hermosillo', hour: '2-digit', minute: '2-digit' })}</p>}
-            </div>
-          )}
-
-          {/* Quick links */}
-          <div className="flex flex-wrap gap-1.5">
-            {[
-              { label: 'Solicitudes', to: '/admin/applications' },
-              { label: 'Mensajes', to: '/admin/messages' },
-              { label: 'Cotizaciones', to: '/admin/quotes' },
-              ...(isAdmin ? [{ label: 'Analytics', to: '/admin/analytics' }, { label: 'Empleados', to: '/admin/employees' }] : []),
-            ].map(item => (
-              <ModuleLink
-                key={item.to}
-                to={item.to}
-                enabled={isModuleEnabled(item.to)}
-                className="rounded-md border border-slate-700/50 bg-white/[0.02] px-2.5 py-1 text-[10px] text-slate-500 hover:border-cyan-500/30 hover:text-cyan-400 hover:bg-cyan-500/5 transition-all uppercase tracking-wider"
-              >
-                {item.label}
-              </ModuleLink>
-            ))}
-          </div>
+          <button onClick={loadDashboard} className="self-start rounded-xl border border-cyan-500/25 bg-cyan-500/8 px-4 py-2.5 text-xs text-cyan-300 hover:bg-cyan-500/15 active:bg-cyan-500/20 transition-all touch-manipulation min-h-[44px] sm:min-h-0 flex items-center gap-2">
+            <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" /></svg>
+            Actualizar
+          </button>
         </div>
 
-        {/* Center: Glowing Radar Element + Hero Metric → links to quotes */}
-        <ModuleLink to="/admin/quotes" enabled={canQuotes} className="group relative overflow-hidden rounded-2xl border border-cyan-500/20 bg-gradient-to-br from-[#040c1a] to-[#060f20] shadow-2xl shadow-cyan-500/10 flex flex-col items-center justify-center py-6 px-4 min-h-[240px] hover:border-cyan-400/40 hover:shadow-cyan-500/20 transition-all duration-500 cursor-pointer">
-          {/* background glow */}
-          <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-            <div className="w-48 h-48 rounded-full bg-cyan-500/5 blur-3xl group-hover:bg-cyan-500/10 transition-all duration-700" />
-          </div>
-          {/* Animated rings */}
-          <div className="relative flex items-center justify-center mb-3 h-44 w-44">
-            {/* Outer ping ring */}
-            <div className="absolute w-40 h-40 rounded-full border border-cyan-500/6 animate-ping" style={{ animationDuration: '3.5s' }} />
-            {/* Static outer ring */}
-            <div className="absolute w-36 h-36 rounded-full border border-cyan-500/10" />
-            {/* Dashed orbit ring */}
-            <div className="absolute w-32 h-32 rounded-full border border-dashed border-cyan-500/10 animate-spin" style={{ animationDuration: '20s' }} />
-            {/* Mid pulse ring */}
-            <div className="absolute w-24 h-24 rounded-full border border-cyan-400/18 animate-pulse" style={{ animationDuration: '2.5s' }} />
-            {/* Inner spinning arc */}
-            <div className="absolute w-24 h-24 rounded-full border-t-2 border-r border-cyan-400/25 animate-spin" style={{ animationDuration: '5s' }} />
-            {/* Counter-spin arc */}
-            <div className="absolute w-16 h-16 rounded-full border-t border-l border-blue-400/25 animate-spin" style={{ animationDuration: '3.5s', animationDirection: 'reverse' }} />
-            {/* Center circle — briefcase/applications icon */}
-            <div className="relative w-16 h-16 rounded-full bg-gradient-to-br from-cyan-500/15 to-blue-600/15 border border-cyan-400/35 flex items-center justify-center shadow-xl shadow-cyan-500/20 group-hover:scale-110 transition-transform duration-500">
-              <div className="absolute inset-0 rounded-full bg-cyan-400/5 group-hover:bg-cyan-400/10 transition-all duration-500" />
-              {/* Tag / cotizaciones icon */}
-              <svg className="h-7 w-7 text-cyan-300 relative z-10" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.2}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M7 7h.01M7 3h5c.512 0 1.024.195 1.414.586l7 7a2 2 0 010 2.828l-7 7a2 2 0 01-2.828 0l-7-7A2 2 0 013 12V7a4 4 0 014-4z" />
-              </svg>
+        {/* Manuel onsite toggle */}
+        {isManuel && (
+          <button
+            onClick={toggleOnsite}
+            disabled={onsiteLoading}
+            className={`mt-4 relative flex items-center gap-2.5 rounded-xl px-4 py-3 text-sm font-medium transition-all duration-500 w-full justify-between touch-manipulation min-h-[48px] ${
+              manuelOnsite
+                ? 'border border-green-500/30 bg-green-500/8 text-green-400'
+                : 'border border-red-500/20 bg-red-500/5 text-red-400/70'
+            } ${onsiteLoading ? 'opacity-50 cursor-wait' : 'cursor-pointer'}`}
+          >
+            <div>
+              <p className="text-[10px] uppercase tracking-widest opacity-60 text-left">Presencia</p>
+              <p className="text-sm">{manuelOnsite ? 'En el Restaurante' : 'Fuera del Restaurante'}</p>
+            </div>
+            <span className={`h-3 w-3 rounded-full flex-shrink-0 ${manuelOnsite ? 'bg-green-400 animate-pulse' : 'bg-red-400/50'}`} />
+          </button>
+        )}
+        {isMisael && (
+          <div className={`mt-4 rounded-xl px-4 py-3 border ${manuelOnsite ? 'border-green-500/20 bg-green-500/5' : 'border-slate-700/40 bg-white/[0.02]'}`}>
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <span className={`h-2.5 w-2.5 rounded-full ${manuelOnsite ? 'bg-green-400 animate-pulse' : 'bg-slate-600'}`} />
+                <span className={`text-sm ${manuelOnsite ? 'text-green-400' : 'text-slate-500'}`}>Manuel: {manuelOnsite ? 'En sitio' : 'Fuera'}</span>
+              </div>
+              <button onClick={loadOnsiteStatus} className="text-[10px] text-cyan-500/50 hover:text-cyan-400 transition-colors">Actualizar</button>
             </div>
           </div>
-          {/* Hero number */}
-          <p className="text-[10px] uppercase tracking-[0.4em] text-cyan-500/50 mb-0.5">Total Cotizaciones</p>
-          <p className="text-4xl sm:text-5xl font-extralight text-white tabular-nums break-all leading-tight group-hover:text-cyan-100 transition-colors duration-300" style={{ textShadow: '0 0 30px rgba(34,211,238,0.3)' }}>
-            {quotesStats?.total_quotes || 0}
-          </p>
-          <div className="flex items-center gap-1.5 mt-2">
-            <span className="h-1.5 w-1.5 rounded-full bg-cyan-400 animate-pulse" />
-            <span className="text-[10px] text-cyan-400/50 tracking-widest uppercase group-hover:text-cyan-400/70 transition-colors">Ver Cotizaciones</span>
-          </div>
-        </ModuleLink>
+        )}
+      </div>
 
-        {/* Right: Stat stack */}
-        <div className="grid grid-cols-2 gap-3 sm:grid-cols-2">
-          {[
-            { label: 'Pendientes', value: data?.stats.pendingApplications || 0, color: 'text-orange-400', border: 'border-orange-500/20', bg: 'bg-orange-500/5', to: '/admin/applications', enabled: canApplications },
-            { label: 'Msj Sin Leer', value: unreadChat, color: 'text-green-400', border: 'border-green-500/20', bg: 'bg-green-500/5', to: '/admin/messages' },
-            { label: 'Solicitudes', value: data?.stats.totalApplications || 0, color: 'text-orange-400', border: 'border-orange-500/20', bg: 'bg-orange-500/5', to: '/admin/applications', enabled: canApplications },
-            { label: 'Correos', value: inbox.filter(e => !e.seen).length, color: 'text-blue-400', border: 'border-blue-500/20', bg: 'bg-blue-500/5', to: '/admin/inbox' },
-            ...(isAdmin ? [
-              { label: 'Usuarios', value: data?.stats.totalUsers || 0, color: 'text-purple-400', border: 'border-purple-500/20', bg: 'bg-purple-500/5', to: '/admin/tracking' },
-              { label: 'Visitantes Hoy', value: siteStats?.today_views || 0, color: 'text-teal-400', border: 'border-teal-500/20', bg: 'bg-teal-500/5', to: '/admin/analytics', sub: siteStats ? `${siteStats.active_now || 0} ahora` : null },
-            ] : []),
-          ].map((s, i) => (
-            <ModuleLink key={i} to={s.to} enabled={s.enabled ?? true} className="group">
-              <div className={`rounded-xl border ${s.border} ${s.bg} p-3 sm:p-4 hover:scale-[1.03] transition-all duration-200 h-full`}>
-                <p className="text-[10px] uppercase tracking-widest text-slate-500 mb-1.5 leading-tight">{s.label}</p>
-                <p className={`text-xl sm:text-3xl font-light tabular-nums break-all leading-tight ${s.color}`}>{s.value}</p>
-                {s.sub && <p className="text-[10px] text-slate-600 mt-0.5">{s.sub}</p>}
+      {/* ── ACTION CARDS — what needs your attention ── */}
+      <div>
+        <p className="text-[10px] uppercase tracking-[0.3em] text-slate-600 mb-3 px-1">Pendientes por atender</p>
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+          {actionCards.map(card => (
+            <ModuleLink key={card.id} to={card.to} enabled={card.enabled}>
+              <div className={`rounded-2xl border bg-gradient-to-br ${card.color} p-4 hover:scale-[1.02] active:scale-[0.98] transition-all duration-200 h-full`}>
+                <div className="flex items-center justify-between mb-3">
+                  <span className="text-lg">{card.icon}</span>
+                  {card.count > 0 && (
+                    <span className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${card.badge}`}>{card.count}</span>
+                  )}
+                </div>
+                <p className={`text-2xl font-light tabular-nums ${card.accent}`}>{card.count}</p>
+                <p className="text-[11px] text-slate-400 mt-0.5">{card.label}</p>
+                {card.total !== null && <p className="text-[10px] text-slate-600 mt-0.5">{card.total} total</p>}
+                {card.count === 0 && <p className="text-[10px] text-emerald-500/60 mt-1">Al día ✓</p>}
               </div>
             </ModuleLink>
           ))}
         </div>
       </div>
 
-      {/* ── ROW 2: Area Chart + Bar Chart ── */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-
-        {/* Area Chart - Visitantes */}
-        <div className="lg:col-span-2 relative overflow-hidden rounded-2xl border border-cyan-500/15 bg-gradient-to-br from-[#040c1a] to-[#060f20] p-5 shadow-lg shadow-cyan-500/5">
-          <div className="absolute inset-0 bg-gradient-to-b from-cyan-500/3 to-transparent pointer-events-none" />
-          <div className="relative">
-            <div className="flex items-center justify-between mb-4">
-              <div>
-                <p className="text-[10px] uppercase tracking-widest text-cyan-500/40 mb-0.5">Tendencia</p>
-                <h2 className="text-sm font-light text-white">Solicitudes · 7 días</h2>
-              </div>
-              <div className="flex items-center gap-4 text-[10px] text-slate-600">
-                <span className="flex items-center gap-1"><span className="h-0.5 w-4 bg-cyan-400 rounded" /> Solicitudes</span>
-                <span className="flex items-center gap-1"><span className="h-0.5 w-4 bg-blue-400 rounded" /> Mensajes</span>
-              </div>
+      {/* ── DAILY OPS SUMMARY (compact) ── */}
+      {(dailyOpsReport?.operations?.total_indicators > 0 || (dailyOpsReport?.sales?.total_sales > 0)) && (
+        <div className="rounded-2xl border border-slate-700/30 bg-[#040c1a]/70 p-4 sm:p-5">
+          <p className="text-[10px] uppercase tracking-[0.3em] text-slate-600 mb-3">Resumen del día</p>
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+            <div className="text-center">
+              <p className="text-xl font-light text-cyan-300 tabular-nums">{dailyOpsReport?.operations?.compliance_pct ?? 0}%</p>
+              <p className="text-[10px] text-slate-500 mt-1">Cumplimiento</p>
             </div>
-            <ResponsiveContainer width="100%" height={180}>
-              <AreaChart data={data?.dailyStats || []} margin={{ top: 5, right: 5, left: -20, bottom: 0 }}>
-                <defs>
-                  <linearGradient id="areaGrad1" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="0%" stopColor="#22d3ee" stopOpacity={0.3} />
-                    <stop offset="100%" stopColor="#22d3ee" stopOpacity={0} />
-                  </linearGradient>
-                  <linearGradient id="areaGrad2" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="0%" stopColor="#3b82f6" stopOpacity={0.25} />
-                    <stop offset="100%" stopColor="#3b82f6" stopOpacity={0} />
-                  </linearGradient>
-                </defs>
-                <CartesianGrid strokeDasharray="3 3" stroke="#ffffff06" vertical={false} />
-                <XAxis dataKey="date" stroke="transparent" tick={{ fill: '#334155', fontSize: 10 }} axisLine={false} tickLine={false} />
-                <YAxis stroke="transparent" tick={{ fill: '#334155', fontSize: 10 }} axisLine={false} tickLine={false} />
-                <Tooltip contentStyle={{ backgroundColor: '#0a1628', border: '1px solid #22d3ee20', borderRadius: '8px', color: '#e2e8f0', fontSize: '11px' }} cursor={{ stroke: '#22d3ee20' }} />
-                <Area type="monotone" dataKey="applications" stroke="#22d3ee" strokeWidth={1.5} fill="url(#areaGrad1)" name="Solicitudes" dot={false} />
-                <Area type="monotone" dataKey="messages" stroke="#3b82f6" strokeWidth={1.5} fill="url(#areaGrad2)" name="Mensajes" dot={false} />
-              </AreaChart>
-            </ResponsiveContainer>
+            <div className="text-center">
+              <p className="text-xl font-light text-emerald-300 tabular-nums">{dailyOpsReport?.operations?.completed_count ?? 0}<span className="text-slate-600 text-sm">/{dailyOpsReport?.operations?.total_indicators ?? 0}</span></p>
+              <p className="text-[10px] text-slate-500 mt-1">Indicadores</p>
+            </div>
+            <div className="text-center">
+              <p className="text-xl font-light text-amber-300 tabular-nums">${Number(dailyOpsReport?.sales?.total_sales || 0).toLocaleString('es-MX')}</p>
+              <p className="text-[10px] text-slate-500 mt-1">Venta del día</p>
+            </div>
+            <div className="text-center">
+              <p className="text-xl font-light text-violet-300 tabular-nums">{dailyOpsReport?.sales?.tickets ?? 0}</p>
+              <p className="text-[10px] text-slate-500 mt-1">Tickets</p>
+            </div>
           </div>
         </div>
+      )}
 
-        {/* Bar Chart - Puestos */}
-        <div className="relative overflow-hidden rounded-2xl border border-blue-500/15 bg-gradient-to-br from-[#040c1a] to-[#060f20] p-5 shadow-lg shadow-blue-500/5">
-          <div className="absolute inset-0 bg-gradient-to-b from-blue-500/3 to-transparent pointer-events-none" />
-          <div className="relative">
-            <div className="flex items-center justify-between mb-4">
-              <div>
-                <p className="text-[10px] uppercase tracking-widest text-blue-500/40 mb-0.5">Análisis</p>
-                <h2 className="text-sm font-light text-white">Top Puestos</h2>
-              </div>
-              <span className="text-[10px] text-blue-400/40 uppercase tracking-wider">7d</span>
-            </div>
-            <ResponsiveContainer width="100%" height={180}>
-              <BarChart data={data?.topPositions || []} barSize={14} margin={{ top: 5, right: 5, left: -25, bottom: 0 }}>
-                <defs>
-                  <linearGradient id="barGrad2" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="0%" stopColor="#22d3ee" stopOpacity={0.9} />
-                    <stop offset="100%" stopColor="#0ea5e9" stopOpacity={0.3} />
-                  </linearGradient>
-                </defs>
-                <CartesianGrid strokeDasharray="3 3" stroke="#ffffff05" vertical={false} />
-                <XAxis dataKey="position" stroke="transparent" tick={{ fill: '#334155', fontSize: 9 }} axisLine={false} tickLine={false} />
-                <YAxis stroke="transparent" tick={{ fill: '#334155', fontSize: 9 }} axisLine={false} tickLine={false} />
-                <Tooltip contentStyle={{ backgroundColor: '#0a1628', border: '1px solid #3b82f620', borderRadius: '8px', color: '#e2e8f0', fontSize: '11px' }} cursor={{ fill: '#22d3ee05' }} />
-                <Bar dataKey="count" fill="url(#barGrad2)" name="Solicitudes" radius={[3, 3, 0, 0]} />
-              </BarChart>
-            </ResponsiveContainer>
-          </div>
+      {/* ── LIVE SALES ── */}
+      <div className={!canSales ? blockedModuleClass : ''}>
+        <SalesWidget />
+      </div>
+
+      {/* ── QUICK NAVIGATION ── */}
+      <div>
+        <p className="text-[10px] uppercase tracking-[0.3em] text-slate-600 mb-3 px-1">Accesos rápidos</p>
+        <div className="flex flex-wrap gap-2">
+          {quickNav.map(nav => (
+            <Link key={nav.to} to={nav.to} className="inline-flex items-center gap-2 rounded-xl border border-slate-700/40 bg-white/[0.02] px-4 py-2.5 text-xs text-slate-400 hover:border-cyan-500/25 hover:text-cyan-300 hover:bg-cyan-500/5 active:bg-cyan-500/10 transition-all touch-manipulation min-h-[44px]">
+              <span>{nav.icon}</span>
+              <span>{nav.label}</span>
+            </Link>
+          ))}
         </div>
       </div>
 
-      {/* ── ROW 3: Activity Feed + Site Stats mini ── */}
+      {/* ── CHARTS ── */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-
-        {/* Activity Feed */}
-        <div className="lg:col-span-2 relative overflow-hidden rounded-2xl border border-slate-700/30 bg-gradient-to-br from-[#040c1a] to-[#060f20] p-5">
+        <div className="lg:col-span-2 relative overflow-hidden rounded-2xl border border-cyan-500/12 bg-gradient-to-br from-[#040c1a] to-[#060f20] p-5">
           <div className="flex items-center justify-between mb-4">
-            <div>
-              <p className="text-[10px] uppercase tracking-widest text-slate-600 mb-0.5">Actividad Reciente</p>
-              <h2 className="text-sm font-light text-white">Feed en Tiempo Real</h2>
+            <h2 className="text-sm font-light text-white">Actividad · 7 días</h2>
+            <div className="flex items-center gap-4 text-[10px] text-slate-600">
+              <span className="flex items-center gap-1"><span className="h-0.5 w-4 bg-cyan-400 rounded" /> Solicitudes</span>
+              <span className="flex items-center gap-1"><span className="h-0.5 w-4 bg-blue-400 rounded" /> Mensajes</span>
             </div>
-            {isAdmin && (
-              <span className="flex items-center gap-1.5 text-[10px] text-blue-400/50 uppercase tracking-widest">
-                <span className="h-1.5 w-1.5 rounded-full bg-blue-400 animate-pulse" /> Live
-              </span>
-            )}
           </div>
-          {isAdmin && trackingData.length > 0 ? (
-            <div className="space-y-2 max-h-[180px] overflow-y-auto pr-1">
-              {trackingData.map((activity, idx) => (
-                <div key={idx} className="flex items-center gap-3 rounded-lg border border-white/4 bg-white/[0.015] px-3 py-2">
-                  <div className="flex-shrink-0 h-7 w-7 rounded-full bg-gradient-to-br from-cyan-500/15 to-blue-500/15 border border-cyan-500/15 flex items-center justify-center">
-                    <span className="text-cyan-400 font-medium text-[10px]">{activity.username?.charAt(0).toUpperCase()}</span>
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center justify-between gap-1">
-                      <p className="text-xs text-slate-300 truncate">{activity.username}</p>
-                      <span className="text-[10px] text-slate-600 shrink-0">{activity.time_ago}</span>
-                    </div>
-                    <p className="text-[10px] text-slate-600 truncate">{activity.action}</p>
-                  </div>
-                  {activity.location && (
-                    <span className="text-[10px] text-cyan-600/60 shrink-0 hidden sm:block">{activity.location}</span>
-                  )}
-                </div>
-              ))}
-            </div>
-          ) : (
-            <div className="flex flex-col items-center justify-center h-36 gap-2">
-              <div className="h-8 w-8 rounded-full border border-slate-700 flex items-center justify-center">
-                <svg className="h-4 w-4 text-slate-700" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
-              </div>
-              <p className="text-[11px] text-slate-700">Sin actividad reciente</p>
-            </div>
-          )}
+          <ResponsiveContainer width="100%" height={160}>
+            <AreaChart data={data?.dailyStats || []} margin={{ top: 5, right: 5, left: -20, bottom: 0 }}>
+              <defs>
+                <linearGradient id="areaGrad1" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="0%" stopColor="#22d3ee" stopOpacity={0.3} />
+                  <stop offset="100%" stopColor="#22d3ee" stopOpacity={0} />
+                </linearGradient>
+                <linearGradient id="areaGrad2" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="0%" stopColor="#3b82f6" stopOpacity={0.25} />
+                  <stop offset="100%" stopColor="#3b82f6" stopOpacity={0} />
+                </linearGradient>
+              </defs>
+              <CartesianGrid strokeDasharray="3 3" stroke="#ffffff06" vertical={false} />
+              <XAxis dataKey="date" stroke="transparent" tick={{ fill: '#334155', fontSize: 10 }} axisLine={false} tickLine={false} />
+              <YAxis stroke="transparent" tick={{ fill: '#334155', fontSize: 10 }} axisLine={false} tickLine={false} />
+              <Tooltip contentStyle={{ backgroundColor: '#0a1628', border: '1px solid #22d3ee20', borderRadius: '8px', color: '#e2e8f0', fontSize: '11px' }} cursor={{ stroke: '#22d3ee20' }} />
+              <Area type="monotone" dataKey="applications" stroke="#22d3ee" strokeWidth={1.5} fill="url(#areaGrad1)" name="Solicitudes" dot={false} />
+              <Area type="monotone" dataKey="messages" stroke="#3b82f6" strokeWidth={1.5} fill="url(#areaGrad2)" name="Mensajes" dot={false} />
+            </AreaChart>
+          </ResponsiveContainer>
         </div>
 
-        {/* Site Stats / Inbox snapshot */}
-        <div className="relative overflow-hidden rounded-2xl border border-cyan-500/10 bg-gradient-to-br from-[#040c1a] to-[#060f20] p-5">
-          <p className="text-[10px] uppercase tracking-widest text-slate-600 mb-4">Resumen del Sistema</p>
-          <div className="space-y-3">
-            {[
-              { label: 'Total aplicaciones', value: data?.stats.totalApplications || 0, accent: 'bg-cyan-400' },
-              { label: 'Aplicaciones aprobadas', value: (data?.stats.totalApplications || 0) - (data?.stats.pendingApplications || 0), accent: 'bg-green-400' },
-              { label: 'Pendientes revisión', value: data?.stats.pendingApplications || 0, accent: 'bg-orange-400' },
-              { label: 'Cotizaciones nuevas', value: quotesStats?.pending_quotes || 0, accent: 'bg-amber-400' },
-              ...(isAdmin && siteStats ? [
-                { label: 'Visitantes únicos hoy', value: siteStats.today_unique || 0, accent: 'bg-teal-400' },
-                { label: 'Activos ahora', value: siteStats.active_now || 0, accent: 'bg-blue-400' },
-              ] : []),
-            ].map((item, i) => (
-              <div key={i} className="flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <span className={`h-1.5 w-1.5 rounded-full ${item.accent}`} />
-                  <span className="text-[11px] text-slate-500">{item.label}</span>
+        <div className="relative overflow-hidden rounded-2xl border border-blue-500/12 bg-gradient-to-br from-[#040c1a] to-[#060f20] p-5">
+          <h2 className="text-sm font-light text-white mb-4">Top Puestos</h2>
+          <ResponsiveContainer width="100%" height={160}>
+            <BarChart data={data?.topPositions || []} barSize={14} margin={{ top: 5, right: 5, left: -25, bottom: 0 }}>
+              <defs>
+                <linearGradient id="barGrad2" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="0%" stopColor="#22d3ee" stopOpacity={0.9} />
+                  <stop offset="100%" stopColor="#0ea5e9" stopOpacity={0.3} />
+                </linearGradient>
+              </defs>
+              <CartesianGrid strokeDasharray="3 3" stroke="#ffffff05" vertical={false} />
+              <XAxis dataKey="position" stroke="transparent" tick={{ fill: '#334155', fontSize: 9 }} axisLine={false} tickLine={false} />
+              <YAxis stroke="transparent" tick={{ fill: '#334155', fontSize: 9 }} axisLine={false} tickLine={false} />
+              <Tooltip contentStyle={{ backgroundColor: '#0a1628', border: '1px solid #3b82f620', borderRadius: '8px', color: '#e2e8f0', fontSize: '11px' }} cursor={{ fill: '#22d3ee05' }} />
+              <Bar dataKey="count" fill="url(#barGrad2)" name="Solicitudes" radius={[3, 3, 0, 0]} />
+            </BarChart>
+          </ResponsiveContainer>
+        </div>
+      </div>
+
+      {/* ── OP INDICATORS (expandable, only if they exist) ── */}
+      {opIndicators.length > 0 && (
+        <div className="rounded-2xl border border-slate-700/30 bg-[#040c1a]/70 p-4 sm:p-5">
+          <p className="text-[10px] uppercase tracking-[0.3em] text-slate-600 mb-3">Checklist operativa</p>
+          <div className="space-y-2">
+            {opIndicators.map((indicator) => (
+              <div key={indicator.id} className="flex items-center justify-between gap-3 rounded-xl border border-slate-800/60 bg-black/20 px-3 py-2.5">
+                <div className="flex items-center gap-2.5 min-w-0">
+                  <span className={`h-2 w-2 rounded-full shrink-0 ${
+                    indicator.status_color === 'green' ? 'bg-emerald-400' :
+                    indicator.status_color === 'yellow' ? 'bg-amber-400' : 'bg-rose-400'
+                  }`} />
+                  <div className="min-w-0">
+                    <p className="text-xs text-slate-300 truncate">{indicator.title}</p>
+                    <p className="text-[10px] text-slate-600 truncate">{indicator.due_time || '--:--'}</p>
+                  </div>
                 </div>
-                <span className="text-sm font-light text-slate-300 tabular-nums">{item.value}</span>
+                <span className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] ${
+                  indicator.status_color === 'green' ? 'bg-emerald-500/15 text-emerald-300' :
+                  indicator.status_color === 'yellow' ? 'bg-amber-500/15 text-amber-300' :
+                  'bg-rose-500/15 text-rose-300'
+                }`}>
+                  {indicator.status_color === 'green' ? 'OK' : indicator.status_color === 'yellow' ? 'Revisar' : 'Pendiente'}
+                </span>
               </div>
             ))}
           </div>
-          {/* Decorative bottom glow bar */}
-          <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-gradient-to-r from-transparent via-cyan-500/30 to-transparent" />
         </div>
-      </div>
+      )}
 
       {/* ── PANEL DE PERMISOS (solo Manuel y Misael, invisible para Francisco/Santiago) ── */}
       {isManuelOrMisael && editPerms.length > 0 && (
@@ -573,9 +532,9 @@ function ViewerDashboard() {
                 <button
                   onClick={() => toggleEditPerm(u.username, u.can_edit)}
                   disabled={permSaving[u.username]}
-                  className={`relative h-6 w-11 rounded-full transition-all duration-300 flex-shrink-0 ${u.can_edit ? 'bg-green-500' : 'bg-slate-700'} ${permSaving[u.username] ? 'opacity-50 cursor-wait' : 'cursor-pointer'}`}
+                  className={`relative h-7 w-12 sm:h-6 sm:w-11 rounded-full transition-all duration-300 flex-shrink-0 touch-manipulation ${u.can_edit ? 'bg-green-500' : 'bg-slate-700'} ${permSaving[u.username] ? 'opacity-50 cursor-wait' : 'cursor-pointer'}`}
                 >
-                  <span className={`absolute top-0.5 h-5 w-5 rounded-full bg-white shadow transition-all duration-300 ${u.can_edit ? 'left-5' : 'left-0.5'}`} />
+                  <span className={`absolute top-0.5 h-6 w-6 sm:h-5 sm:w-5 rounded-full bg-white shadow transition-all duration-300 ${u.can_edit ? 'left-5 sm:left-5' : 'left-0.5'}`} />
                 </button>
               </div>
             ))}
@@ -642,7 +601,7 @@ function ViewerDashboard() {
               </div>
               <button
                 onClick={openNew}
-                className="flex items-center gap-2 rounded-xl border border-cyan-500/30 bg-cyan-500/10 px-3 py-2 text-xs text-cyan-400 hover:bg-cyan-500/20 hover:border-cyan-400/50 transition-all duration-200"
+                className="flex items-center gap-2 rounded-xl border border-cyan-500/30 bg-cyan-500/10 px-3.5 py-2.5 sm:px-3 sm:py-2 text-xs text-cyan-400 hover:bg-cyan-500/20 hover:border-cyan-400/50 active:scale-95 transition-all duration-200 touch-manipulation min-h-[44px]"
               >
                 <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                   <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />
@@ -681,10 +640,10 @@ function ViewerDashboard() {
                         </span>
                       </td>
                       <td className="py-3 px-2">
-                        <div className="flex items-center gap-1 opacity-40 group-hover:opacity-100 transition-opacity">
+                        <div className="flex items-center gap-1.5 opacity-60 group-hover:opacity-100 transition-opacity">
                           <button
                             onClick={() => openEdit(row)}
-                            className="rounded-lg border border-blue-500/20 bg-blue-500/10 p-1.5 text-blue-400 hover:bg-blue-500/20 transition-all"
+                            className="rounded-lg border border-blue-500/20 bg-blue-500/10 p-2 sm:p-1.5 text-blue-400 hover:bg-blue-500/20 active:bg-blue-500/30 transition-all touch-manipulation min-w-[36px] min-h-[36px] flex items-center justify-center"
                             title="Editar"
                           >
                             <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
@@ -693,7 +652,7 @@ function ViewerDashboard() {
                           </button>
                           <button
                             onClick={() => setFinConfirmId(row.id)}
-                            className="rounded-lg border border-red-500/20 bg-red-500/10 p-1.5 text-red-400 hover:bg-red-500/20 transition-all"
+                            className="rounded-lg border border-red-500/20 bg-red-500/10 p-2 sm:p-1.5 text-red-400 hover:bg-red-500/20 active:bg-red-500/30 transition-all touch-manipulation min-w-[36px] min-h-[36px] flex items-center justify-center"
                             title="Eliminar"
                           >
                             <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
@@ -719,7 +678,7 @@ function ViewerDashboard() {
       {/* ── MODAL ADD/EDIT ── */}
       {finModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4" style={{ backdropFilter: 'blur(8px)', backgroundColor: 'rgba(0,0,0,0.6)' }}>
-          <div className="relative w-full max-w-sm rounded-2xl border border-cyan-500/20 bg-[#040c1a] p-6 shadow-2xl shadow-cyan-500/10">
+          <div className="relative w-full max-w-sm rounded-2xl border border-cyan-500/20 bg-[#040c1a] p-5 sm:p-6 shadow-2xl shadow-cyan-500/10 max-h-[90vh] overflow-y-auto overscroll-contain">
             <div className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-cyan-500/40 to-transparent rounded-t-2xl" />
             <h3 className="text-base font-light text-white mb-1">
               {finEditing !== null ? 'Editar Aportación' : 'Nueva Aportación'}
@@ -734,7 +693,7 @@ function ViewerDashboard() {
                   value={finNombre}
                   onChange={e => setFinNombre(e.target.value)}
                   placeholder="Ej. Manuel"
-                  className="w-full rounded-xl border border-slate-700/50 bg-white/[0.03] px-4 py-2.5 text-sm text-white placeholder:text-slate-700 focus:border-cyan-500/40 focus:outline-none focus:ring-1 focus:ring-cyan-500/20 transition-all"
+                  className="w-full rounded-xl border border-slate-700/50 bg-white/[0.03] px-4 py-3 sm:py-2.5 text-sm text-white placeholder:text-slate-700 focus:border-cyan-500/40 focus:outline-none focus:ring-1 focus:ring-cyan-500/20 transition-all min-h-[44px]"
                 />
               </div>
               <div>
@@ -745,7 +704,7 @@ function ViewerDashboard() {
                   value={finMonto}
                   onChange={e => setFinMonto(e.target.value)}
                   placeholder="Ej. 200000"
-                  className="w-full rounded-xl border border-slate-700/50 bg-white/[0.03] px-4 py-2.5 text-sm text-white placeholder:text-slate-700 focus:border-cyan-500/40 focus:outline-none focus:ring-1 focus:ring-cyan-500/20 transition-all"
+                  className="w-full rounded-xl border border-slate-700/50 bg-white/[0.03] px-4 py-3 sm:py-2.5 text-sm text-white placeholder:text-slate-700 focus:border-cyan-500/40 focus:outline-none focus:ring-1 focus:ring-cyan-500/20 transition-all min-h-[44px]"
                 />
                 {finMonto && !isNaN(parseFloat(finMonto)) && (
                   <p className="text-[10px] text-cyan-500/50 mt-1">{fmt(parseFloat(finMonto))}</p>
@@ -753,17 +712,17 @@ function ViewerDashboard() {
               </div>
             </div>
 
-            <div className="flex gap-2 mt-6">
+            <div className="flex flex-col-reverse sm:flex-row gap-2 mt-6">
               <button
                 onClick={closeFin}
-                className="flex-1 rounded-xl border border-slate-700/50 bg-white/[0.02] py-2.5 text-xs text-slate-500 hover:text-slate-300 hover:border-slate-600 transition-all"
+                className="flex-1 rounded-xl border border-slate-700/50 bg-white/[0.02] py-3 sm:py-2.5 text-xs text-slate-500 hover:text-slate-300 hover:border-slate-600 transition-all touch-manipulation min-h-[44px]"
               >
                 Cancelar
               </button>
               <button
                 onClick={handleFinSave}
                 disabled={!finNombre.trim() || finMonto === '' || isNaN(parseFloat(finMonto)) || parseFloat(finMonto) < 0}
-                className="flex-1 rounded-xl border border-cyan-500/30 bg-cyan-500/10 py-2.5 text-xs text-cyan-400 hover:bg-cyan-500/20 transition-all disabled:opacity-30 disabled:cursor-not-allowed"
+                className="flex-1 rounded-xl border border-cyan-500/30 bg-cyan-500/10 py-3 sm:py-2.5 text-xs text-cyan-400 hover:bg-cyan-500/20 active:scale-95 transition-all disabled:opacity-30 disabled:cursor-not-allowed touch-manipulation min-h-[44px]"
               >
                 {finEditing !== null ? 'Guardar cambios' : 'Registrar'}
               </button>
@@ -775,7 +734,7 @@ function ViewerDashboard() {
       {/* ── CONFIRM DELETE ── */}
       {finConfirmId !== null && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4" style={{ backdropFilter: 'blur(8px)', backgroundColor: 'rgba(0,0,0,0.6)' }}>
-          <div className="relative w-full max-w-xs rounded-2xl border border-red-500/20 bg-[#040c1a] p-6 shadow-2xl shadow-red-500/10">
+          <div className="relative w-full max-w-xs rounded-2xl border border-red-500/20 bg-[#040c1a] p-5 sm:p-6 shadow-2xl shadow-red-500/10">
             <div className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-red-500/40 to-transparent rounded-t-2xl" />
             <div className="flex items-center gap-3 mb-3">
               <div className="h-9 w-9 rounded-full border border-red-500/20 bg-red-500/10 flex items-center justify-center flex-shrink-0">
@@ -788,16 +747,16 @@ function ViewerDashboard() {
                 <p className="text-[11px] text-slate-600">Esta acción no se puede deshacer</p>
               </div>
             </div>
-            <div className="flex gap-2 mt-5">
+            <div className="flex flex-col-reverse sm:flex-row gap-2 mt-5">
               <button
                 onClick={() => setFinConfirmId(null)}
-                className="flex-1 rounded-xl border border-slate-700/50 bg-white/[0.02] py-2.5 text-xs text-slate-500 hover:text-slate-300 transition-all"
+                className="flex-1 rounded-xl border border-slate-700/50 bg-white/[0.02] py-3 sm:py-2.5 text-xs text-slate-500 hover:text-slate-300 transition-all touch-manipulation min-h-[44px]"
               >
                 Cancelar
               </button>
               <button
                 onClick={() => handleFinDelete(finConfirmId)}
-                className="flex-1 rounded-xl border border-red-500/30 bg-red-500/10 py-2.5 text-xs text-red-400 hover:bg-red-500/20 transition-all"
+                className="flex-1 rounded-xl border border-red-500/30 bg-red-500/10 py-3 sm:py-2.5 text-xs text-red-400 hover:bg-red-500/20 active:scale-95 transition-all touch-manipulation min-h-[44px]"
               >
                 Sí, eliminar
               </button>
@@ -812,8 +771,12 @@ function ViewerDashboard() {
 
 function Dashboard() {
   const _user = JSON.parse(localStorage.getItem('user') || '{}');
-  if (_user.role === 'administrador') return <AdminDashboard />;
-  return <ViewerDashboard />;
+  return (
+    <>
+      {_user.role === 'administrador' ? <AdminDashboard /> : <ViewerDashboard />}
+      <MeetingReminderPopup />
+    </>
+  );
 }
 
 export default Dashboard;

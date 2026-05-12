@@ -185,7 +185,7 @@ function SiteAnalytics() {
           <select
             value={days}
             onChange={(e) => setDays(Number(e.target.value))}
-            className="rounded-lg border border-cyan-500/20 bg-[#030b18]/60 px-3 py-1.5 text-xs text-slate-300 focus:outline-none focus:border-cyan-400/50"
+            className="rounded-lg border border-cyan-500/20 bg-[#030b18]/60 px-3 py-2.5 sm:py-1.5 text-xs text-slate-300 focus:outline-none focus:border-cyan-400/50 min-h-[44px] sm:min-h-0 touch-manipulation"
           >
             <option value={7}>7 días</option>
             <option value={14}>14 días</option>
@@ -204,10 +204,10 @@ function SiteAnalytics() {
           <button
             key={t.key}
             onClick={() => setTab(t.key)}
-            className={`px-5 py-2.5 text-sm font-medium transition-all ${
+            className={`px-5 py-3 sm:py-2.5 text-sm font-medium transition-all touch-manipulation min-h-[44px] sm:min-h-0 ${
               tab === t.key
                 ? 'text-cyan-400 border-b-2 border-cyan-400'
-                : 'text-slate-500 hover:text-slate-300'
+                : 'text-slate-500 hover:text-slate-300 active:text-slate-200'
             }`}
           >
             {t.label}
@@ -359,12 +359,12 @@ function SiteAnalytics() {
               type="date"
               value={filterDate}
               onChange={(e) => { setFilterDate(e.target.value); }}
-              className="rounded-lg border border-cyan-500/20 bg-[#030b18]/60 px-3 py-1.5 text-xs text-slate-300 focus:outline-none focus:border-cyan-400/50"
+              className="rounded-lg border border-cyan-500/20 bg-[#030b18]/60 px-3 py-2.5 sm:py-1.5 text-xs text-slate-300 focus:outline-none focus:border-cyan-400/50 min-h-[44px] sm:min-h-0"
             />
             <select
               value={filterDevice}
               onChange={(e) => { setFilterDevice(e.target.value); }}
-              className="rounded-lg border border-cyan-500/20 bg-[#030b18]/60 px-3 py-1.5 text-xs text-slate-300 focus:outline-none focus:border-cyan-400/50"
+              className="rounded-lg border border-cyan-500/20 bg-[#030b18]/60 px-3 py-2.5 sm:py-1.5 text-xs text-slate-300 focus:outline-none focus:border-cyan-400/50 min-h-[44px] sm:min-h-0 touch-manipulation"
             >
               <option value="">Todos los dispositivos</option>
               <option value="desktop">Escritorio</option>
@@ -373,14 +373,14 @@ function SiteAnalytics() {
             </select>
             <button
               onClick={() => loadVisitors(1)}
-              className="rounded-lg bg-cyan-500/20 border border-cyan-500/30 px-4 py-1.5 text-xs text-cyan-400 hover:bg-cyan-500/30 transition-colors"
+              className="rounded-lg bg-cyan-500/20 border border-cyan-500/30 px-4 py-2.5 sm:py-1.5 text-xs text-cyan-400 hover:bg-cyan-500/30 transition-colors touch-manipulation min-h-[44px] sm:min-h-0 active:scale-95"
             >
               Filtrar
             </button>
             {(filterDate || filterDevice) && (
               <button
                 onClick={() => { setFilterDate(''); setFilterDevice(''); setFilterCountry(''); }}
-                className="text-xs text-cyan-400/50 hover:text-cyan-400 transition-colors"
+                className="text-xs text-cyan-400/50 hover:text-cyan-400 transition-colors touch-manipulation min-h-[44px] sm:min-h-0 flex items-center"
               >
                 ✕ Limpiar
               </button>
@@ -404,7 +404,7 @@ function SiteAnalytics() {
               <button
                 disabled={visitorPage <= 1}
                 onClick={() => loadVisitors(visitorPage - 1)}
-                className="rounded-lg border border-cyan-500/15 bg-[#040c1a]/60 px-3 py-1 text-xs text-slate-500 hover:text-cyan-400 disabled:opacity-30"
+                className="rounded-lg border border-cyan-500/15 bg-[#040c1a]/60 px-4 py-2.5 sm:px-3 sm:py-1 text-xs text-slate-500 hover:text-cyan-400 disabled:opacity-30 touch-manipulation min-h-[44px] sm:min-h-0 active:scale-95"
               >
                 ← Anterior
               </button>
@@ -412,7 +412,7 @@ function SiteAnalytics() {
               <button
                 disabled={visitorPage >= totalVisitorPages}
                 onClick={() => loadVisitors(visitorPage + 1)}
-                className="rounded-lg border border-cyan-500/15 bg-[#040c1a]/60 px-3 py-1 text-xs text-slate-500 hover:text-cyan-400 disabled:opacity-30"
+                className="rounded-lg border border-cyan-500/15 bg-[#040c1a]/60 px-4 py-2.5 sm:px-3 sm:py-1 text-xs text-slate-500 hover:text-cyan-400 disabled:opacity-30 touch-manipulation min-h-[44px] sm:min-h-0 active:scale-95"
               >
                 Siguiente →
               </button>

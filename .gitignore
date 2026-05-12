@@ -25,10 +25,14 @@ dist-ssr
 
 # Environment variables
 .env
+.env.*
 .env.local
 .env.development.local
 .env.test.local
 .env.production.local
+!.env.example
+!.env.sandbox.example
+!.env.production.example
 
 # Database files and sync config
 *.sql

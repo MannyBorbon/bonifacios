@@ -22,7 +22,7 @@ try {
     }
 
     $sqlPhoneExpr = "REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(phone,' ',''),'-',''),'(',''),')',''),'+',''),'.',''),'/','')";
-    $sql = "SELECT id, customer_name, phone, email, guests, reservation_date, reservation_time, table_code, notes, occasion, status,
+    $sql = "SELECT id, customer_name, phone, email, guests, reservation_date, reservation_time, table_code, secondary_table_code, notes, occasion, status,
                    deposit_status, deposit_screenshot, deposit_uploaded_at, created_at, updated_at
             FROM special_reservations
             WHERE RIGHT($sqlPhoneExpr, 10) = RIGHT(?, 10)

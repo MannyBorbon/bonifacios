@@ -5,6 +5,25 @@ import { authenticateToken } from '../middleware/auth.js';
 
 const router = express.Router();
 
+const normalizeApplicationStatus = (rawStatus) => {
+  if (typeof rawStatus !== 'string') return null;
+  const key = rawStatus.trim().toLowerCase();
+  const map = {
+    pending: 'pending',
+    pendiente: 'pending',
+    reviewing: 'reviewing',
+    'en_revision': 'reviewing',
+    'en revisión': 'reviewing',
+    accepted: 'accepted',
+    aceptada: 'accepted',
+    aceptado: 'accepted',
+    rejected: 'rejected',
+    rechazada: 'rejected',
+    rechazado: 'rejected'
+  };
+  return map[key] || null;
+};
+
 router.post('/submit', async (req, res) => {
   try {
     const {
@@ -47,6 +66,7 @@ router.post('/submit', async (req, res) => {
     );
 
     res.status(201).json({
+      success: true,
       message: 'Application submitted successfully',
       applicationId: result.insertId
     });
@@ -68,9 +88,18 @@ router.get('/list', authenticateToken, async (req, res) => {
     `;
     const params = [];
 
+    let normalizedStatus = null;
     if (status) {
+      normalizedStatus = normalizeApplicationStatus(status);
+      if (!normalizedStatus) {
+        return res.status(400).json({
+          success: false,
+          error: 'Invalid status filter',
+          allowed: ['pending', 'reviewing', 'accepted', 'rejected']
+        });
+      }
       sql += ' AND a.status = ?';
-      params.push(status);
+      params.push(normalizedStatus);
     }
 
     if (position) {
@@ -87,12 +116,13 @@ router.get('/list', authenticateToken, async (req, res) => {
       (status ? ' AND status = ?' : '') + 
       (position ? ' AND position = ?' : '');
     const countParams = [];
-    if (status) countParams.push(status);
+    if (status) countParams.push(normalizedStatus);
     if (position) countParams.push(position);
     
     const [{ total }] = await query(countSql, countParams);
 
     res.json({
+      success: true,
       applications,
       total,
       limit: parseInt(limit),
@@ -128,20 +158,28 @@ router.get('/:id', authenticateToken, async (req, res) => {
 router.put('/:id/status', authenticateToken, async (req, res) => {
   try {
     const { status, notes } = req.body;
+    const normalizedStatus = normalizeApplicationStatus(status);
+    if (!normalizedStatus) {
+      return res.status(400).json({
+        success: false,
+        error: 'Invalid status',
+        allowed: ['pending', 'reviewing', 'accepted', 'rejected']
+      });
+    }
 
     await query(
       `UPDATE job_applications 
        SET status = ?, notes = ?, reviewed_by = ?, reviewed_at = NOW() 
        WHERE id = ?`,
-      [status, notes, req.user.id, req.params.id]
+      [normalizedStatus, notes, req.user.id, req.params.id]
     );
 
     await query(
       'INSERT INTO activity_log (user_id, action, entity_type, entity_id, description) VALUES (?, ?, ?, ?, ?)',
-      [req.user.id, 'update_application_status', 'job_application', req.params.id, `Changed status to ${status}`]
+      [req.user.id, 'update_application_status', 'job_application', req.params.id, `Changed status to ${normalizedStatus}`]
     );
 
-    res.json({ message: 'Application updated successfully' });
+    res.json({ success: true, message: 'Application updated successfully' });
   } catch (error) {
     console.error('Update application error:', error);
     res.status(500).json({ error: 'Server error' });

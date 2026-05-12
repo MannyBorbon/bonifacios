@@ -2,11 +2,27 @@
 // Zona horaria: San Carlos, Sonora, México (UTC-7, sin horario de verano)
 date_default_timezone_set('America/Hermosillo');
 
+require_once __DIR__ . '/env.php';
+
+function envOrDefault($key, $defaultValue = '') {
+    $value = getenv($key);
+    if ($value === false || $value === '') {
+        return $defaultValue;
+    }
+    return $value;
+}
+
 // Configuración de base de datos
-define('DB_HOST', 'localhost');
-define('DB_USER', 'u979547041_bonifacios1');
-define('DB_PASS', 'Filipenses4:8@');
-define('DB_NAME', 'u979547041_bonifacios');
+define('DB_HOST', envOrDefault('DB_HOST', 'localhost'));
+define('DB_USER', envOrDefault('DB_USER', ''));
+define('DB_PASS', envOrDefault('DB_PASS', ''));
+define('DB_NAME', envOrDefault('DB_NAME', ''));
+
+define('APP_ENV', strtolower(envOrDefault('APP_ENV', 'production')));
+define('APP_PRIMARY_DOMAIN', envOrDefault('APP_PRIMARY_DOMAIN', 'https://bonifaciossancarlos.com'));
+define('CORS_ALLOWED_ORIGINS', envOrDefault('CORS_ALLOWED_ORIGINS', APP_PRIMARY_DOMAIN));
+define('COOKIE_SECURE', filter_var(envOrDefault('COOKIE_SECURE', '1'), FILTER_VALIDATE_BOOLEAN));
+define('COOKIE_SAMESITE', envOrDefault('COOKIE_SAMESITE', 'None'));
 
 // Crear conexión MySQLi
 function getConnection() {
@@ -64,15 +80,22 @@ if (session_status() === PHP_SESSION_NONE) {
         'lifetime' => 86400,
         'path' => '/',
         'domain' => '',
-        'secure' => true,
+        'secure' => COOKIE_SECURE,
         'httponly' => true,
-        'samesite' => 'None'
+        'samesite' => COOKIE_SAMESITE
     ]);
 }
 
 // Headers CORS
-$origin = isset($_SERVER['HTTP_ORIGIN']) ? $_SERVER['HTTP_ORIGIN'] : 'https://bonifaciossancarlos.com';
+$origin = isset($_SERVER['HTTP_ORIGIN']) ? $_SERVER['HTTP_ORIGIN'] : APP_PRIMARY_DOMAIN;
+$allowedOrigins = array_filter(array_map('trim', explode(',', CORS_ALLOWED_ORIGINS)));
+
+if (!in_array($origin, $allowedOrigins, true)) {
+    $origin = APP_PRIMARY_DOMAIN;
+}
+
 header("Access-Control-Allow-Origin: $origin");
+header('Vary: Origin');
 header('Access-Control-Allow-Credentials: true');
 header('Access-Control-Allow-Methods: GET, POST, PUT, DELETE, OPTIONS');
 header('Access-Control-Allow-Headers: Content-Type, Authorization');

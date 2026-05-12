@@ -8,6 +8,13 @@ require_once '../config/database.php';
 $userId = requireAuth();
 $conn = getConnection();
 
+if ($_SERVER['REQUEST_METHOD'] !== 'GET') {
+    http_response_code(405);
+    echo json_encode(['success' => false, 'error' => 'Método no permitido']);
+    $conn->close();
+    exit();
+}
+
 // Get skills for the logged-in user
 $stmt = $conn->prepare("SELECT icon, skill, description FROM user_skills WHERE user_id = ? AND is_active = 1 ORDER BY sort_order ASC");
 $stmt->bind_param("i", $userId);

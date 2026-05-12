@@ -1,92 +1,107 @@
-import { useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { 
-  Search, 
-  ChevronLeft,
-  Check,
-  Clock,
-  ArrowRight
-} from 'lucide-react';
+import { Search, ChevronLeft, Check, Clock, ArrowRight } from 'lucide-react';
+import PublicLanguageBar, { readStoredPublicLang, writeStoredPublicLang } from '../components/PublicLanguageBar';
+import { lookupTranslations } from '../i18n/reservationLookup';
 
 const API_BASE = import.meta.env.VITE_API_URL || '/api';
 
-// Formateador inteligente de ubicación para Bonifacio's
-const formatTableCode = (tableCode) => {
-  // 1. Si no hay código, no mostrar ubicación
+const LANGS = ['es', 'en', 'fr', 'zh'];
+
+
+function formatLocation(tableCode, t) {
   if (!tableCode) return '';
-  
-  const codeUpper = tableCode.toUpperCase();
+  const raw = String(tableCode);
+  const u = raw.toUpperCase();
+  if (u.startsWith('WEB-')) return t.tableWebPending;
   let zona = null;
-  
-  // 2. Identificar el área asignada
-  if (codeUpper.includes('TA-')) zona = 'Terraza Alta';
-  else if (codeUpper.includes('TB-')) zona = 'Terraza Baja';
-  else if (codeUpper.includes('CD-') || codeUpper.includes('MD-') || codeUpper.includes('RM-')) zona = 'Interior';
-  
-  // 3. Si no se pudo identificar área, no mostrar ubicación
-  if (!zona) return '';
-  
-  // 4. Detectar si es un folio web largo (sin mesa específica)
-  if (tableCode.length > 8) {
-    return `${zona} · Asignada al llegar`;
+  let num = '';
+
+  // Códigos canónicos SR
+  let m = u.match(/^M([1-9]|1[0-1])$/);
+  if (m) {
+    zona = t.zoneInterior;
+    num = m[1];
   }
-  
-  // 5. Extraer número de mesa si existe
-  const numeroMesa = tableCode.replace(/[^0-9]/g, '');
-  
-  if (numeroMesa) {
-    // Tiene mesa específica asignada
-    return `${zona} · Mesa ${numeroMesa}`;
-  } else {
-    // Solo tiene área asignada, sin número específico
-    return `${zona}`;
+  if (!zona) {
+    m = u.match(/^T(1[6-9]|2[0-2])$/);
+    if (m) {
+      zona = t.zoneHigh;
+      num = m[1];
+    }
   }
-};
+  if (!zona) {
+    m = u.match(/^TB([1-8])$/);
+    if (m) {
+      zona = t.zoneLow;
+      num = m[1];
+    }
+  }
+
+  // Códigos legado
+  if (!zona) {
+    if (u.includes('TA-')) zona = t.zoneHigh;
+    else if (u.includes('TB-')) zona = t.zoneLow;
+    else if (u.includes('CD-') || u.includes('MD-') || u.includes('RM-')) zona = t.zoneInterior;
+    if (zona) {
+      if (raw.length > 8) return `${zona} · ${t.tableAssignOnArrival}`;
+      num = raw.replace(/[^0-9]/g, '');
+    }
+  }
+
+  if (zona && num) return t.tableWithNum(zona, num);
+  if (zona) return `${t.zoneOnly(zona)} · ${u}`;
+
+  // Fallback: al menos mostrar el código asignado en vez de ocultar la sección.
+  return u;
+}
 
 function ReservationClientDetail() {
+  const [language, setLanguage] = useState(() => readStoredPublicLang());
   const [phone, setPhone] = useState('');
   const [reservations, setReservations] = useState([]);
-  // const [accounts, setAccounts] = useState([]); // Temporalmente comentado
   const [loading, setLoading] = useState(false);
   const [selectedId, setSelectedId] = useState(null);
   const [message, setMessage] = useState('');
   const fileInputRef = useRef(null);
 
+  const t = useMemo(() => {
+    const code = LANGS.includes(language) ? language : 'es';
+    return lookupTranslations[code] || lookupTranslations.es;
+  }, [language]);
+
+  useEffect(() => {
+    writeStoredPublicLang(language);
+  }, [language]);
+
   const selected = reservations.find((r) => r.id === selectedId) || null;
+
+  const setLang = useCallback((code) => {
+    if (LANGS.includes(code)) setLanguage(code);
+  }, []);
 
   const searchReservations = async () => {
     if (!phone.trim()) return;
     setLoading(true);
     setMessage('');
     try {
-      // const [resReservations, resAccounts] = await Promise.all([
-      //   fetch(`${API_BASE}/reservations/client-lookup.php`, {
-      //     method: 'POST',
-      //     headers: { 'Content-Type': 'application/json' },
-      //     body: JSON.stringify({ phone }),
-      //   }),
-      //   fetch(`${API_BASE}/reservations/deposit-accounts.php`),
-      // ]);
-      
       const resReservations = await fetch(`${API_BASE}/reservations/client-lookup.php`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ phone }),
       });
       const dataReservations = await resReservations.json();
-      // const dataAccounts = await resAccounts.json(); // Temporalmente comentado
 
       if (dataReservations.success) {
         const list = Array.isArray(dataReservations.reservations) ? dataReservations.reservations : [];
         setReservations(list);
         setSelectedId(list[0]?.id || null);
-        if (!list.length) setMessage('No encontramos reservaciones bajo este número.');
+        if (!list.length) setMessage(t.msgNoResults);
       } else {
-        setMessage(dataReservations.error || 'Ocurrió un error en la consulta.');
+        setMessage(dataReservations.error || t.msgQueryError);
       }
-      // if (dataAccounts.success) setAccounts(Array.isArray(dataAccounts.accounts) ? dataAccounts.accounts : []); // Temporalmente comentado
     } catch {
-      setMessage('Error de conexión. Por favor, intente de nuevo.');
+      setMessage(t.msgConnError);
     } finally {
       setLoading(false);
     }
@@ -107,164 +122,198 @@ function ReservationClientDetail() {
       });
       const data = await response.json();
       if (data.success) {
-        setMessage('Su comprobante ha sido recibido exitosamente.');
-        setReservations(prev => prev.map(r => r.id === selected.id ? { ...r, status: 'uploaded' } : r));
+        setMessage(t.msgUploadOk);
+        setReservations((prev) =>
+          prev.map((r) =>
+            r.id === selected.id
+              ? { ...r, deposit_status: 'uploaded', deposit_screenshot: data.deposit_screenshot || r.deposit_screenshot }
+              : r,
+          ),
+        );
       } else {
-        setMessage(data.error || 'No pudimos procesar el archivo.');
+        setMessage(data.error || t.msgUploadFail);
       }
     } catch {
-      setMessage('Error al enviar el comprobante.');
+      setMessage(t.msgSendFail);
     } finally {
       setLoading(false);
     }
   };
 
+  const loc = selected ? formatLocation(selected.table_code, t) : '';
+  const showDeposit =
+    selected && 
+    selected.status !== 'confirmed' && 
+    !['uploaded', 'confirmed'].includes(String(selected.deposit_status || '')) &&
+    String(selected.status || '') !== 'uploaded';
+
+  const depositUp = selected && ['uploaded', 'confirmed'].includes(String(selected.deposit_status || ''));
+  const legacyUploadedStatus = selected && String(selected.status || '') === 'uploaded';
+
+  const statusLabel = () => {
+    if (!selected) return '';
+    if (selected.status === 'confirmed') return t.statusConfirmed;
+    if (depositUp || legacyUploadedStatus) return t.statusUploaded;
+    if (showDeposit) {
+      return t.statusPendingDeposit;
+    }
+    if (selected.status === 'pending') return t.statusPending;
+    return t.statusConfirmed;
+  };
+
+  const resetLookup = () => {
+    setReservations([]);
+    setSelectedId(null);
+    setMessage('');
+  };
+
   return (
-    <div className="min-h-screen bg-[#F9F8F6] text-[#2C2825] font-light selection:bg-[#B8935A]/20">
-      
-      {/* Navbar Ultra-Minimalista */}
-      <nav className="w-full px-8 py-10 max-w-7xl mx-auto flex justify-between items-center">
-        <Link to="/" className="flex items-center gap-3 text-[10px] tracking-[0.2em] uppercase text-[#7A7571] hover:text-[#2C2825] transition-colors">
-          <ChevronLeft size={14} strokeWidth={1.5} /> Inicio
-        </Link>
-        {/* Cambiamos el logo a su versión oscura/dorada si es posible, si no, usamos texto elegante */}
-        <div className="font-serif text-2xl tracking-widest text-[#B8935A]">BONIFACIO'S</div>
-        <div className="w-10"></div> {/* Espaciador para centrar el logo */}
+    <div className="min-h-screen overflow-x-hidden bg-gradient-to-br from-[#0f0f14] via-[#1a1a1f] to-[#0a0a0f] text-[#F4E4C1]">
+      <div className="pointer-events-none fixed inset-0 -z-0">
+        <div className="absolute left-[-120px] top-[-120px] h-[360px] w-[360px] rounded-full bg-[#D4AF37]/10 blur-[90px]" />
+        <div className="absolute right-[-120px] top-[80px] h-[360px] w-[360px] rounded-full bg-cyan-500/10 blur-[110px]" />
+      </div>
+
+      <nav className="relative z-10 border-b border-[#D4AF37]/15 bg-black/35 backdrop-blur-xl">
+        <div className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-4 px-4 py-4 sm:px-6 lg:px-8">
+          <Link
+            to="/"
+            className="inline-flex items-center gap-2 text-xs font-medium uppercase tracking-[0.2em] text-[#D4AF37]/80 transition-colors hover:text-[#D4AF37]"
+          >
+            <ChevronLeft size={16} strokeWidth={1.5} />
+            {t.navHome}
+          </Link>
+          <div className="font-serif text-lg tracking-[0.25em] text-[#D4AF37] sm:text-xl">{"BONIFACIO'S"}</div>
+          <PublicLanguageBar value={language} onChange={setLang} />
+        </div>
       </nav>
 
-      <main className="max-w-3xl mx-auto px-6 pb-32 relative">
-        
-        {/* Pantalla de Búsqueda (Se oculta al encontrar resultados) */}
+      <main className="relative z-10 mx-auto max-w-3xl px-4 pb-24 pt-10 sm:px-6">
         {!selected && (
-          <div className="mt-20 text-center animate-in fade-in duration-1000">
-            <h1 className="font-serif text-4xl md:text-5xl text-[#1A1814] mb-4">Su Reservación</h1>
-            <p className="text-[#8C857B] text-sm tracking-wide mb-16">Ingrese el número móvil asociado a su experiencia</p>
-            
-            <div className="max-w-sm mx-auto relative group">
+          <div className="mx-auto max-w-md text-center">
+            <h1 className="font-serif text-3xl text-[#F4E4C1] sm:text-4xl">{t.title}</h1>
+            <p className="mt-3 text-sm leading-relaxed text-[#F4E4C1]/80">{t.subtitle}</p>
+
+            <div className="mt-10 rounded-2xl border border-[#D4AF37]/25 bg-black/45 p-6 shadow-[0_24px_80px_-24px_rgba(0,0,0,0.65)] backdrop-blur-md sm:p-8">
+              <label className="sr-only" htmlFor="lookup-phone">
+                {t.subtitle}
+              </label>
               <input
+                id="lookup-phone"
                 type="tel"
+                inputMode="tel"
+                autoComplete="tel"
                 value={phone}
                 onChange={(e) => setPhone(e.target.value)}
-                placeholder="622 000 0000"
-                className="w-full bg-transparent border-b border-[#D1CDC7] focus:border-[#B8935A] py-4 text-center text-3xl font-serif text-[#2C2825] placeholder:text-[#EAE5DE] outline-none transition-colors"
+                placeholder={t.phonePh}
+                className="w-full rounded-xl border border-[#D4AF37]/30 bg-black/50 px-4 py-4 text-center font-serif text-2xl tracking-wide text-[#F4E4C1] placeholder:text-[#F4E4C1]/45 outline-none ring-0 transition-colors focus:border-[#D4AF37] focus:ring-2 focus:ring-[#D4AF37]/30 sm:text-3xl"
               />
               <button
+                type="button"
                 onClick={searchReservations}
                 disabled={loading || !phone.trim()}
-                className="mt-12 w-full bg-[#1A1814] hover:bg-[#B8935A] text-white py-4 text-[10px] tracking-[0.3em] uppercase transition-colors disabled:opacity-30 flex justify-center items-center gap-2"
+                className="mt-6 flex w-full items-center justify-center gap-2 rounded-xl bg-[#D4AF37] px-6 py-4 text-xs font-semibold uppercase tracking-[0.2em] text-black transition-all hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-40"
               >
-                {loading ? 'Consultando...' : 'Acceder a mi reserva'} <ArrowRight size={14} />
+                {loading ? t.btnSearching : t.btnSearch}
+                {!loading && <ArrowRight size={16} />}
               </button>
             </div>
-            {message && <p className="mt-8 text-[#B8935A] text-xs uppercase tracking-widest">{message}</p>}
+
+            {message && (
+              <p className="mt-8 text-center text-sm font-medium text-amber-200/95" role="status">
+                {message}
+              </p>
+            )}
           </div>
         )}
 
-        {/* La "Carta" de Reservación */}
         {selected && (
-          <div className="animate-in fade-in slide-in-from-bottom-8 duration-1000">
-            
-            {/* Si hay múltiples reservas, mostramos un selector minimalista arriba */}
+          <div className="animate-in fade-in duration-500">
             {reservations.length > 1 && (
-              <div className="flex justify-center gap-6 mb-12 border-b border-[#EAE5DE] pb-4">
+              <div className="mb-8 flex flex-wrap justify-center gap-2 border-b border-[#D4AF37]/15 pb-4 sm:gap-4">
                 {reservations.map((r, index) => (
                   <button
                     key={r.id}
+                    type="button"
                     onClick={() => setSelectedId(r.id)}
-                    className={`text-[10px] uppercase tracking-[0.2em] pb-4 border-b-2 transition-colors ${
-                      selected.id === r.id ? 'border-[#B8935A] text-[#1A1814]' : 'border-transparent text-[#8C857B] hover:text-[#1A1814]'
+                    className={`rounded-lg px-4 py-2 text-[10px] font-semibold uppercase tracking-[0.18em] transition-colors ${
+                      selected.id === r.id
+                        ? 'bg-[#D4AF37]/20 text-[#D4AF37] ring-1 ring-[#D4AF37]/40'
+                        : 'text-[#F4E4C1]/55 hover:bg-white/5 hover:text-[#F4E4C1]'
                     }`}
                   >
-                    Reserva {index + 1}
+                    {t.resTab(index + 1)}
                   </button>
                 ))}
               </div>
             )}
 
-            {/* El Documento Principal */}
-            <div className="bg-white rounded-sm shadow-[0_20px_60px_-15px_rgba(0,0,0,0.05)] border border-[#EAE5DE] relative overflow-hidden">
-              {/* Línea dorada superior fina */}
-              <div className="absolute top-0 left-0 w-full h-[2px] bg-[#B8935A]"></div>
-              
-              <div className="p-8 md:p-14">
-                <div className="text-center mb-14">
-                  <p className="text-[9px] uppercase tracking-[0.4em] text-[#8C857B] mb-4">A nombre de</p>
-                  <h2 className="font-serif text-4xl md:text-5xl text-[#1A1814] mb-8">{selected.customer_name}</h2>
-                  
-                  <div className="flex flex-col md:flex-row items-center justify-center gap-6 md:gap-12 text-[#2C2825]">
+            <div className="overflow-hidden rounded-2xl border border-[#D4AF37]/25 bg-black/50 shadow-[0_28px_90px_-28px_rgba(0,0,0,0.75)] backdrop-blur-md">
+              <div className="h-1 w-full bg-gradient-to-r from-[#D4AF37]/60 via-[#D4AF37] to-[#D4AF37]/60" />
+              <div className="p-6 sm:p-10 md:p-12">
+                <div className="text-center">
+                  <p className="text-[10px] font-semibold uppercase tracking-[0.35em] text-[#D4AF37]/70">{t.forName}</p>
+                  <h2 className="mt-3 font-serif text-3xl text-[#F4E4C1] sm:text-4xl md:text-5xl">{selected.customer_name}</h2>
+
+                  <div className="mt-10 flex flex-col items-center justify-center gap-8 text-[#F4E4C1] sm:flex-row sm:gap-14">
                     <div>
-                      <p className="text-[9px] uppercase tracking-[0.3em] text-[#8C857B] mb-1">Fecha</p>
-                      <p className="font-serif text-2xl">{selected.reservation_date}</p>
+                      <p className="text-[10px] font-semibold uppercase tracking-[0.28em] text-[#F4E4C1]/55">{t.date}</p>
+                      <p className="mt-2 font-serif text-2xl">{selected.reservation_date}</p>
                     </div>
-                    <div className="hidden md:block w-px h-8 bg-[#EAE5DE]"></div>
+                    <div className="hidden h-10 w-px bg-[#D4AF37]/25 sm:block" />
                     <div>
-                      <p className="text-[9px] uppercase tracking-[0.3em] text-[#8C857B] mb-1">Hora</p>
-                      <p className="font-serif text-2xl">{String(selected.reservation_time).slice(0, 5)}</p>
+                      <p className="text-[10px] font-semibold uppercase tracking-[0.28em] text-[#F4E4C1]/55">{t.time}</p>
+                      <p className="mt-2 font-serif text-2xl">{String(selected.reservation_time).slice(0, 5)}</p>
                     </div>
                   </div>
                 </div>
 
-                <hr className="border-[#EAE5DE] mb-10" />
+                <hr className="my-10 border-[#D4AF37]/15" />
 
-                {/* Detalles en Grid Minimalista */}
-                <div className="grid grid-cols-2 gap-y-10 gap-x-8 mb-12">
+                <div className="grid grid-cols-1 gap-8 sm:grid-cols-2">
                   <div>
-                    <p className="text-[9px] uppercase tracking-[0.3em] text-[#8C857B] mb-2">Comensales</p>
-                    <p className="text-lg text-[#2C2825]">{selected.guests} Personas</p>
+                    <p className="text-[10px] font-semibold uppercase tracking-[0.28em] text-[#F4E4C1]/55">{t.guests}</p>
+                    <p className="mt-2 text-lg text-[#F4E4C1]">{t.guestsCount(Number(selected.guests) || 0)}</p>
                   </div>
-                  {formatTableCode(selected.table_code) && (
+                  {loc ? (
                     <div>
-                      <p className="text-[9px] uppercase tracking-[0.3em] text-[#8C857B] mb-2">Ubicación</p>
-                      <p className="text-lg text-[#2C2825]">{formatTableCode(selected.table_code)}</p>
+                      <p className="text-[10px] font-semibold uppercase tracking-[0.28em] text-[#F4E4C1]/55">{t.location}</p>
+                      <p className="mt-2 text-lg text-[#F4E4C1]">{loc}</p>
                     </div>
-                  )}
-                  <div className={`${formatTableCode(selected.table_code) ? 'col-span-1' : 'col-span-2'}`}>
-                    <p className="text-[9px] uppercase tracking-[0.3em] text-[#8C857B] mb-2">Estado de la Reserva</p>
-                    <p className={`text-lg flex items-center gap-2 ${
-                      selected.status === 'confirmed' ? 'text-[#4A6741]' : 
-                      selected.status === 'uploaded' ? 'text-[#6B8E9B]' : 
-                      selected.occasion === 'Dia de las Madres' ? 'text-[#B8935A]' : 'text-[#B8935A]'
-                    }`}>
-                      {selected.status === 'confirmed' ? 'Confirmada' : 
-                       selected.status === 'uploaded' ? 'Verificando Comprobante' : 
-                       selected.occasion === 'Dia de las Madres' && selected.status !== 'confirmed' && selected.status !== 'uploaded' ? 'Pendiente de Garantía' : selected.status === 'pending' ? 'Pendiente' : 'Confirmada'}
+                  ) : null}
+                  <div className={loc ? 'sm:col-span-2' : ''}>
+                    <p className="text-[10px] font-semibold uppercase tracking-[0.28em] text-[#F4E4C1]/55">{t.resStatus}</p>
+                    <p
+                      className={`mt-2 flex items-center gap-2 text-lg ${
+                        selected.status === 'confirmed'
+                          ? 'text-emerald-300'
+                          : depositUp || legacyUploadedStatus
+                            ? 'text-sky-300'
+                            : 'text-amber-200'
+                      }`}
+                    >
+                      {statusLabel()}
                     </p>
                   </div>
                 </div>
 
-                {/* Zona de Garantía / Pago */}
-                {selected.occasion === 'Dia de las Madres' && selected.status !== 'confirmed' && (
-                  <div className="bg-[#FDFBF7] border border-[#EAE5DE] p-8 rounded-sm">
-                    {selected.status === 'uploaded' ? (
-                      <div className="text-center py-6">
-                        <Clock className="mx-auto text-[#6B8E9B] mb-4" strokeWidth={1.5} size={32} />
-                        <h3 className="font-serif text-2xl text-[#1A1814] mb-2">Comprobante Recibido</h3>
-                        <p className="text-[#8C857B] text-sm">Nuestro equipo está validando su depósito. Su lugar está apartado.</p>
+                {showDeposit && (
+                  <div className="mt-10 rounded-xl border border-[#D4AF37]/20 bg-[#D4AF37]/5 p-6 sm:p-8">
+                    {depositUp || legacyUploadedStatus ? (
+                      <div className="py-4 text-center">
+                        <Clock className="mx-auto mb-4 text-sky-300" strokeWidth={1.5} size={36} />
+                        <h3 className="font-serif text-2xl text-[#F4E4C1]">{t.depositReceivedTitle}</h3>
+                        <p className="mx-auto mt-3 max-w-md text-sm leading-relaxed text-[#F4E4C1]/75">{t.depositReceivedDesc}</p>
                       </div>
                     ) : (
                       <>
-                        {/* 
-                        <div className="text-center mb-8">
-                          <h3 className="font-serif text-2xl text-[#1A1814] mb-2">Garantía de Reserva</h3>
-                          <p className="text-[#8C857B] text-sm">Para finalizar, por favor realice la transferencia a la siguiente cuenta.</p>
-                        </div>
-                        
-                        {accounts.map((a) => (
-                          <div key={a.id} className="mb-8 text-center">
-                            <p className="text-[10px] uppercase tracking-[0.2em] text-[#8C857B] mb-1">{a.bank_name}</p>
-                            <p className="text-lg text-[#2C2825] mb-2">{a.account_holder}</p>
-                            <p className="font-serif text-xl tracking-widest text-[#B8935A] mb-4">{a.clabe}</p>
-                            <p className="text-xs text-[#8C857B] italic">{a.instructions}</p>
-                          </div>
-                        ))}
-*/}
-
                         <button
+                          type="button"
                           onClick={() => fileInputRef.current?.click()}
                           disabled={loading}
-                          className="w-full border border-[#B8935A] text-[#B8935A] hover:bg-[#B8935A] hover:text-white py-4 text-[10px] uppercase tracking-[0.2em] transition-colors flex justify-center items-center gap-2"
+                          className="flex w-full items-center justify-center gap-2 border border-[#D4AF37] py-4 text-[10px] font-semibold uppercase tracking-[0.22em] text-[#D4AF37] transition-colors hover:bg-[#D4AF37] hover:text-black disabled:opacity-40"
                         >
-                          {loading ? 'Procesando...' : 'Adjuntar Comprobante de Pago'}
+                          {loading ? t.attachProcessing : t.attachBtn}
                         </button>
                         <input ref={fileInputRef} type="file" accept="image/*" className="hidden" onChange={onFileChange} />
                       </>
@@ -273,24 +322,36 @@ function ReservationClientDetail() {
                 )}
 
                 {selected.status === 'confirmed' && (
-                  <div className="mt-10 py-6 text-center">
-                     <Check className="mx-auto text-[#4A6741] mb-4" strokeWidth={1.5} size={32} />
-                     <p className="font-serif text-2xl text-[#4A6741]">Reserva Confirmada</p>
-                     <p className="text-[#8C857B] text-sm mt-2">Le esperamos para brindarle una experiencia inolvidable.</p>
+                  <div className="mt-10 border-t border-[#D4AF37]/15 pt-10 text-center">
+                    <Check className="mx-auto mb-4 text-emerald-400" strokeWidth={1.5} size={36} />
+                    <p className="font-serif text-2xl text-emerald-300">{t.confirmedTitle}</p>
+                    <p className="mx-auto mt-3 max-w-md text-sm text-[#F4E4C1]/70">{t.confirmedSub}</p>
                   </div>
                 )}
-                
               </div>
             </div>
-            
-            {/* Mensajes de sistema inferiores */}
-            {message && <p className="mt-8 text-center text-[#B8935A] text-xs uppercase tracking-widest">{message}</p>}
+
+            <div className="mt-8 flex flex-col items-center gap-4">
+              <button
+                type="button"
+                onClick={resetLookup}
+                className="inline-flex items-center gap-2 text-sm font-medium text-[#D4AF37] underline-offset-4 hover:underline"
+              >
+                <Search size={16} />
+                {t.searchAnother}
+              </button>
+              {message && (
+                <p className="text-center text-sm text-amber-200/95" role="status">
+                  {message}
+                </p>
+              )}
+            </div>
           </div>
         )}
       </main>
-      
-      <footer className="relative mt-12 mb-8 w-full text-center">
-         <p className="text-[9px] uppercase tracking-[0.4em] text-[#D1CDC7]">Bonifacio's Restaurant</p>
+
+      <footer className="relative z-10 pb-10 text-center">
+        <p className="text-[10px] font-semibold uppercase tracking-[0.35em] text-[#F4E4C1]/35">{t.footer}</p>
       </footer>
     </div>
   );

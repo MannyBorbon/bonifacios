@@ -1,5 +1,6 @@
 <?php
 require_once '../config/database.php';
+require_once __DIR__ . '/event-types-bootstrap.php';
 
 date_default_timezone_set('America/Hermosillo');
 header('Content-Type: application/json');
@@ -35,15 +36,40 @@ try {
         exit;
     }
 
-    // Insert simple solo con columnas que existen
-    $sql = "INSERT INTO special_reservations 
-            (customer_name, phone, email, guests, reservation_date, reservation_time, table_code, notes, occasion, status, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'Dia de las Madres', 'pending', NOW(), NOW())";
-    
+    try {
+        $conn->query('ALTER TABLE special_reservations ADD COLUMN event_type_id INT NULL AFTER occasion');
+    } catch (Throwable $e) {
+        /* columna ya existe */
+    }
+
+    reservations_bootstrap_event_types_if_needed($conn);
+    $mdType = reservations_get_event_type_by_slug($conn, 'dia-madres');
+    if ($mdType === null) {
+        throw new Exception('No se encontro la categoria Día de las Madres (slug dia-madres)');
+    }
+    $occasionLabel = $mdType['name'];
+    $eventTypeId = $mdType['id'];
+
+    $sql = "INSERT INTO special_reservations
+            (customer_name, phone, email, guests, reservation_date, reservation_time, table_code, notes, occasion, event_type_id, status, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', NOW(), NOW())";
+
     $stmt = $conn->prepare($sql);
-    $stmt->bind_param('sssissss', 
-        $customerName, $phone, $email, $guests, $reservationDate, 
-        $reservationTime, $tableCode, $notes
+    if ($stmt === false) {
+        throw new Exception('prepare insert: ' . $conn->error);
+    }
+    $stmt->bind_param(
+        'sssisssssi',
+        $customerName,
+        $phone,
+        $email,
+        $guests,
+        $reservationDate,
+        $reservationTime,
+        $tableCode,
+        $notes,
+        $occasionLabel,
+        $eventTypeId
     );
 
     if ($stmt->execute()) {

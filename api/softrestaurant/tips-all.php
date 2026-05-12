@@ -4,28 +4,63 @@
  * GET ?start=YYYY-MM-DD&end=YYYY-MM-DD&waiter=NOMBRE (opcional)
  */
 require_once '../config/database.php';
+
 header('Content-Type: application/json');
 header('Access-Control-Allow-Origin: *');
 header('Access-Control-Allow-Methods: GET, OPTIONS');
-header('Access-Control-Allow-Headers: Content-Type');
-if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') { http_response_code(200); exit; }
+header('Access-Control-Allow-Headers: Content-Type, Authorization');
+
+if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
+    http_response_code(200);
+    exit;
+}
 
 try {
-    $pdo   = getPDO();
-    $start = $_GET['start'] ?? date('Y-m-01');
-    $end   = $_GET['end']   ?? date('Y-m-d');
-    $waiterFilter = trim($_GET['waiter'] ?? '');
+    if ($_SERVER['REQUEST_METHOD'] !== 'GET') {
+        http_response_code(405);
+        echo json_encode(['success' => false, 'error' => 'Método no permitido']);
+        exit;
+    }
 
-    // Query de tickets — tip_paid viene directo del campo sincronizado de cheques.propinapagada
+    requireAuth();
+
+    $pdo = getPDO();
+    $start = trim((string)($_GET['start'] ?? date('Y-m-01')));
+    $end = trim((string)($_GET['end'] ?? date('Y-m-d')));
+    $waiterFilter = trim((string)($_GET['waiter'] ?? ''));
+
+    if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $start) || !preg_match('/^\d{4}-\d{2}-\d{2}$/', $end)) {
+        http_response_code(400);
+        echo json_encode(['success' => false, 'error' => 'start y end deben ser YYYY-MM-DD']);
+        exit;
+    }
+    $tsStart = strtotime($start . ' 00:00:00');
+    $tsEnd = strtotime($end . ' 23:59:59');
+    if ($tsStart === false || $tsEnd === false) {
+        http_response_code(400);
+        echo json_encode(['success' => false, 'error' => 'fechas inválidas']);
+        exit;
+    }
+    if ($tsEnd < $tsStart) {
+        http_response_code(400);
+        echo json_encode(['success' => false, 'error' => 'end debe ser >= start']);
+        exit;
+    }
+    if ($waiterFilter !== '' && strlen($waiterFilter) > 255) {
+        http_response_code(400);
+        echo json_encode(['success' => false, 'error' => 'waiter demasiado largo']);
+        exit;
+    }
+
     $whereParts = [
-        "s.sale_datetime BETWEEN ? AND ?",
+        's.sale_datetime BETWEEN ? AND ?',
         "s.status = 'closed'",
-        "COALESCE(s.tip, 0) > 0",
-        "NOT (s.total = 0 AND COALESCE(s.subtotal, 0) > 0)"
+        'COALESCE(s.tip, 0) > 0',
+        'NOT (s.total = 0 AND COALESCE(s.subtotal, 0) > 0)',
     ];
     $params = ["{$start} 00:00:00", "{$end} 23:59:59"];
     if ($waiterFilter !== '') {
-        $whereParts[] = "s.waiter_name = ?";
+        $whereParts[] = 's.waiter_name = ?';
         $params[] = $waiterFilter;
     }
     $where = implode(' AND ', $whereParts);
@@ -42,36 +77,44 @@ try {
     $stmt->execute($params);
     $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
-    // Enriquecer y calcular stats
-    $totalTips    = 0;
-    $totalPaid    = 0;
+    $totalTips = 0;
+    $totalPaid = 0;
     $totalPending = 0;
-    $byWaiter     = [];
-    $paid_list    = [];
+    $byWaiter = [];
+    $paid_list = [];
     $pending_list = [];
-    $tipAmounts   = [];
+    $tipAmounts = [];
 
     foreach ($rows as &$r) {
         $tipAmt = floatval($r['tip']);
-        $isPaid = intval($r['tip_paid']) === 1;
-        $wName  = $r['waiter_name'] ?: 'Sin nombre';
+        $isPaid = (int)$r['tip_paid'] === 1;
+        $wName = $r['waiter_name'] ?: 'Sin nombre';
 
         $totalTips += $tipAmt;
         $tipAmounts[] = $tipAmt;
 
-        if ($isPaid) { $totalPaid += $tipAmt; $paid_list[] = $r; }
-        else         { $totalPending += $tipAmt; $pending_list[] = $r; }
+        if ($isPaid) {
+            $totalPaid += $tipAmt;
+            $paid_list[] = $r;
+        } else {
+            $totalPending += $tipAmt;
+            $pending_list[] = $r;
+        }
 
-        if (!isset($byWaiter[$wName])) $byWaiter[$wName] = ['waiter' => $wName, 'count' => 0, 'total' => 0, 'paid' => 0, 'pending' => 0];
+        if (!isset($byWaiter[$wName])) {
+            $byWaiter[$wName] = ['waiter' => $wName, 'count' => 0, 'total' => 0, 'paid' => 0, 'pending' => 0];
+        }
         $byWaiter[$wName]['count']++;
         $byWaiter[$wName]['total'] += $tipAmt;
-        if ($isPaid) $byWaiter[$wName]['paid']    += $tipAmt;
-        else         $byWaiter[$wName]['pending'] += $tipAmt;
+        if ($isPaid) {
+            $byWaiter[$wName]['paid'] += $tipAmt;
+        } else {
+            $byWaiter[$wName]['pending'] += $tipAmt;
+        }
     }
     unset($r);
 
-    // Ordenar por total DESC
-    usort($byWaiter, fn($a, $b) => $b['total'] <=> $a['total']);
+    usort($byWaiter, static fn ($a, $b) => $b['total'] <=> $a['total']);
 
     $count = count($rows);
     $avgTip = $count > 0 ? $totalTips / $count : 0;
@@ -79,27 +122,26 @@ try {
     $median = 0;
     if ($count > 0) {
         $mid = intdiv($count, 2);
-        $median = $count % 2 === 0 ? ($tipAmounts[$mid-1] + $tipAmounts[$mid]) / 2 : $tipAmounts[$mid];
+        $median = $count % 2 === 0 ? ($tipAmounts[$mid - 1] + $tipAmounts[$mid]) / 2 : $tipAmounts[$mid];
     }
 
     echo json_encode([
-        'success'        => true,
-        'period'         => ['start' => $start, 'end' => $end],
-        'count'          => $count,
-        'count_paid'     => count($paid_list),
-        'count_pending'  => count($pending_list),
-        'total_tips'     => round($totalTips, 2),
-        'total_paid'     => round($totalPaid, 2),
-        'total_pending'  => round($totalPending, 2),
-        'avg_tip'        => round($avgTip, 2),
-        'median_tip'     => round($median, 2),
-        'max_tip'        => count($tipAmounts) > 0 ? round(max($tipAmounts), 2) : 0,
-        'by_waiter'      => array_values($byWaiter),
-        'paid'           => $paid_list,
-        'pending'        => $pending_list,
-        'all'            => $rows,
+        'success' => true,
+        'period' => ['start' => $start, 'end' => $end],
+        'count' => $count,
+        'count_paid' => count($paid_list),
+        'count_pending' => count($pending_list),
+        'total_tips' => round($totalTips, 2),
+        'total_paid' => round($totalPaid, 2),
+        'total_pending' => round($totalPending, 2),
+        'avg_tip' => round($avgTip, 2),
+        'median_tip' => round($median, 2),
+        'max_tip' => count($tipAmounts) > 0 ? round(max($tipAmounts), 2) : 0,
+        'by_waiter' => array_values($byWaiter),
+        'paid' => $paid_list,
+        'pending' => $pending_list,
+        'all' => $rows,
     ]);
-
 } catch (Exception $e) {
     http_response_code(500);
     echo json_encode(['success' => false, 'error' => $e->getMessage()]);

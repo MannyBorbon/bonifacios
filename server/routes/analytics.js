@@ -60,6 +60,7 @@ router.get('/dashboard', authenticateToken, async (req, res) => {
     );
 
     res.json({
+      success: true,
       charts: {
         pageViews,
         applications
@@ -90,7 +91,7 @@ router.post('/track', async (req, res) => {
       [metric_type, metric_value, metadata ? JSON.stringify(metadata) : null, metric_value]
     );
 
-    res.json({ message: 'Metric tracked successfully' });
+    res.json({ success: true, message: 'Metric tracked successfully' });
   } catch (error) {
     console.error('Track metric error:', error);
     res.status(500).json({ error: 'Server error' });

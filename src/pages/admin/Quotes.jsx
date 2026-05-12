@@ -92,7 +92,7 @@ function Quotes() {
   }
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-4 sm:space-y-6 pb-[calc(env(safe-area-inset-bottom)+1rem)]">
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
@@ -227,7 +227,7 @@ function Quotes() {
                     <div className="flex items-center justify-end gap-2">
                       <Link
                         to={`/admin/quotes/${quote.id}`}
-                        className="inline-flex items-center gap-1.5 rounded-full border border-cyan-500/25 bg-cyan-500/10 px-3 py-1 text-[11px] font-medium text-cyan-400 hover:border-cyan-400/50 hover:bg-cyan-500/20 transition-all"
+                        className="inline-flex items-center gap-1.5 rounded-full border border-cyan-500/25 bg-cyan-500/10 px-3 py-1.5 sm:py-1 text-[11px] font-medium text-cyan-400 hover:border-cyan-400/50 hover:bg-cyan-500/20 active:bg-cyan-500/25 transition-all touch-manipulation min-h-[36px]"
                       >
                         <svg className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                           <path strokeLinecap="round" strokeLinejoin="round" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
@@ -236,7 +236,7 @@ function Quotes() {
                       </Link>
                       <button
                         onClick={() => navigate(`/admin/quotes/${quote.id}/cotizacion`)}
-                        className="inline-flex items-center gap-1.5 rounded-full border border-emerald-500/25 bg-emerald-500/10 px-3 py-1 text-[11px] font-medium text-emerald-400 hover:border-emerald-400/50 hover:bg-emerald-500/20 transition-all"
+                        className="inline-flex items-center gap-1.5 rounded-full border border-emerald-500/25 bg-emerald-500/10 px-3 py-1.5 sm:py-1 text-[11px] font-medium text-emerald-400 hover:border-emerald-400/50 hover:bg-emerald-500/20 active:bg-emerald-500/25 transition-all touch-manipulation min-h-[36px]"
                         title="Nueva Cotización desde esta solicitud"
                       >
                         <svg className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
@@ -249,7 +249,7 @@ function Quotes() {
                           setEditingQuote(quote)
                           setShowForm(true)
                         }}
-                        className="text-blue-400/60 hover:text-blue-400 transition-colors"
+                        className="text-blue-400/60 hover:text-blue-400 transition-colors touch-manipulation min-w-[36px] min-h-[36px] flex items-center justify-center rounded-lg hover:bg-blue-500/10 active:bg-blue-500/15"
                         title="Editar"
                       >
                         <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -259,7 +259,7 @@ function Quotes() {
                       {isAdmin && (
                         <button
                           onClick={() => handleDelete(quote.id)}
-                          className="text-red-400/60 hover:text-red-400 transition-colors"
+                          className="text-red-400/60 hover:text-red-400 transition-colors touch-manipulation min-w-[36px] min-h-[36px] flex items-center justify-center rounded-lg hover:bg-red-500/10 active:bg-red-500/15"
                           title="Eliminar"
                         >
                           <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -336,15 +336,15 @@ function QuoteForm({ quote, onSave, onCancel }) {
   }
 
   return (
-    <div className="fixed inset-0 bg-[#030712]/90 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-      <div className="max-w-2xl w-full max-h-[90vh] overflow-y-auto rounded-2xl border border-cyan-500/20 bg-gradient-to-br from-[#040c1a]/95 to-[#060f20]/90 p-6">
+    <div className="fixed inset-0 bg-[#030712]/90 backdrop-blur-sm z-50 flex items-center justify-center p-3 sm:p-4">
+      <div className="max-w-2xl w-full max-h-[90vh] overflow-y-auto overscroll-contain rounded-2xl border border-cyan-500/20 bg-gradient-to-br from-[#040c1a]/95 to-[#060f20]/90 p-5 sm:p-6">
         <div className="flex items-center justify-between mb-6">
           <h2 className="text-xl font-light text-white">
             {quote ? 'Editar Cotización' : 'Nueva Cotización'}
           </h2>
           <button
             onClick={onCancel}
-            className="text-slate-500 hover:text-slate-200 transition-colors"
+            className="text-slate-500 hover:text-slate-200 transition-colors touch-manipulation min-w-[44px] min-h-[44px] flex items-center justify-center rounded-xl hover:bg-slate-800/50 active:bg-slate-700/50"
           >
             <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
@@ -363,10 +363,10 @@ function QuoteForm({ quote, onSave, onCancel }) {
                 key={tab.key}
                 type="button"
                 onClick={() => setCurrentTab(tab.key)}
-                className={`px-4 py-2 text-xs font-medium transition-all ${
+                className={`px-4 py-2.5 sm:py-2 text-xs font-medium transition-all touch-manipulation min-h-[44px] sm:min-h-0 ${
                   currentTab === tab.key
                     ? 'text-cyan-400 border-b-2 border-cyan-400 -mb-px'
-                    : 'text-slate-500 hover:text-slate-300'
+                    : 'text-slate-500 hover:text-slate-300 active:text-slate-200'
                 }`}
               >
                 {tab.label}
@@ -646,19 +646,19 @@ function QuoteForm({ quote, onSave, onCancel }) {
             </>
           )}
 
-          <div className="flex gap-3 pt-4">
-            <button
-              type="submit"
-              className="flex-1 rounded-full border border-cyan-500/25 bg-cyan-500/10 px-4 py-2 text-sm font-medium text-cyan-400 transition-all hover:border-cyan-400/50 hover:bg-cyan-500/15"
-            >
-              {quote ? 'Actualizar' : 'Crear'} Cotización
-            </button>
+          <div className="flex flex-col-reverse sm:flex-row gap-2 sm:gap-3 pt-4">
             <button
               type="button"
               onClick={onCancel}
-              className="flex-1 rounded-full border border-slate-700/40 bg-[#040c1a]/60 px-4 py-2 text-sm font-light text-slate-500 transition-all hover:border-slate-600/40 hover:text-slate-300"
+              className="flex-1 rounded-full border border-slate-700/40 bg-[#040c1a]/60 px-4 py-3 sm:py-2 text-sm font-light text-slate-500 transition-all hover:border-slate-600/40 hover:text-slate-300 touch-manipulation min-h-[44px]"
             >
               Cancelar
+            </button>
+            <button
+              type="submit"
+              className="flex-1 rounded-full border border-cyan-500/25 bg-cyan-500/10 px-4 py-3 sm:py-2 text-sm font-medium text-cyan-400 transition-all hover:border-cyan-400/50 hover:bg-cyan-500/15 active:scale-95 touch-manipulation min-h-[44px]"
+            >
+              {quote ? 'Actualizar' : 'Crear'} Cotización
             </button>
           </div>
         </form>

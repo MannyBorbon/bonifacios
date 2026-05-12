@@ -2,6 +2,12 @@
 require_once '../config/database.php';
 $userId = requireAuth();
 
+if ($_SERVER['REQUEST_METHOD'] !== 'GET') {
+    http_response_code(405);
+    echo json_encode(['success' => false, 'error' => 'Método no permitido']);
+    exit();
+}
+
 $conn = getConnection();
 
 $conn->query("
@@ -116,23 +122,45 @@ try {
 // New quote requests (nueva_solicitud or pending = not yet attended)
 $newQuotes = 0;
 try {
-    $quotesQuery = "SELECT COUNT(*) as cnt FROM event_quotes WHERE status IN ('nueva_solicitud','pending')";
     if (!empty($seenState['seen_quotes_at'])) {
-        $quotesQuery .= " AND created_at > '" . $conn->real_escape_string($seenState['seen_quotes_at']) . "'";
+        $qStmt = $conn->prepare(
+            "SELECT COUNT(*) AS cnt FROM event_quotes WHERE status IN ('nueva_solicitud','pending') AND created_at > ?"
+        );
+        if ($qStmt) {
+            $qStmt->bind_param('s', $seenState['seen_quotes_at']);
+            $qStmt->execute();
+            $newQuotes = (int)($qStmt->get_result()->fetch_assoc()['cnt'] ?? 0);
+        }
+    } else {
+        $qStmt = $conn->query(
+            "SELECT COUNT(*) AS cnt FROM event_quotes WHERE status IN ('nueva_solicitud','pending')"
+        );
+        if ($qStmt) {
+            $newQuotes = (int)($qStmt->fetch_assoc()['cnt'] ?? 0);
+        }
     }
-    $qStmt = $conn->query($quotesQuery);
-    if ($qStmt) $newQuotes = (int)($qStmt->fetch_assoc()['cnt'] ?? 0);
 } catch (Exception $e) {}
 
 // New job applications submitted in last 48 hours
 $newApplications = 0;
 try {
-    $appQuery = "SELECT COUNT(*) as cnt FROM job_applications WHERE created_at >= NOW() - INTERVAL 48 HOUR";
     if (!empty($seenState['seen_applications_at'])) {
-        $appQuery .= " AND created_at > '" . $conn->real_escape_string($seenState['seen_applications_at']) . "'";
+        $aStmt = $conn->prepare(
+            "SELECT COUNT(*) AS cnt FROM job_applications WHERE created_at >= NOW() - INTERVAL 48 HOUR AND created_at > ?"
+        );
+        if ($aStmt) {
+            $aStmt->bind_param('s', $seenState['seen_applications_at']);
+            $aStmt->execute();
+            $newApplications = (int)($aStmt->get_result()->fetch_assoc()['cnt'] ?? 0);
+        }
+    } else {
+        $aStmt = $conn->query(
+            "SELECT COUNT(*) AS cnt FROM job_applications WHERE created_at >= NOW() - INTERVAL 48 HOUR"
+        );
+        if ($aStmt) {
+            $newApplications = (int)($aStmt->fetch_assoc()['cnt'] ?? 0);
+        }
     }
-    $aStmt = $conn->query($appQuery);
-    if ($aStmt) $newApplications = (int)($aStmt->fetch_assoc()['cnt'] ?? 0);
 } catch (Exception $e) {}
 
 $totalUnread = $unreadChat + $unreadEmails + $newQuotes + $newApplications;

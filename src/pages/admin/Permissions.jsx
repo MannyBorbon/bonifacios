@@ -38,10 +38,10 @@ function Toggle({ value, onChange, saving }) {
     <button
       onClick={onChange}
       disabled={saving}
-      className={`relative h-7 w-13 min-w-[52px] rounded-full transition-all duration-300 flex-shrink-0
+      className={`relative h-7 w-13 min-w-[52px] rounded-full transition-all duration-300 flex-shrink-0 touch-manipulation
         ${value ? 'bg-green-500 shadow-lg shadow-green-500/30' : 'bg-slate-700'}
         ${saving ? 'opacity-50 cursor-wait' : 'cursor-pointer hover:opacity-90'}`}
-      style={{ width: 52 }}
+      style={{ width: 52, minHeight: 28 }}
     >
       <span className={`absolute top-1 h-5 w-5 rounded-full bg-white shadow-md transition-all duration-300
         ${value ? 'left-[28px]' : 'left-1'}`}
@@ -120,14 +120,14 @@ export default function Permissions() {
   }
 
   return (
-    <div className="space-y-6 p-1">
+    <div className="space-y-6 p-1 pb-[calc(env(safe-area-inset-bottom)+1rem)]">
       {/* Header */}
-      <div className="relative overflow-hidden rounded-2xl border border-amber-400/35 bg-gradient-to-br from-[#151006] to-[#0a162b] px-6 py-5 shadow-lg shadow-amber-500/10">
-        <div className="absolute inset-0 bg-gradient-to-r from-cyan-400/16 via-cyan-500/6 to-transparent pointer-events-none" />
+      <div className="relative overflow-hidden rounded-2xl border border-amber-300/40 bg-gradient-to-br from-[#1b1204] via-[#111827] to-[#0a162b] px-6 py-5 shadow-lg shadow-amber-500/15">
+        <div className="absolute inset-0 bg-gradient-to-r from-amber-300/8 via-transparent to-sky-300/5 pointer-events-none" />
         <div className="absolute bottom-0 left-0 right-0 h-px bg-gradient-to-r from-transparent via-amber-500/30 to-transparent" />
         <p className="text-[10px] uppercase tracking-[0.35em] text-amber-300/85 mb-1">Administración</p>
         <h1 className="text-xl font-light text-white">Control de Permisos</h1>
-        <p className="text-xs text-slate-300 mt-0.5">Configura por módulo qué pueden ver y qué pueden editar (Ver y Editar separados)</p>
+        <p className="text-xs text-slate-100/95 mt-0.5">Configura por módulo qué pueden ver y qué pueden editar (Ver y Editar separados)</p>
       </div>
 
       {loading ? (
@@ -138,7 +138,7 @@ export default function Permissions() {
         <div className="rounded-xl border border-red-500/20 bg-red-500/5 p-6 text-center">
           <p className="text-red-400 text-sm">{error}</p>
           <p className="text-slate-500 text-xs mt-1">Verifica que la columna de permisos exista en la base de datos</p>
-          <button onClick={loadPerms} className="mt-3 px-4 py-2 bg-red-500/10 text-red-400 rounded-lg text-xs border border-red-500/20 hover:bg-red-500/20">Reintentar</button>
+          <button onClick={loadPerms} className="mt-3 px-4 py-2.5 sm:py-2 bg-red-500/10 text-red-400 rounded-lg text-xs border border-red-500/20 hover:bg-red-500/20 touch-manipulation min-h-[44px] sm:min-h-0 active:scale-95">Reintentar</button>
         </div>
       ) : (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
@@ -201,14 +201,14 @@ export default function Permissions() {
               </div>
 
               {/* Quick actions */}
-              <div className="px-6 py-3 border-t border-slate-600/45 flex gap-2">
+              <div className="px-4 sm:px-6 py-3 border-t border-slate-600/45 grid grid-cols-2 sm:flex gap-2">
                 <button
                   onClick={() => {
                     MODULES.forEach(({ viewKey }) => {
                       if (!u.perms?.[viewKey]) togglePerm(u.username, viewKey, false);
                     });
                   }}
-                  className="flex-1 py-2 rounded-lg text-[10px] font-bold border border-cyan-500/20 text-cyan-300 hover:bg-cyan-500/10 transition-all"
+                  className="flex-1 py-2.5 sm:py-2 rounded-lg text-[10px] font-bold border border-cyan-500/20 text-cyan-300 hover:bg-cyan-500/10 transition-all touch-manipulation min-h-[40px] active:scale-95"
                 >
                   Activar Ver
                 </button>
@@ -218,7 +218,7 @@ export default function Permissions() {
                       if (u.perms?.[editKey]) togglePerm(u.username, editKey, true);
                     });
                   }}
-                  className="flex-1 py-2 rounded-lg text-[10px] font-bold border border-amber-500/20 text-amber-300 hover:bg-amber-500/10 transition-all"
+                  className="flex-1 py-2.5 sm:py-2 rounded-lg text-[10px] font-bold border border-amber-500/20 text-amber-300 hover:bg-amber-500/10 transition-all touch-manipulation min-h-[40px] active:scale-95"
                 >
                   Solo Ver
                 </button>
@@ -229,7 +229,7 @@ export default function Permissions() {
                       if (!u.perms?.[editKey]) togglePerm(u.username, editKey, false);
                     });
                   }}
-                  className="flex-1 py-2 rounded-lg text-[10px] font-bold border border-green-500/20 text-green-400 hover:bg-green-500/10 transition-all"
+                  className="flex-1 py-2.5 sm:py-2 rounded-lg text-[10px] font-bold border border-green-500/20 text-green-400 hover:bg-green-500/10 transition-all touch-manipulation min-h-[40px] active:scale-95"
                 >
                   Ver+Editar
                 </button>
@@ -239,7 +239,7 @@ export default function Permissions() {
                       if (u.perms?.[viewKey]) togglePerm(u.username, viewKey, true);
                     });
                   }}
-                  className="flex-1 py-2 rounded-lg text-[10px] font-bold border border-red-500/20 text-red-400 hover:bg-red-500/10 transition-all"
+                  className="flex-1 py-2.5 sm:py-2 rounded-lg text-[10px] font-bold border border-red-500/20 text-red-400 hover:bg-red-500/10 transition-all touch-manipulation min-h-[40px] active:scale-95"
                 >
                   Bloquear
                 </button>

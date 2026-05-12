@@ -25,6 +25,10 @@ try {
     ");
     try { $conn->query("ALTER TABLE reservation_event_types ADD COLUMN is_home_cta TINYINT(1) NOT NULL DEFAULT 0"); } catch (Throwable $e) { /* ignore */ }
     try { $conn->query("ALTER TABLE reservation_event_types ADD COLUMN is_special TINYINT(1) NOT NULL DEFAULT 1"); } catch (Throwable $e) { /* ignore */ }
+    $conn->query("UPDATE reservation_event_types SET name = 'San Valentín' WHERE slug = 'san-valentin'");
+    $conn->query("UPDATE reservation_event_types SET name = 'Día de las Madres' WHERE slug = 'dia-madres'");
+    $conn->query("UPDATE reservation_event_types SET name = 'Día del Padre' WHERE slug = 'dia-del-padre'");
+    $conn->query("UPDATE reservation_event_types SET name = 'Año Nuevo' WHERE slug = 'ano-nuevo'");
 
     $method = $_SERVER['REQUEST_METHOD'];
 
@@ -43,14 +47,14 @@ try {
 
         if (count($events) === 0) {
             $defaults = [
-                ['General', 'general', 0],
-                ['San Valentin', 'san-valentin', 1],
-                ['Dia de las Madres', 'dia-madres', 1],
-                ['Dia del Padre', 'dia-del-padre', 1],
+                ['Reserva general', 'general', 0],
+                ['San Valentín', 'san-valentin', 1],
+                ['Día de las Madres', 'dia-madres', 1],
+                ['Día del Padre', 'dia-del-padre', 1],
                 ['Halloween', 'halloween', 1],
                 ['Posadas', 'posadas', 1],
                 ['Navidad', 'navidad', 1],
-                ['Ano Nuevo', 'ano-nuevo', 1]
+                ['Año Nuevo', 'ano-nuevo', 1]
             ];
             $ins = $conn->prepare("INSERT IGNORE INTO reservation_event_types (name, slug, is_active, is_special) VALUES (?, ?, 1, ?)");
             foreach ($defaults as $d) {
@@ -70,6 +74,11 @@ try {
     if ($method === 'POST') {
         $data = json_decode(file_get_contents('php://input'), true);
         $action = trim((string)($data['action'] ?? ''));
+        if ($action === 'clear_home_cta') {
+            $conn->query("UPDATE reservation_event_types SET is_home_cta = 0");
+            echo json_encode(['success' => true]);
+            exit;
+        }
         if ($action === 'set_home_cta') {
             $targetId = intval($data['id'] ?? 0);
             if ($targetId <= 0) {

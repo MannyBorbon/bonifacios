@@ -15,7 +15,7 @@
     define('SR_SERVER', '100.84.227.35\NATIONALSOFT');
     define('SR_DATABASE', 'softrestaurant8pro');
     define('SR_USER', 'usuario_web');
-    define('SR_PASS', 'Filipenses4:8@');
+    define('SR_PASS', getenv('SR_PASS') ?: '');
 
     define('SYNC_INTERVAL', 30); 
     define('LOG_FILE', __DIR__ . '/sync-realtime.log');

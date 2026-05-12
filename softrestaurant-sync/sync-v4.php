@@ -16,7 +16,7 @@ define('API_URL',        'https://bonifaciossancarlos.com/api/softrestaurant/syn
 define('API_KEY',        'bonifacios-sr-sync-2024-secret-key');
 define('SR_DSN',         "sqlsrv:Server=100.84.227.35\\NATIONALSOFT;Database=softrestaurant8pro;Encrypt=false;TrustServerCertificate=true");
 define('SR_USER',        'usuario_web');
-define('SR_PASS',        'Filipenses4:8@');
+define('SR_PASS',        getenv('SR_PASS') ?: '');
 define('SYNC_INTERVAL',  10);
 define('STATE_FILE',     __DIR__ . '/sync-state.json');
 define('HISTORY_START',  '2000-01-01 00:00:00');

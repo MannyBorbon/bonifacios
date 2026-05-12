@@ -1,10 +1,40 @@
 import { Link, useNavigate, Outlet, useLocation } from 'react-router-dom';
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { createPortal } from 'react-dom';
+import { motion, AnimatePresence } from 'framer-motion';
+import {
+  LayoutDashboard, Users, Briefcase, FileText, DollarSign,
+  CalendarDays, MessageSquare, BarChart3, Activity, Shield,
+  Zap, ChevronLeft, ChevronRight, X, Menu, Bell, Search,
+  LogOut, Sun, Moon, ExternalLink, MoreHorizontal
+} from 'lucide-react';
 import { authAPI } from '../services/api';
 import trackingService from '../services/tracking';
+import { useTheme } from '../hooks/useTheme';
+import AdminSandboxDial from './AdminSandboxDial';
+import {
+  disablePushNotifications,
+  enablePushNotifications,
+  getPushAvailability,
+  getPushPermission,
+  subscribeForegroundPush,
+  syncPushNotifications,
+} from '../services/pushNotifications';
+
+function useMediaQuery(query) {
+  const [matches, setMatches] = useState(() => typeof window !== 'undefined' ? window.matchMedia(query).matches : false);
+  useEffect(() => {
+    const mql = window.matchMedia(query);
+    const handler = (e) => setMatches(e.matches);
+    mql.addEventListener('change', handler);
+    setMatches(mql.matches);
+    return () => mql.removeEventListener('change', handler);
+  }, [query]);
+  return matches;
+}
 
 function AdminLayout() {
+  const { theme, toggleTheme } = useTheme();
   const navigate = useNavigate();
   const location = useLocation();
   const [user, setUser] = useState(null);
@@ -17,8 +47,9 @@ function AdminLayout() {
   const fileInputRef = useRef(null);
   const [audio] = useState(() => new Audio('/la-otra-realidad.m4a'));
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
-  const prevPath = useRef(location.pathname);
-
+  const [pushReady, setPushReady] = useState(false);
+  const [pushEnabled, setPushEnabled] = useState(false);
+  const [pushBusy, setPushBusy] = useState(false);
   const sessionReady = useRef(false);
   const inactivityTimer = useRef(null);
 
@@ -95,8 +126,8 @@ function AdminLayout() {
     const playAudio = () => {
       audio.currentTime = 0;
       audio.play()
-        .then(() => console.log('Dashboard audio playing'))
-        .catch(err => console.log('Audio blocked, waiting for interaction:', err));
+        .then(() => { if (import.meta.env.DEV) console.log('Dashboard audio playing'); })
+        .catch(() => { /* autoplay bloqueado hasta clic/tecla; sin log en prod para no ensuciar consola */ });
     };
     
     playAudio();
@@ -119,6 +150,51 @@ function AdminLayout() {
       document.removeEventListener('keydown', handleInteraction);
     };
   }, [audio]);
+
+  useEffect(() => {
+    let active = true;
+    let disposeForeground = null;
+
+    const bootPush = async () => {
+      const availability = await getPushAvailability();
+      if (!active) return;
+      setPushReady(Boolean(availability.supported));
+      if (!availability.supported) return;
+
+      if (getPushPermission() === 'granted') {
+        const syncResult = await syncPushNotifications();
+        if (!active) return;
+        setPushEnabled(Boolean(syncResult.ok));
+      } else {
+        setPushEnabled(false);
+      }
+
+      disposeForeground = await subscribeForegroundPush((payload) => {
+        const title = payload?.notification?.title || 'Bonifacios';
+        const body = payload?.notification?.body || 'Nueva actividad';
+        if (Notification.permission === 'granted' && document.visibilityState !== 'visible') {
+          new Notification(title, { body, icon: '/logo.png' });
+        } else {
+          loadNotifications();
+        }
+      });
+    };
+
+    const onServiceWorkerMessage = (event) => {
+      const data = event?.data;
+      if (data?.type === 'PUSH_NAVIGATE' && data?.url) {
+        navigate(data.url);
+      }
+    };
+
+    bootPush();
+    navigator.serviceWorker?.addEventListener?.('message', onServiceWorkerMessage);
+    return () => {
+      active = false;
+      if (typeof disposeForeground === 'function') disposeForeground();
+      navigator.serviceWorker?.removeEventListener?.('message', onServiceWorkerMessage);
+    };
+  }, [navigate]);
 
   const loadNotifications = async () => {
     try {
@@ -197,11 +273,6 @@ function AdminLayout() {
 
   const isActive = (path) => location.pathname === path;
 
-  // Close mobile menu when route changes
-  useEffect(() => {
-    if (prevPath.current !== location.pathname) { setMobileMenuOpen(false); prevPath.current = location.pathname; }
-  }, [location]);
-
   const isAdministrador = user?.role === 'administrador';
   const toBool = (v, fallback = true) => (v === undefined || v === null ? fallback : Boolean(v));
   const canViewModule = (viewKey, legacyEditKey, legacyDeleteKey) => {
@@ -222,298 +293,424 @@ function AdminLayout() {
   };
   const disabledUiClass = (path) => canAccessRoute(path) ? '' : 'hidden';
 
+  // ── Sidebar state ──
+  const isMobile = useMediaQuery('(max-width: 767px)');
+  const isTablet = useMediaQuery('(min-width: 768px) and (max-width: 1023px)');
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
+
+  useEffect(() => { if (isTablet) setSidebarCollapsed(true); }, [isTablet]);
+  useEffect(() => {
+    if (mobileSidebarOpen) document.body.style.overflow = 'hidden';
+    else document.body.style.overflow = '';
+    return () => { document.body.style.overflow = ''; };
+  }, [mobileSidebarOpen]);
+
+  // Close mobile sidebar on route change
+  useEffect(() => {
+    setMobileSidebarOpen(false);
+    setMobileMenuOpen(false);
+  }, [location.pathname]);
+
+  // ── Nav items ──
+  const NAV_ITEMS = [
+    { to: '/admin/dashboard', label: 'Dashboard', icon: LayoutDashboard, color: 'from-blue-500 to-cyan-400', mobileNav: true },
+    { to: '/admin/sales', label: 'Ventas', icon: DollarSign, color: 'from-emerald-500 to-teal-400', mobileNav: true },
+    { to: '/admin/reservations', label: 'Reservaciones', icon: CalendarDays, color: 'from-violet-500 to-purple-400', mobileNav: true },
+    { to: '/admin/applications', label: 'Solicitudes', icon: Briefcase, color: 'from-amber-500 to-orange-400', mobileNav: false },
+    { to: '/admin/employees', label: 'Personal', icon: Users, color: 'from-rose-500 to-pink-400', mobileNav: false },
+    { to: '/admin/quotes', label: 'Cotizaciones', icon: FileText, color: 'from-cyan-500 to-blue-400', mobileNav: false },
+    { to: '/admin/messages', label: 'Mensajes', icon: MessageSquare, color: 'from-sky-500 to-indigo-400', mobileNav: true },
+    ...(isAdministrador ? [
+      { to: '/admin/tracking', label: 'Tracking', icon: Activity, color: 'from-fuchsia-500 to-purple-400', mobileNav: false },
+      { to: '/admin/analytics', label: 'Estadísticas', icon: BarChart3, color: 'from-teal-500 to-emerald-400', mobileNav: false },
+    ] : []),
+    ...(['manuel','misael'].includes(user?.username?.toLowerCase()) ? [
+      { to: '/admin/permissions', label: 'Permisos', icon: Shield, color: 'from-amber-400 to-yellow-500', mobileNav: false },
+    ] : []),
+  ].filter(item => canAccessRoute(item.to));
+
+  const MOBILE_NAV_ITEMS = NAV_ITEMS.filter(item => item.mobileNav);
+  const activeNavItem = NAV_ITEMS.find(item => isActive(item.to)) || NAV_ITEMS[0];
+
   const handlePlayMusic = () => {
     audio.currentTime = 0;
     audio.play().catch(err => console.log('Audio play error:', err));
   };
 
+  const handleEnablePush = async () => {
+    setPushBusy(true);
+    try {
+      const result = await enablePushNotifications();
+      if (!result.ok) {
+        if (result.reason === 'permission_denied') {
+          alert('Permiso de notificaciones denegado. Actívalo en ajustes del navegador.');
+        } else if (result.reason === 'missing_firebase_config') {
+          alert('Falta configurar Firebase para notificaciones push.');
+        } else {
+          alert('No fue posible activar notificaciones push en este dispositivo.');
+        }
+        return;
+      }
+      setPushEnabled(true);
+    } finally {
+      setPushBusy(false);
+    }
+  };
+
+  const handleDisablePush = async () => {
+    setPushBusy(true);
+    try {
+      await disablePushNotifications();
+      setPushEnabled(false);
+    } finally {
+      setPushBusy(false);
+    }
+  };
+
+  // ── Sidebar content (shared between desktop and mobile overlay) ──
+  const SidebarContent = ({ onItemClick }) => (
+    <>
+      <nav className="flex-1 overflow-y-auto py-2 px-1.5 space-y-0.5 overscroll-contain">
+        {NAV_ITEMS.map(item => {
+          const Icon = item.icon;
+          const active = isActive(item.to);
+          return (
+            <Link key={item.to} to={item.to} onClick={onItemClick}
+              title={sidebarCollapsed && !isMobile ? item.label : undefined}
+              className={`w-full flex items-center gap-2.5 rounded-xl transition-all duration-150 touch-manipulation min-h-[44px] ${
+                sidebarCollapsed && !isMobile ? 'justify-center py-2.5 px-0' : 'px-3 py-2.5'
+              } ${active ? 'bg-white/[0.06] text-white' : 'text-slate-500 hover:text-slate-300 hover:bg-white/[0.03] active:bg-white/[0.06]'}`}>
+              <div className={`w-8 h-8 sm:w-7 sm:h-7 rounded-lg flex items-center justify-center shrink-0 transition-all ${
+                active ? `bg-gradient-to-br ${item.color} shadow-md` : 'bg-slate-800/40'
+              }`}>
+                <Icon size={15} className={active ? 'text-white' : ''} />
+              </div>
+              {(isMobile || !sidebarCollapsed) && (
+                <div className="flex-1 text-left min-w-0">
+                  <span className="text-[12px] font-semibold block truncate">{item.label}</span>
+                </div>
+              )}
+              {active && isMobile && (
+                <div className="w-1.5 h-1.5 rounded-full bg-white shrink-0" />
+              )}
+            </Link>
+          );
+        })}
+      </nav>
+
+      {/* Workspace link */}
+      <div className="p-1.5 border-t border-slate-800/40">
+        <Link to="/admin/workspace" onClick={onItemClick}
+          className={`w-full flex items-center gap-2.5 rounded-xl transition-all duration-150 touch-manipulation min-h-[44px] ${
+            sidebarCollapsed && !isMobile ? 'justify-center py-2.5 px-0' : 'px-3 py-2.5'
+          } text-amber-400/70 hover:text-amber-300 hover:bg-amber-500/5 active:bg-amber-500/10`}>
+          <div className="w-8 h-8 sm:w-7 sm:h-7 rounded-lg bg-gradient-to-br from-[#D4AF37] to-amber-600 flex items-center justify-center shrink-0 shadow-md shadow-amber-500/20">
+            <Zap size={14} className="text-black" />
+          </div>
+          {(isMobile || !sidebarCollapsed) && (
+            <span className="text-[12px] font-semibold">Workspace</span>
+          )}
+          {(isMobile || !sidebarCollapsed) && <ExternalLink size={12} className="ml-auto text-amber-500/40" />}
+        </Link>
+      </div>
+
+      {/* Collapse toggle (desktop/tablet only) */}
+      {!isMobile && (
+        <div className="p-1.5 border-t border-slate-800/40">
+          <button onClick={() => setSidebarCollapsed(p => !p)}
+            className="w-full flex items-center justify-center py-2.5 rounded-xl text-slate-700 hover:text-slate-400 transition-colors touch-manipulation min-h-[44px]">
+            {sidebarCollapsed ? <ChevronRight size={14} /> : <ChevronLeft size={14} />}
+          </button>
+        </div>
+      )}
+
+      {/* Mobile: user info + logout */}
+      {isMobile && (
+        <div className="p-3 border-t border-slate-800/40 space-y-2">
+          <div className="flex items-center gap-2.5 px-1">
+            <div className="h-8 w-8 rounded-full overflow-hidden border border-cyan-500/20 bg-slate-800 flex items-center justify-center shrink-0">
+              {profilePhoto
+                ? <img src={profilePhoto} alt="" className="w-full h-full object-cover" />
+                : <span className="text-xs text-cyan-400 font-medium">{user?.username?.[0]?.toUpperCase()}</span>}
+            </div>
+            <div className="flex-1 min-w-0">
+              <p className="text-xs text-slate-300 truncate">{user?.full_name || user?.username}</p>
+              <p className="text-[10px] text-slate-600 truncate">@{user?.username}</p>
+            </div>
+          </div>
+          <button onClick={handleLogout}
+            className="w-full flex items-center gap-2.5 rounded-xl px-3 py-2.5 text-red-400/70 hover:text-red-400 hover:bg-red-500/5 transition-all touch-manipulation min-h-[44px]">
+            <LogOut size={14} />
+            <span className="text-[12px] font-medium">Cerrar sesión</span>
+          </button>
+        </div>
+      )}
+    </>
+  );
+
+  // ── Notification dropdown (reusable via portal) ──
+  const NotifDropdown = () => (
+    <div ref={notifDropdownRef} className="fixed right-3 sm:right-6 top-12 sm:top-16 w-[calc(100%-24px)] sm:w-80 max-w-sm rounded-xl border border-cyan-500/15 bg-[#0a0f1e] shadow-2xl overflow-hidden" style={{ zIndex: 99999 }}>
+      <div className="px-4 py-3 border-b border-cyan-500/10 space-y-2">
+        <div className="flex items-center justify-between">
+          <p className="text-sm font-medium text-slate-200">Notificaciones</p>
+          {notifications.total > 0 && <span className="text-[10px] text-cyan-400 bg-cyan-500/10 border border-cyan-500/20 rounded-full px-2 py-0.5">{notifications.total} nuevas</span>}
+        </div>
+        {pushReady && (
+          <div className="flex items-center justify-between gap-2 rounded-lg border border-cyan-500/15 bg-cyan-500/5 px-2.5 py-2">
+            <div>
+              <p className="text-[11px] text-slate-300">Push al celular</p>
+              <p className="text-[10px] text-slate-500">{pushEnabled ? 'Activo en este dispositivo' : 'Activa para recibir alertas'}</p>
+            </div>
+            <button type="button" onClick={pushEnabled ? handleDisablePush : handleEnablePush} disabled={pushBusy}
+              className={`inline-flex min-h-[34px] items-center justify-center rounded-md border px-2.5 text-[10px] font-medium transition-all touch-manipulation ${
+                pushEnabled ? 'border-emerald-500/30 bg-emerald-500/12 text-emerald-300' : 'border-cyan-500/30 bg-cyan-500/10 text-cyan-300'
+              } ${pushBusy ? 'opacity-60' : ''}`}>
+              {pushBusy ? '...' : pushEnabled ? 'Desactivar' : 'Activar'}
+            </button>
+          </div>
+        )}
+      </div>
+      <div className="max-h-80 overflow-y-auto divide-y divide-cyan-500/5 overscroll-contain">
+        {notifications.unread_chat > 0 && (
+          <button onClick={(e) => { e.stopPropagation(); setShowNotifDropdown(false); navigate('/admin/messages'); }} className="w-full text-left flex items-center gap-3 px-4 py-3 hover:bg-cyan-500/5 transition-colors touch-manipulation">
+            <div className="h-8 w-8 rounded-full bg-blue-500/15 border border-blue-500/20 flex items-center justify-center flex-shrink-0"><MessageSquare size={14} className="text-blue-400" /></div>
+            <div className="flex-1 min-w-0">
+              <p className="text-xs text-slate-200">{notifications.unread_chat} mensaje{notifications.unread_chat > 1 ? 's' : ''} sin leer</p>
+              <p className="text-[10px] text-slate-600">Chat interno</p>
+            </div>
+            <span className="h-2 w-2 rounded-full bg-blue-400 flex-shrink-0" />
+          </button>
+        )}
+        {notifications.unread_emails > 0 && (
+          <button onClick={(e) => { e.stopPropagation(); setShowNotifDropdown(false); navigate('/admin/inbox'); }} className="w-full text-left flex items-center gap-3 px-4 py-3 hover:bg-cyan-500/5 transition-colors touch-manipulation">
+            <div className="h-8 w-8 rounded-full bg-green-500/15 border border-green-500/20 flex items-center justify-center flex-shrink-0"><svg className="h-4 w-4 text-green-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" /></svg></div>
+            <div className="flex-1 min-w-0">
+              <p className="text-xs text-slate-200">{notifications.unread_emails} correo{notifications.unread_emails > 1 ? 's' : ''} sin leer</p>
+              <p className="text-[10px] text-slate-600">Bandeja de entrada</p>
+            </div>
+            <span className="h-2 w-2 rounded-full bg-green-400 flex-shrink-0" />
+          </button>
+        )}
+        {notifications.new_quotes > 0 && (
+          <button onClick={(e) => { e.stopPropagation(); setShowNotifDropdown(false); navigate('/admin/quotes'); }} className="w-full text-left flex items-center gap-3 px-4 py-3 hover:bg-cyan-500/5 transition-colors touch-manipulation">
+            <div className="h-8 w-8 rounded-full bg-cyan-500/15 border border-cyan-500/20 flex items-center justify-center flex-shrink-0"><FileText size={14} className="text-cyan-400" /></div>
+            <div className="flex-1 min-w-0">
+              <p className="text-xs text-slate-200">{notifications.new_quotes} solicitud{notifications.new_quotes > 1 ? 'es' : ''} de cotización</p>
+              <p className="text-[10px] text-slate-600">Sin atender</p>
+            </div>
+            <span className="h-2 w-2 rounded-full bg-cyan-400 flex-shrink-0" />
+          </button>
+        )}
+        {notifications.new_applications > 0 && (
+          <button onClick={(e) => { e.stopPropagation(); setShowNotifDropdown(false); navigate('/admin/applications'); }} className="w-full text-left flex items-center gap-3 px-4 py-3 hover:bg-cyan-500/5 transition-colors touch-manipulation">
+            <div className="h-8 w-8 rounded-full bg-orange-500/15 border border-orange-500/20 flex items-center justify-center flex-shrink-0"><Briefcase size={14} className="text-orange-400" /></div>
+            <div className="flex-1 min-w-0">
+              <p className="text-xs text-slate-200">{notifications.new_applications} solicitud{notifications.new_applications > 1 ? 'es' : ''} de empleo</p>
+              <p className="text-[10px] text-slate-600">Últimas 48 horas</p>
+            </div>
+            <span className="h-2 w-2 rounded-full bg-orange-400 flex-shrink-0" />
+          </button>
+        )}
+        {notifications.recent_chats && notifications.recent_chats.length > 0 && notifications.recent_chats.slice(0, 3).map((n, i) => (
+          <button key={i} onClick={(e) => { e.stopPropagation(); setShowNotifDropdown(false); navigate('/admin/messages'); }} className="w-full text-left flex items-center gap-3 px-4 py-2.5 hover:bg-cyan-500/5 transition-colors touch-manipulation">
+            <div className="h-7 w-7 rounded-full bg-cyan-500/10 border border-cyan-500/15 flex items-center justify-center flex-shrink-0 overflow-hidden">
+              {n.sender_photo ? <img src={n.sender_photo} alt="" className="w-full h-full object-cover" /> : <span className="text-[10px] text-cyan-400">{(n.sender_name||'?')[0]}</span>}
+            </div>
+            <div className="flex-1 min-w-0">
+              <p className="text-[11px] text-slate-300 truncate"><span className="font-medium">{n.sender_name}</span>: {n.message_type !== 'text' ? '📎 Archivo' : (n.content || '').substring(0, 40)}</p>
+            </div>
+          </button>
+        ))}
+        {notifications.total === 0 && (
+          <div className="px-4 py-8 text-center">
+            <div className="h-8 w-8 rounded-full bg-cyan-500/10 border border-cyan-500/15 flex items-center justify-center mx-auto mb-2">
+              <svg className="h-4 w-4 text-cyan-500/40" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" /></svg>
+            </div>
+            <p className="text-xs text-slate-600">Todo al día</p>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+
   return (
-    <div className="min-h-screen bg-[#030712] bg-gradient-to-br from-[#030712] via-[#060d1f] to-[#030b18]">
-      <div className="absolute inset-0 bg-[url('data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iNDAiIGhlaWdodD0iNDAiIHhtbG5zPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2ZyI+PGRlZnM+PHBhdHRlcm4gaWQ9ImdyaWQiIHdpZHRoPSI0MCIgaGVpZ2h0PSI0MCIgcGF0dGVyblVuaXRzPSJ1c2VyU3BhY2VPblVzZSI+PHBhdGggZD0iTSA0MCAwIEwgMCAwIDAgNDAiIGZpbGw9Im5vbmUiIHN0cm9rZT0icmdiYSgzNCwyMTEsMjM4LDAuMDMpIiBzdHJva2Utd2lkdGg9IjEiLz48L3BhdHRlcm4+PC9kZWZzPjxyZWN0IHdpZHRoPSIxMDAlIiBoZWlnaHQ9IjEwMCUiIGZpbGw9InVybCgjZ3JpZCkiLz48L3N2Zz4=')] opacity-100" />
+    <div className="h-[100dvh] bg-[#030712] flex overflow-hidden select-none">
 
-      <nav className="relative z-10 border-b border-cyan-500/10 bg-[#030b18]/80 backdrop-blur-xl">
-        <div className="mx-auto max-w-7xl px-3 sm:px-6 py-2 sm:py-4">
-          {/* Top bar: logo + actions */}
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <Link to="/admin/dashboard" className="flex items-center">
-                <img src="/logo-premium.svg" alt="Bonifacio's" className="h-8 sm:h-10 w-auto" />
-              </Link>
-              <a href="https://bonifaciossancarlos.com/" target="_blank" rel="noopener noreferrer" title="Ir al sitio web" className="hidden sm:flex items-center justify-center h-8 w-8 rounded-lg text-[#F4E4C1]/40 hover:text-[#D4AF37] hover:bg-[#D4AF37]/10 transition-all">
-                <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6" /></svg>
-              </a>
+      {/* ─── Desktop/Tablet Sidebar ─── */}
+      {!isMobile && (
+        <motion.aside
+          animate={{ width: sidebarCollapsed ? 56 : 220 }}
+          transition={{ type: 'spring', stiffness: 400, damping: 34 }}
+          className="h-full bg-[#050a14] border-r border-slate-800/40 flex flex-col shrink-0 z-20">
+          {/* Sidebar header / logo */}
+          <div className={`flex items-center h-14 border-b border-slate-800/40 shrink-0 ${sidebarCollapsed ? 'justify-center' : 'gap-2.5 px-4'}`}>
+            <Link to="/admin/dashboard" className="flex items-center gap-2.5 group">
+              <div className="w-7 h-7 rounded-lg bg-gradient-to-br from-[#D4AF37] to-amber-600 flex items-center justify-center shrink-0 shadow-md shadow-amber-500/20 transition-transform group-hover:scale-110">
+                <span className="text-sm font-black text-black">B</span>
+              </div>
+              {!sidebarCollapsed && <span className="text-white font-black text-xs tracking-tight">BONIFACIO'S</span>}
+            </Link>
+          </div>
+          <SidebarContent />
+        </motion.aside>
+      )}
+
+      {/* ─── Mobile Sidebar Overlay ─── */}
+      <AnimatePresence>
+        {isMobile && mobileSidebarOpen && (
+          <>
+            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+              className="fixed inset-0 z-[60] bg-black/50 backdrop-blur-sm" onClick={() => setMobileSidebarOpen(false)} />
+            <motion.aside
+              initial={{ x: -280 }}
+              animate={{ x: 0 }}
+              exit={{ x: -280 }}
+              transition={{ type: 'spring', stiffness: 400, damping: 40 }}
+              className="fixed inset-y-0 left-0 z-[70] w-[280px] bg-[#050a14] border-r border-slate-800/40 flex flex-col shadow-2xl">
+              <div className="flex items-center justify-between h-14 border-b border-slate-800/40 px-4 shrink-0">
+                <div className="flex items-center gap-2.5">
+                  <div className="w-7 h-7 rounded-lg bg-gradient-to-br from-[#D4AF37] to-amber-600 flex items-center justify-center shrink-0">
+                    <span className="text-sm font-black text-black">B</span>
+                  </div>
+                  <span className="text-white font-black text-xs tracking-tight">BONIFACIO'S</span>
+                </div>
+                <button onClick={() => setMobileSidebarOpen(false)} className="p-2 rounded-lg text-slate-600 hover:text-white transition-colors touch-manipulation">
+                  <X size={18} />
+                </button>
+              </div>
+              <SidebarContent onItemClick={() => setMobileSidebarOpen(false)} />
+            </motion.aside>
+          </>
+        )}
+      </AnimatePresence>
+
+      {/* ─── Main Area ─── */}
+      <div className="flex-1 flex flex-col min-w-0">
+        {/* Header bar */}
+        <header className="h-14 border-b border-slate-800/40 bg-[#050a14]/80 backdrop-blur-sm flex items-center justify-between px-3 sm:px-4 shrink-0 z-10">
+          <div className="flex items-center gap-2">
+            {isMobile && (
+              <button onClick={() => setMobileSidebarOpen(true)} className="p-2 -ml-1 rounded-lg text-slate-500 hover:text-white transition-colors touch-manipulation min-h-[44px] min-w-[44px] flex items-center justify-center">
+                <Menu size={20} />
+              </button>
+            )}
+            {activeNavItem && (
+              <>
+                <div className={`w-6 h-6 rounded-md bg-gradient-to-br ${activeNavItem.color} flex items-center justify-center`}>
+                  {(() => { const I = activeNavItem.icon; return <I size={12} className="text-white" />; })()}
+                </div>
+                <h1 className="text-white font-bold text-sm truncate">{activeNavItem.label}</h1>
+              </>
+            )}
+          </div>
+          <div className="flex items-center gap-1.5">
+            {/* Theme toggle */}
+            <button onClick={toggleTheme}
+              className="p-2 rounded-lg text-slate-500 hover:text-white hover:bg-white/[0.03] transition-colors touch-manipulation min-h-[36px] min-w-[36px] flex items-center justify-center"
+              title={theme === 'dark' ? 'Modo claro' : 'Modo oscuro'}>
+              {theme === 'dark' ? <Sun size={16} className="text-amber-400" /> : <Moon size={16} className="text-indigo-400" />}
+            </button>
+
+            {/* Notification bell */}
+            <div className="relative" ref={notifRef}>
+              <button onClick={() => {
+                const willOpen = !showNotifDropdown;
+                setShowNotifDropdown(willOpen);
+                if (willOpen && notifications.total > 0) {
+                  setNotifications(prev => ({ ...prev, total: 0 }));
+                  markNotificationsSeen();
+                }
+              }} className="relative p-2 rounded-lg text-slate-500 hover:text-white hover:bg-white/[0.03] transition-colors touch-manipulation min-h-[36px] min-w-[36px] flex items-center justify-center">
+                <Bell size={16} />
+                {notifications.total > 0 && <span className="absolute top-1 right-1 w-3.5 h-3.5 rounded-full bg-rose-500 text-[8px] font-bold text-white flex items-center justify-center ring-2 ring-[#050a14]">{notifications.total > 9 ? '9+' : notifications.total}</span>}
+              </button>
+              {showNotifDropdown && createPortal(<NotifDropdown />, document.body)}
             </div>
 
-            {/* Desktop nav links (hidden on mobile + tablet) */}
-            <div className="hidden lg:flex gap-1">
-              <Link to="/admin/dashboard" className={`whitespace-nowrap rounded-lg px-4 py-2 text-sm font-light transition-all ${isActive('/admin/dashboard') ? 'bg-cyan-500/15 text-cyan-400 border border-cyan-500/20' : 'text-slate-400 hover:bg-cyan-500/5 hover:text-cyan-300'}`}>Dashboard</Link>
-              <Link to="/admin/applications" title={canAccessRoute('/admin/applications') ? '' : 'Funcion desactivada por permisos'} className={`whitespace-nowrap rounded-lg px-4 py-2 text-sm font-light transition-all ${isActive('/admin/applications') ? 'bg-cyan-500/15 text-cyan-400 border border-cyan-500/20' : 'text-slate-400 hover:bg-cyan-500/5 hover:text-cyan-300'} ${disabledUiClass('/admin/applications')}`}>Solicitudes</Link>
-              <Link to="/admin/employees" title={canAccessRoute('/admin/employees') ? '' : 'Funcion desactivada por permisos'} className={`whitespace-nowrap rounded-lg px-4 py-2 text-sm font-light transition-all ${isActive('/admin/employees') ? 'bg-cyan-500/15 text-cyan-400 border border-cyan-500/20' : 'text-slate-400 hover:bg-cyan-500/5 hover:text-cyan-300'} ${disabledUiClass('/admin/employees')}`}>Personal</Link>
-              {isAdministrador && (
-                <>
-                  <Link to="/admin/tracking" className={`whitespace-nowrap rounded-lg px-4 py-2 text-sm font-light transition-all ${isActive('/admin/tracking') ? 'bg-cyan-500/15 text-cyan-400 border border-cyan-500/20' : 'text-slate-400 hover:bg-cyan-500/5 hover:text-cyan-300'}`}>Tracking</Link>
-                  <Link to="/admin/analytics" className={`whitespace-nowrap rounded-lg px-4 py-2 text-sm font-light transition-all ${isActive('/admin/analytics') ? 'bg-cyan-500/15 text-cyan-400 border border-cyan-500/20' : 'text-slate-400 hover:bg-cyan-500/5 hover:text-cyan-300'}`}>Estadísticas</Link>
-                </>
-              )}
-              <Link to="/admin/quotes" title={canAccessRoute('/admin/quotes') ? '' : 'Funcion desactivada por permisos'} className={`whitespace-nowrap rounded-lg px-4 py-2 text-sm font-light transition-all ${isActive('/admin/quotes') ? 'bg-cyan-500/15 text-cyan-400 border border-cyan-500/20' : 'text-slate-400 hover:bg-cyan-500/5 hover:text-cyan-300'} ${disabledUiClass('/admin/quotes')}`}>Cotizaciones</Link>
-              <Link to="/admin/sales" title={canAccessRoute('/admin/sales') ? '' : 'Funcion desactivada por permisos'} className={`whitespace-nowrap rounded-lg px-4 py-2 text-sm font-light transition-all ${isActive('/admin/sales') ? 'bg-cyan-500/15 text-cyan-400 border border-cyan-500/20' : 'text-slate-400 hover:bg-cyan-500/5 hover:text-cyan-300'} ${disabledUiClass('/admin/sales')}`}>Ventas</Link>
-              <Link to="/admin/reservations" className={`whitespace-nowrap rounded-lg px-4 py-2 text-sm font-light transition-all ${isActive('/admin/reservations') ? 'bg-cyan-500/15 text-cyan-400 border border-cyan-500/20' : 'text-slate-400 hover:bg-cyan-500/5 hover:text-cyan-300'}`}>Reservaciones</Link>
-              <Link to="/admin/calendar" className={`whitespace-nowrap rounded-lg px-4 py-2 text-sm font-light transition-all ${isActive('/admin/calendar') ? 'bg-cyan-500/15 text-cyan-400 border border-cyan-500/20' : 'text-slate-400 hover:bg-cyan-500/5 hover:text-cyan-300'}`}>Agenda</Link>
-              <Link to="/admin/meetings" className={`whitespace-nowrap rounded-lg px-4 py-2 text-sm font-light transition-all ${isActive('/admin/meetings') ? 'bg-cyan-500/15 text-cyan-400 border border-cyan-500/20' : 'text-slate-400 hover:bg-cyan-500/5 hover:text-cyan-300'}`}>Reuniones</Link>
-              <Link to="/admin/messages" className={`whitespace-nowrap rounded-lg px-4 py-2 text-sm font-light transition-all ${isActive('/admin/messages') ? 'bg-cyan-500/15 text-cyan-400 border border-cyan-500/20' : 'text-slate-400 hover:bg-cyan-500/5 hover:text-cyan-300'}`}>Mensajes</Link>
-              {['manuel','misael'].includes(user?.username?.toLowerCase()) && (
-                <Link to="/admin/permissions" className={`whitespace-nowrap rounded-lg px-4 py-2 text-sm font-light transition-all ${isActive('/admin/permissions') ? 'bg-amber-500/15 text-amber-400 border border-amber-500/20' : 'text-amber-600/60 hover:bg-amber-500/5 hover:text-amber-400'}`}>🔐 Permisos</Link>
-              )}
-            </div>
-
-            {/* Right side actions */}
-            <div className="flex items-center gap-2 sm:gap-4">
-              {/* Desktop profile photo */}
-              <div className="hidden lg:block relative group">
-                <div className="w-10 h-10 rounded-full overflow-hidden border-2 border-cyan-500/30 bg-[#060d1f]">
+            {/* Desktop profile + logout */}
+            <div className="hidden md:flex items-center gap-2 ml-1">
+              <div className="relative group">
+                <div className="w-8 h-8 rounded-full overflow-hidden border-2 border-cyan-500/30 bg-[#060d1f] cursor-pointer">
                   {profilePhoto ? (
                     <img src={profilePhoto} alt={user?.username} className="w-full h-full object-cover" />
                   ) : (
-                    <div className="w-full h-full flex items-center justify-center text-cyan-400 font-medium">{user?.username?.[0]?.toUpperCase()}</div>
+                    <div className="w-full h-full flex items-center justify-center text-cyan-400 font-medium text-xs">{user?.username?.[0]?.toUpperCase()}</div>
                   )}
                 </div>
-                {user && ['manuel', 'misael'].includes(user.username.toLowerCase()) && (
+                {user && ['manuel', 'misael'].includes(user.username?.toLowerCase()) && (
                   <>
-                    <button onClick={() => fileInputRef.current?.click()} disabled={uploading} className="absolute inset-0 w-10 h-10 rounded-full bg-black/70 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity" title="Cambiar foto">
-                      <svg className="w-5 h-5 text-[#D4AF37]" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 13a3 3 0 11-6 0 3 3 0 016 0z" /></svg>
+                    <button onClick={() => fileInputRef.current?.click()} disabled={uploading} className="absolute inset-0 w-8 h-8 rounded-full bg-black/70 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity" title="Cambiar foto">
+                      <svg className="w-4 h-4 text-[#D4AF37]" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 13a3 3 0 11-6 0 3 3 0 016 0z" /></svg>
                     </button>
                     <input ref={fileInputRef} type="file" accept="image/*" onChange={handlePhotoUpload} className="hidden" />
                   </>
                 )}
               </div>
-
-              {/* Notification bell (both mobile + desktop) */}
-              <div className="relative" ref={notifRef}>
-                <button onClick={() => { 
-                  const willOpen = !showNotifDropdown;
-                  setShowNotifDropdown(willOpen);
-                  if (willOpen && notifications.total > 0) {
-                    // Actualizar el contador inmediatamente a 0
-                    setNotifications(prev => ({ ...prev, total: 0 }));
-                    // Luego marcar como vistas en el servidor
-                    markNotificationsSeen();
-                  }
-                }} className="relative rounded-lg p-1.5 sm:p-2 text-slate-400 hover:text-cyan-400 hover:bg-cyan-500/10 transition-all">
-                  <svg className="h-4 w-4 sm:h-5 sm:w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9" /></svg>
-                  {notifications.total > 0 && <span className="absolute -top-0.5 -right-0.5 flex h-3.5 w-3.5 sm:h-4 sm:w-4 items-center justify-center rounded-full bg-red-500 text-[8px] sm:text-[9px] font-bold text-white">{notifications.total > 9 ? '9+' : notifications.total}</span>}
-                </button>
-
-                {/* Dropdown rendered via portal to escape backdrop-blur stacking context */}
-                {showNotifDropdown && createPortal(
-                  <div ref={notifDropdownRef} className="fixed right-3 sm:right-6 top-12 sm:top-16 w-[calc(100%-24px)] sm:w-80 max-w-sm rounded-xl border border-cyan-500/15 bg-[#0a0f1e] shadow-2xl overflow-hidden" style={{ zIndex: 99999 }}>
-                    <div className="px-4 py-3 border-b border-cyan-500/10 flex items-center justify-between">
-                      <p className="text-sm font-medium text-slate-200">Notificaciones</p>
-                      {notifications.total > 0 && <span className="text-[10px] text-cyan-400 bg-cyan-500/10 border border-cyan-500/20 rounded-full px-2 py-0.5">{notifications.total} nuevas</span>}
-                    </div>
-                    <div className="max-h-80 overflow-y-auto divide-y divide-cyan-500/5">
-                      {notifications.unread_chat > 0 && (
-                        <button onClick={(e) => { e.stopPropagation(); setShowNotifDropdown(false); navigate('/admin/messages'); }} className="w-full text-left flex items-center gap-3 px-4 py-3 hover:bg-cyan-500/5 transition-colors">
-                          <div className="h-8 w-8 rounded-full bg-blue-500/15 border border-blue-500/20 flex items-center justify-center flex-shrink-0">
-                            <svg className="h-4 w-4 text-blue-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" /></svg>
-                          </div>
-                          <div className="flex-1 min-w-0">
-                            <p className="text-xs text-slate-200">{notifications.unread_chat} mensaje{notifications.unread_chat > 1 ? 's' : ''} sin leer</p>
-                            <p className="text-[10px] text-slate-600">Chat interno</p>
-                          </div>
-                          <span className="h-2 w-2 rounded-full bg-blue-400 flex-shrink-0" />
-                        </button>
-                      )}
-                      {notifications.unread_emails > 0 && (
-                        <button onClick={(e) => { e.stopPropagation(); setShowNotifDropdown(false); navigate('/admin/inbox'); }} className="w-full text-left flex items-center gap-3 px-4 py-3 hover:bg-cyan-500/5 transition-colors">
-                          <div className="h-8 w-8 rounded-full bg-green-500/15 border border-green-500/20 flex items-center justify-center flex-shrink-0">
-                            <svg className="h-4 w-4 text-green-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" /></svg>
-                          </div>
-                          <div className="flex-1 min-w-0">
-                            <p className="text-xs text-slate-200">{notifications.unread_emails} correo{notifications.unread_emails > 1 ? 's' : ''} sin leer</p>
-                            <p className="text-[10px] text-slate-600">Bandeja de entrada</p>
-                          </div>
-                          <span className="h-2 w-2 rounded-full bg-green-400 flex-shrink-0" />
-                        </button>
-                      )}
-                      {notifications.new_quotes > 0 && (
-                        <button onClick={(e) => { e.stopPropagation(); setShowNotifDropdown(false); navigate('/admin/quotes'); }} className="w-full text-left flex items-center gap-3 px-4 py-3 hover:bg-cyan-500/5 transition-colors">
-                          <div className="h-8 w-8 rounded-full bg-cyan-500/15 border border-cyan-500/20 flex items-center justify-center flex-shrink-0">
-                            <svg className="h-4 w-4 text-cyan-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /></svg>
-                          </div>
-                          <div className="flex-1 min-w-0">
-                            <p className="text-xs text-slate-200">{notifications.new_quotes} solicitud{notifications.new_quotes > 1 ? 'es' : ''} de cotización nueva{notifications.new_quotes > 1 ? 's' : ''}</p>
-                            <p className="text-[10px] text-slate-600">Sin atender</p>
-                          </div>
-                          <span className="h-2 w-2 rounded-full bg-cyan-400 flex-shrink-0" />
-                        </button>
-                      )}
-                      {notifications.new_applications > 0 && (
-                        <button onClick={(e) => { e.stopPropagation(); setShowNotifDropdown(false); navigate('/admin/applications'); }} className="w-full text-left flex items-center gap-3 px-4 py-3 hover:bg-cyan-500/5 transition-colors">
-                          <div className="h-8 w-8 rounded-full bg-orange-500/15 border border-orange-500/20 flex items-center justify-center flex-shrink-0">
-                            <svg className="h-4 w-4 text-orange-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" /></svg>
-                          </div>
-                          <div className="flex-1 min-w-0">
-                            <p className="text-xs text-slate-200">{notifications.new_applications} solicitud{notifications.new_applications > 1 ? 'es' : ''} de empleo reciente{notifications.new_applications > 1 ? 's' : ''}</p>
-                            <p className="text-[10px] text-slate-600">Últimas 48 horas</p>
-                          </div>
-                          <span className="h-2 w-2 rounded-full bg-orange-400 flex-shrink-0" />
-                        </button>
-                      )}
-                      {notifications.recent_chats && notifications.recent_chats.length > 0 && notifications.recent_chats.slice(0, 3).map((n, i) => (
-                        <button key={i} onClick={(e) => { e.stopPropagation(); setShowNotifDropdown(false); navigate('/admin/messages'); }} className="w-full text-left flex items-center gap-3 px-4 py-2.5 hover:bg-cyan-500/5 transition-colors">
-                          <div className="h-7 w-7 rounded-full bg-cyan-500/10 border border-cyan-500/15 flex items-center justify-center flex-shrink-0 overflow-hidden">
-                            {n.sender_photo ? <img src={n.sender_photo} alt="" className="w-full h-full object-cover" /> : <span className="text-[10px] text-cyan-400">{(n.sender_name||'?')[0]}</span>}
-                          </div>
-                          <div className="flex-1 min-w-0">
-                            <p className="text-[11px] text-slate-300 truncate"><span className="font-medium">{n.sender_name}</span>: {n.message_type !== 'text' ? '📎 Archivo' : (n.content || '').substring(0, 40)}</p>
-                          </div>
-                        </button>
-                      ))}
-                      {notifications.total === 0 && (
-                        <div className="px-4 py-8 text-center">
-                          <div className="h-8 w-8 rounded-full bg-cyan-500/10 border border-cyan-500/15 flex items-center justify-center mx-auto mb-2">
-                            <svg className="h-4 w-4 text-cyan-500/40" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" /></svg>
-                          </div>
-                          <p className="text-xs text-slate-600">Todo al día</p>
-                        </div>
-                      )}
-                    </div>
-                  </div>,
-                  document.body
-                )}
-              </div>
-
-              {/* Desktop user info + logout */}
-              <div className="hidden lg:flex items-center gap-4">
-                <div className="text-sm">
-                  <p className="text-slate-300">Bienvenido, {user?.username}</p>
-                  {user?.role === 'administrador' && <p className="text-xs text-cyan-500/60">Administrador</p>}
-                </div>
-                <button onClick={handleLogout} className="rounded-lg border border-red-500/20 bg-red-500/10 px-3 py-2 text-xs text-red-400 transition-all hover:bg-red-500/20">Salir</button>
-              </div>
-
-              {/* Mobile/tablet hamburger button */}
-              <button onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
-                className={`lg:hidden rounded-xl p-2 transition-all border ${
-                  mobileMenuOpen
-                    ? 'bg-cyan-500/15 border-cyan-500/30 text-cyan-400'
-                    : 'border-slate-700/50 bg-white/[0.03] text-slate-400 hover:border-cyan-500/30 hover:text-cyan-400'
-                }`}
-                aria-label="Menú">
-                {mobileMenuOpen ? (
-                  <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" /></svg>
-                ) : (
-                  <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M4 6h16M4 12h16M4 18h16" /></svg>
-                )}
+              <p className="text-xs text-slate-500 hidden lg:block">{user?.username}</p>
+              <button onClick={handleLogout} className="rounded-lg border border-red-500/20 bg-red-500/10 px-2.5 py-1.5 text-[10px] text-red-400 transition-all hover:bg-red-500/20 touch-manipulation">
+                <LogOut size={12} />
               </button>
             </div>
           </div>
+        </header>
 
-          {/* Mobile/tablet dropdown menu */}
-          <div className={`lg:hidden overflow-hidden transition-all duration-300 ease-in-out ${
-            mobileMenuOpen ? 'max-h-[600px] opacity-100' : 'max-h-0 opacity-0'
-          }`}>
-            <div className="mt-3 rounded-2xl border border-cyan-500/10 bg-[#040c1a]/80 backdrop-blur-sm overflow-hidden">
-              {/* User row */}
-              <div className="flex items-center justify-between px-4 py-3 border-b border-cyan-500/8">
-                <div className="flex items-center gap-2.5">
-                  <div className="h-8 w-8 rounded-full overflow-hidden border border-cyan-500/20 bg-slate-800 flex items-center justify-center">
-                    {profilePhoto
-                      ? <img src={profilePhoto} alt="" className="w-full h-full object-cover" />
-                      : <span className="text-xs text-cyan-400 font-medium">{user?.username?.[0]?.toUpperCase()}</span>}
-                  </div>
-                  <div>
-                    <p className="text-xs text-slate-300 leading-tight">{user?.username}</p>
-                    <p className="text-[10px] text-cyan-500/50 capitalize">{user?.role}</p>
-                  </div>
-                </div>
-                <button onClick={handleLogout} className="rounded-lg border border-red-500/20 bg-red-500/10 px-3 py-1.5 text-[11px] text-red-400 hover:bg-red-500/20 transition-all">Salir</button>
-              </div>
-
-              {/* Nav links */}
-              <div className="p-2 space-y-0.5">
-                {[
-                  { to: '/admin/dashboard', label: 'Dashboard', icon: 'M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6' },
-                  { to: '/admin/applications', label: 'Solicitudes', icon: 'M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z' },
-                  { to: '/admin/employees', label: 'Personal', icon: 'M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0z' },
-                  ...(isAdministrador ? [
-                    { to: '/admin/tracking', label: 'Tracking', icon: 'M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-.553-.894L15 4m0 13V4m0 0L9 7' },
-                    { to: '/admin/analytics', label: 'Estadísticas', icon: 'M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z' },
-                  ] : []),
-                  { to: '/admin/quotes', label: 'Cotizaciones', icon: 'M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z' },
-                  { to: '/admin/sales', label: 'Ventas', icon: 'M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z' },
-                  { to: '/admin/reservations', label: 'Reservaciones', icon: 'M8 7V3m8 4V3m-9 8h10m-3 8h5a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v5m0 0h5m-5 0v6a2 2 0 002 2h3' },
-                  { to: '/admin/calendar', label: 'Agenda', icon: 'M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z' },
-                  { to: '/admin/meetings', label: 'Reuniones', icon: 'M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z' },
-                  { to: '/admin/messages', label: 'Mensajes', icon: 'M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z', badge: notifications.unread_chat > 0 ? notifications.unread_chat : null },
-                ].map(item => {
-                  const disabled = !canAccessRoute(item.to);
-                  if (disabled) return null;
-                  return (
-                  <Link key={item.to} to={item.to}
-                    onClick={(e) => { if (disabled) e.preventDefault(); }}
-                    title={disabled ? 'Funcion desactivada por permisos' : ''}
-                    className={`flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm transition-all ${
-                      isActive(item.to)
-                        ? 'bg-cyan-500/15 text-cyan-400 border border-cyan-500/15'
-                        : 'text-slate-400 hover:bg-white/[0.04] hover:text-slate-200'
-                    }`}>
-                    <svg className="h-4 w-4 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-                      <path strokeLinecap="round" strokeLinejoin="round" d={item.icon} />
-                    </svg>
-                    <span className="font-light">{item.label}</span>
-                    {item.badge && <span className="ml-auto text-[10px] bg-blue-500 text-white rounded-full h-4 w-4 flex items-center justify-center font-bold">{item.badge > 9 ? '9+' : item.badge}</span>}
-                  </Link>
-                  );
-                })}
-              </div>
-            </div>
+        {/* Main content */}
+        <main className={`flex-1 overflow-y-auto overflow-x-hidden overscroll-contain ${isMobile ? 'pb-[calc(4rem+env(safe-area-inset-bottom))]' : ''}`}>
+          <div className="mx-auto max-w-7xl px-3 py-3 sm:px-6 sm:py-6">
+            <Outlet />
           </div>
-        </div>
-      </nav>
 
-      <main className="admin-mobile-shell relative z-10 mx-auto max-w-7xl px-3 pb-20 sm:px-6 sm:py-8 overflow-x-hidden">
-        <div className="admin-mobile-content min-w-0">
-          <Outlet />
-        </div>
-        
-        {/* Floating music button - bottom left (invisible) */}
-        {isAdministrador && (
-          <button
-            onClick={handlePlayMusic}
-            className="fixed bottom-6 left-6 rounded-full bg-black/10 p-3 text-[#D4AF37]/5 backdrop-blur-sm transition-all hover:bg-black/60 hover:text-[#D4AF37] hover:scale-110 border border-[#D4AF37]/5 hover:border-[#D4AF37]/30 opacity-5 hover:opacity-100"
-            title="Reproducir música"
-          >
-            <svg className="h-5 w-5" fill="currentColor" viewBox="0 0 24 24">
-              <path d="M8 5v14l11-7z" />
-            </svg>
-          </button>
-        )}
-      </main>
-      <nav className="fixed bottom-0 left-0 right-0 z-40 border-t border-cyan-500/20 bg-[#030b18]/95 backdrop-blur-lg lg:hidden">
-        <div className="mx-auto grid max-w-7xl grid-cols-5 px-2 py-1">
-          {[
-            { to: '/admin/dashboard', label: 'Inicio', icon: 'M3 12l2-2 7-7 7 7m-2 2v8a1 1 0 01-1 1h-3m-6 0H6a1 1 0 01-1-1v-8' },
-            { to: '/admin/sales', label: 'Ventas', icon: 'M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8V7m0 9v1' },
-            { to: '/admin/reservations', label: 'Reservas', icon: 'M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z' },
-            { to: '/admin/messages', label: 'Mensajes', icon: 'M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z' },
-            { to: '/admin/calendar', label: 'Agenda', icon: 'M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z' },
-          ].filter((item) => canAccessRoute(item.to)).map((item) => (
-            <Link
-              key={item.to}
-              to={item.to}
-              className={`flex flex-col items-center justify-center rounded-lg py-1.5 text-[10px] transition-all ${
-                isActive(item.to) ? 'text-cyan-300 bg-cyan-500/10' : 'text-slate-400'
-              }`}
-            >
-              <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>
-                <path strokeLinecap="round" strokeLinejoin="round" d={item.icon} />
-              </svg>
-              <span className="mt-0.5">{item.label}</span>
-            </Link>
-          ))}
-        </div>
-      </nav>
+          {/* Floating music button */}
+          {isAdministrador && (
+            <button onClick={handlePlayMusic}
+              className={`fixed ${isMobile ? 'bottom-24 left-4' : 'bottom-6 left-6'} rounded-full bg-black/10 p-3 text-[#D4AF37]/5 backdrop-blur-sm transition-all hover:bg-black/60 hover:text-[#D4AF37] hover:scale-110 border border-[#D4AF37]/5 hover:border-[#D4AF37]/30 opacity-5 hover:opacity-100 z-30`}
+              title="Reproducir música">
+              <svg className="h-5 w-5" fill="currentColor" viewBox="0 0 24 24"><path d="M8 5v14l11-7z" /></svg>
+            </button>
+          )}
+        </main>
+      </div>
+
+      {/* ─── Mobile Bottom Nav ─── */}
+      {isMobile && (
+        <nav className="fixed bottom-0 inset-x-0 z-50 bg-[#050a14]/95 backdrop-blur-xl border-t border-slate-800/40 pb-[env(safe-area-inset-bottom)]">
+          <div className="flex items-center justify-around h-16 px-1">
+            {MOBILE_NAV_ITEMS.map(item => {
+              const Icon = item.icon;
+              const active = isActive(item.to);
+              return (
+                <Link key={item.to} to={item.to}
+                  className={`flex flex-col items-center gap-0.5 py-1.5 px-3 rounded-xl transition-all touch-manipulation active:scale-90 min-w-[52px] ${
+                    active ? 'text-white' : 'text-slate-600'
+                  }`}>
+                  <div className={`w-7 h-7 rounded-lg flex items-center justify-center transition-all ${
+                    active ? `bg-gradient-to-br ${item.color} shadow-md shadow-white/5` : ''
+                  }`}>
+                    <Icon size={16} />
+                  </div>
+                  <span className={`text-[9px] font-semibold transition-colors ${active ? 'text-white' : 'text-slate-700'}`}>{item.label}</span>
+                </Link>
+              );
+            })}
+            {/* More button for non-mobile-nav items */}
+            <button onClick={() => setMobileSidebarOpen(true)}
+              className={`flex flex-col items-center gap-0.5 py-1.5 px-3 rounded-xl transition-all touch-manipulation active:scale-90 min-w-[52px] ${
+                !MOBILE_NAV_ITEMS.find(m => isActive(m.to)) ? 'text-white' : 'text-slate-600'
+              }`}>
+              <div className={`w-7 h-7 rounded-lg flex items-center justify-center transition-all ${
+                !MOBILE_NAV_ITEMS.find(m => isActive(m.to)) && activeNavItem ? `bg-gradient-to-br ${activeNavItem.color} shadow-md shadow-white/5` : ''
+              }`}>
+                <MoreHorizontal size={16} />
+              </div>
+              <span className={`text-[9px] font-semibold ${!MOBILE_NAV_ITEMS.find(m => isActive(m.to)) ? 'text-white' : 'text-slate-700'}`}>Más</span>
+            </button>
+          </div>
+        </nav>
+      )}
+
+      <AdminSandboxDial />
     </div>
   );
 }

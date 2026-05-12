@@ -6,6 +6,24 @@ header('Content-Type: application/json');
 
 $data = json_decode(file_get_contents('php://input'), true);
 
+function normalizeApplicationStatus(string $status): ?string {
+    $key = strtolower(trim($status));
+    $map = [
+        'pending' => 'pending',
+        'pendiente' => 'pending',
+        'reviewing' => 'reviewing',
+        'en_revision' => 'reviewing',
+        'en revisión' => 'reviewing',
+        'accepted' => 'accepted',
+        'aceptada' => 'accepted',
+        'aceptado' => 'accepted',
+        'rejected' => 'rejected',
+        'rechazada' => 'rejected',
+        'rechazado' => 'rejected',
+    ];
+    return $map[$key] ?? null;
+}
+
 if (!$data) {
     http_response_code(400);
     echo json_encode(['error' => 'Invalid JSON data']);
@@ -13,11 +31,12 @@ if (!$data) {
 }
 
 $id = isset($data['id']) ? intval($data['id']) : 0;
-$status = isset($data['status']) ? trim($data['status']) : '';
+$statusRaw = isset($data['status']) ? trim($data['status']) : '';
 $notes = isset($data['notes']) ? trim($data['notes']) : '';
 $userId = $_SESSION['user_id'];
+$status = normalizeApplicationStatus($statusRaw);
 
-if (!$id || empty($status)) {
+if (!$id || empty($statusRaw)) {
     http_response_code(400);
     echo json_encode([
         'error' => 'ID and status required', 
@@ -26,6 +45,14 @@ if (!$id || empty($status)) {
             'status' => $status,
             'raw_data' => $data
         ]
+    ]);
+    exit();
+}
+if ($status === null) {
+    http_response_code(400);
+    echo json_encode([
+        'error' => 'Invalid status',
+        'allowed' => ['pending', 'reviewing', 'accepted', 'rejected']
     ]);
     exit();
 }
@@ -38,8 +65,8 @@ try {
     $stmt = getPDO()->prepare($sql);
     $stmt->execute([$status, $notes, $userId, $id]);
     
-    // If status is "Aceptada" or "accepted", create employee file and executive report entry
-    if ($status === 'Aceptada' || $status === 'accepted' || $status === 'Aceptado') {
+    // On accepted, create employee file and executive report entry.
+    if ($status === 'accepted') {
         try {
             // Get application data
             $appSql = "SELECT * FROM job_applications WHERE id = ?";

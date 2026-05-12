@@ -1,0 +1,270 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Flujo — Dashboard de ventas Bonifacio’s</title>
+  <style>
+    :root {
+      --bg: #030712;
+      --card: #0b1120;
+      --border: #1e293b;
+      --text: #e2e8f0;
+      --muted: #94a3b8;
+      --accent: #06b6d4;
+      --err: #f87171;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background: var(--bg);
+      color: var(--text);
+      font-family: system-ui, "Segoe UI", Roboto, sans-serif;
+      line-height: 1.55;
+      padding: 1.5rem clamp(1rem, 3vw, 2.5rem) 3rem;
+    }
+    header {
+      max-width: 1100px;
+      margin: 0 auto 2rem;
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      padding: 1.25rem 1.5rem;
+      background: linear-gradient(145deg, #0b1120 0%, #030712 100%);
+    }
+    header h1 {
+      margin: 0 0 0.35rem;
+      font-size: clamp(1.25rem, 2.5vw, 1.75rem);
+      font-weight: 800;
+      letter-spacing: -0.02em;
+    }
+    header p { margin: 0; color: var(--muted); font-size: 0.95rem; }
+    .hint {
+      margin-top: 0.75rem;
+      font-size: 0.8rem;
+      color: var(--accent);
+    }
+    #mermaid-err {
+      display: none;
+      max-width: 1100px;
+      margin: 0 auto 1rem;
+      padding: 0.75rem 1rem;
+      border-radius: 10px;
+      border: 1px solid rgba(248, 113, 113, 0.4);
+      background: rgba(127, 29, 29, 0.35);
+      color: #fecaca;
+      font-size: 0.85rem;
+      white-space: pre-wrap;
+    }
+    section {
+      max-width: 1100px;
+      margin: 0 auto 2.5rem;
+    }
+    section h2 {
+      font-size: 1rem;
+      text-transform: uppercase;
+      letter-spacing: 0.12em;
+      color: var(--accent);
+      margin: 0 0 1rem;
+      font-weight: 700;
+    }
+    .diagram-wrap {
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      padding: 1rem 0.5rem 1.25rem;
+      background: var(--card);
+      overflow-x: auto;
+    }
+    .mermaid { display: flex; justify-content: center; }
+    .steps {
+      display: grid;
+      gap: 1rem;
+      grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+    }
+    .step-card {
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 1rem 1.1rem;
+      background: var(--card);
+    }
+    .step-card strong {
+      display: block;
+      color: #fff;
+      margin-bottom: 0.35rem;
+      font-size: 0.95rem;
+    }
+    .step-card span.tag {
+      display: inline-block;
+      font-size: 0.65rem;
+      font-weight: 800;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      padding: 0.2rem 0.45rem;
+      border-radius: 6px;
+      background: rgba(6, 182, 212, 0.15);
+      color: var(--accent);
+      margin-bottom: 0.5rem;
+    }
+    .step-card p { margin: 0; color: var(--muted); font-size: 0.875rem; }
+    footer {
+      max-width: 1100px;
+      margin: 2rem auto 0;
+      font-size: 0.8rem;
+      color: var(--muted);
+      text-align: center;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Diagrama de flujo — Dashboard de ventas</h1>
+    <p>Desde SoftRestaurant hasta la pantalla admin (<code>/admin/sales</code>). Los diagramas se generan con Mermaid (CDN); hace falta internet.</p>
+    <p class="hint"><strong>Con Vite</strong> (<code>npm run dev</code>): abre <code>http://localhost:5173/dashboard-ventas-flujo.html</code> — el archivo debe estar en <code>public/</code> (no en <code>docs/</code>).</p>
+    <p class="hint"><strong>Sin Vite:</strong> abre el mismo archivo con doble clic desde el disco (ruta en el repo: <code>public/dashboard-ventas-flujo.html</code>).</p>
+  </header>
+
+  <div id="mermaid-err" role="alert"></div>
+
+  <section>
+    <h2>1 · Vista end-to-end (datos)</h2>
+    <div class="diagram-wrap">
+      <pre class="mermaid">
+flowchart LR
+  subgraph sr["SQL Server SR"]
+    CH["cheques"]
+    CP["chequespagos"]
+    CD["cheqdet / items"]
+    MC["movtoscaja"]
+  end
+  subgraph pc["PC sync Hermosillo"]
+    SYNC["sync-historico.php"]
+  end
+  subgraph host["Hosting PHP + MySQL"]
+    API["sync.php"]
+    DB[("MySQL sr_*")]
+    SALES["sales.php"]
+    CASH["cash-movements.php"]
+    SH["shifts.php"]
+  end
+  subgraph web["Navegador admin"]
+    UI["Sales.jsx"]
+    W["SalesWidget.jsx"]
+  end
+  CH --> SYNC
+  CP --> SYNC
+  CD --> SYNC
+  MC --> SYNC
+  SYNC -->|"HTTPS JSON"| API
+  API --> DB
+  UI --> SALES
+  UI --> CASH
+  UI --> SH
+  W --> SALES
+  SALES --> DB
+  CASH --> DB
+  SH --> DB
+      </pre>
+    </div>
+  </section>
+
+  <section>
+    <h2>2 · Carga de la página Ventas (browser)</h2>
+    <div class="diagram-wrap">
+      <pre class="mermaid">
+flowchart TB
+  START([Usuario abre /admin/sales]) --> GEN["Nueva generacion fetch + AbortController"]
+  GEN --> CORE["GET sales.php?sections=core"]
+  CORE --> PAR["Parse JSON + comprobar gen"]
+  PAR -->|"stale"| DISC["Descartar respuesta"]
+  PAR -->|"ok"| SET["setData: KPI tickets pagos hourly"]
+  SET --> HEAVY{"heavy_pending?"}
+  HEAVY -->|"si"| HREQ["GET sales.php?sections=heavy"]
+  HEAVY -->|"no"| IDLE["Listo"]
+  HREQ --> MERGE["Fusionar top_products waiters analytics"]
+  MERGE --> IDLE
+  GEN --> CASH["Paralelo: cash-movements.php"]
+  GEN --> SHF["Paralelo: shifts.php"]
+  CASH --> ST2["setCashMovements si gen OK"]
+  SHF --> ST3["setShiftsData si gen OK"]
+      </pre>
+    </div>
+  </section>
+
+  <section>
+    <h2>3 · Qué hace cada paso (resumen)</h2>
+    <div class="steps">
+      <div class="step-card">
+        <span class="tag">Paso 1</span>
+        <strong>SQL Server (SR)</strong>
+        <p>Tablas <code>cheques</code>, <code>chequespagos</code>, detalle e importes. Es la fuente de verdad del POS.</p>
+      </div>
+      <div class="step-card">
+        <span class="tag">Paso 2</span>
+        <strong>Script en el PC (sync)</strong>
+        <p>Lee SR, arma JSON por lotes y envía a <code>sync.php</code>. Corrige desglose efectivo/tarjeta cuando las líneas no mapean solo a 1/2/3.</p>
+      </div>
+      <div class="step-card">
+        <span class="tag">Paso 3</span>
+        <strong>sync.php (API)</strong>
+        <p>Valida API key y hace upsert en <code>sr_sales</code>, ítems y <code>sr_cheque_payments</code>.</p>
+      </div>
+      <div class="step-card">
+        <span class="tag">Paso 4</span>
+        <strong>MySQL</strong>
+        <p>Guarda tickets y montos que consume el dashboard. Índices en <code>sale_datetime</code>, <code>status</code>, <code>sr_ticket_id</code> aceleran consultas.</p>
+      </div>
+      <div class="step-card">
+        <span class="tag">Paso 5</span>
+        <strong>sales.php</strong>
+        <p><code>sections=core</code>: stats + periodo + ventas + métodos de pago sin analytics pesado. <code>sections=heavy</code>: solo analytics/meseros/top.</p>
+      </div>
+      <div class="step-card">
+        <span class="tag">Paso 6</span>
+        <strong>Sales.jsx</strong>
+        <p>Pide core primero, fusiona heavy después. <code>gen</code> + abort evita mostrar “ayer” con datos de “hoy” si cambió el filtro.</p>
+      </div>
+      <div class="step-card">
+        <span class="tag">Paso 7</span>
+        <strong>caja / turnos</strong>
+        <p><code>cash-movements.php</code> y <code>shifts.php</code> en paralelo; no bloquean el primer pintado de ventas.</p>
+      </div>
+      <div class="step-card">
+        <span class="tag">Extra</span>
+        <strong>SalesWidget</strong>
+        <p>Solo <code>range=today&amp;sections=core</code>; usa <code>stats.today</code> y <code>stats.yesterday</code>.</p>
+      </div>
+    </div>
+  </section>
+
+  <footer>
+    Bonifacio’s — copia servida por Vite desde <code>public/dashboard-ventas-flujo.html</code>.
+  </footer>
+
+  <script type="module">
+    const errEl = document.getElementById("mermaid-err");
+    try {
+      const mermaid = (await import("https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.esm.min.mjs")).default;
+      mermaid.initialize({
+        startOnLoad: false,
+        theme: "dark",
+        themeVariables: {
+          primaryColor: "#0891b2",
+          primaryTextColor: "#f1f5f9",
+          primaryBorderColor: "#06b6d4",
+          lineColor: "#64748b",
+          secondaryColor: "#1e293b",
+          tertiaryColor: "#0f172a",
+          fontFamily: "system-ui, Segoe UI, sans-serif",
+        },
+        flowchart: { curve: "basis", padding: 12, useMaxWidth: true },
+      });
+      await mermaid.run({ querySelector: ".mermaid" });
+    } catch (e) {
+      errEl.style.display = "block";
+      errEl.textContent =
+        "No se pudo cargar o renderizar Mermaid. Comprueba conexión a internet y la consola del navegador (F12).\n\n" +
+        (e && e.message ? e.message : String(e));
+    }
+  </script>
+</body>
+</html>

@@ -12,8 +12,14 @@ $caller = $stmt->get_result()->fetch_assoc();
 
 $callerName = strtolower($caller['username'] ?? '');
 
-// GET: obtener permisos de edición de francisco y santiago
+// GET: obtener permisos de edición de francisco y santiago (solo quien puede cambiarlos)
 if ($_SERVER['REQUEST_METHOD'] === 'GET') {
+    if (!in_array($callerName, ['manuel', 'misael'], true)) {
+        http_response_code(403);
+        echo json_encode(['success' => false, 'error' => 'No autorizado']);
+        $conn->close();
+        exit();
+    }
     $res = $conn->query("SELECT id, username, full_name, can_edit FROM users WHERE LOWER(username) IN ('francisco','santiago')");
     $users = [];
     while ($row = $res->fetch_assoc()) {
@@ -39,7 +45,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     }
 
     $data       = json_decode(file_get_contents('php://input'), true);
-    $targetUser = strtolower($conn->real_escape_string($data['username'] ?? ''));
+    $targetUser = strtolower(trim((string)($data['username'] ?? '')));
     $canEdit    = isset($data['can_edit']) ? (bool)$data['can_edit'] : false;
 
     if (!in_array($targetUser, ['francisco', 'santiago'])) {
@@ -60,6 +66,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 }
 
 http_response_code(405);
-echo json_encode(['error' => 'Method not allowed']);
+echo json_encode(['success' => false, 'error' => 'Method not allowed']);
 $conn->close();
 ?>

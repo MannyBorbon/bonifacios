@@ -8,7 +8,9 @@ try {
     requireAuth();
     $conn = getConnection();
 
-    $status = trim((string)($_GET['status'] ?? ''));
+    $statusRaw = trim((string)($_GET['status'] ?? ''));
+    $filterDepositComprobante = (strcasecmp($statusRaw, 'uploaded') === 0);
+    $status = $filterDepositComprobante ? '' : $statusRaw;
     $date = trim((string)($_GET['date'] ?? ''));
     $search = trim((string)($_GET['search'] ?? ''));
     $event = trim((string)($_GET['event'] ?? ''));
@@ -18,7 +20,16 @@ try {
         $conn->query("ALTER TABLE special_reservations ADD COLUMN event_type_id INT NULL AFTER occasion");
     } catch (Throwable $e) { /* ignore if already exists */ }
 
-    $sql = "SELECT sr.id, sr.customer_name, sr.phone, sr.email, sr.guests, sr.reservation_date, sr.reservation_time, sr.table_code, sr.notes, sr.occasion, sr.event_type_id, sr.status, sr.created_at, sr.updated_at,
+    try {
+        $conn->query(
+            'ALTER TABLE special_reservations ADD COLUMN secondary_table_code VARCHAR(32) NULL DEFAULT NULL AFTER table_code',
+        );
+    } catch (Throwable $e) { /* ignore */
+    }
+
+    $sql = "SELECT sr.id, sr.customer_name, sr.phone, sr.email, sr.guests, sr.reservation_date, sr.reservation_time, sr.table_code,
+                   sr.secondary_table_code, sr.notes, sr.occasion, sr.event_type_id, sr.status, sr.deposit_status, sr.deposit_screenshot,
+                   sr.created_at, sr.updated_at,
                    ret.name AS event_type_name, ret.slug AS event_type_slug
             FROM special_reservations sr
             LEFT JOIN reservation_event_types ret ON ret.id = sr.event_type_id
@@ -29,9 +40,19 @@ try {
 
     // Filtro por evento
     if ($event === 'mothers_day') {
-        $sql .= " AND (sr.occasion = 'Dia de las Madres' OR ret.slug = 'dia-madres')";
+        $sql .= " AND (sr.occasion = 'Dia de las Madres' OR sr.occasion = 'Día de las Madres' OR ret.slug = 'dia-madres')";
     } elseif ($event === 'normal') {
-        $sql .= " AND ((sr.occasion != 'Dia de las Madres' OR sr.occasion IS NULL) AND (ret.slug IS NULL OR ret.slug != 'dia-madres'))";
+        $sql .= " AND ((sr.occasion IS NULL OR (sr.occasion != 'Dia de las Madres' AND sr.occasion != 'Día de las Madres')) AND (ret.slug IS NULL OR ret.slug != 'dia-madres'))";
+    } elseif ($event === 'general') {
+        // Categoría general: tipo explícito `general`, o legado sin tipo / sin ocasión especial (no Día de las Madres).
+        $sql .= " AND (
+            ret.slug = 'general'
+            OR (
+                sr.event_type_id IS NULL
+                AND (ret.slug IS NULL OR ret.slug = '' OR ret.slug NOT IN ('dia-madres'))
+                AND (sr.occasion IS NULL OR (sr.occasion != 'Dia de las Madres' AND sr.occasion != 'Día de las Madres'))
+            )
+        )";
     }
 
     if ($eventTypeId !== '') {
@@ -40,7 +61,15 @@ try {
         $params[] = intval($eventTypeId);
     }
 
-    if ($status !== '') {
+    if ($filterDepositComprobante) {
+        $sql .= " AND sr.deposit_status IN ('uploaded','confirmed')";
+    } elseif ($status !== '') {
+        $allowedReservationStatus = ['pending', 'confirmed', 'cancelled', 'completed'];
+        if (!in_array($status, $allowedReservationStatus, true)) {
+            http_response_code(400);
+            echo json_encode(['success' => false, 'error' => 'Filtro de estado no válido']);
+            exit;
+        }
         $sql .= " AND sr.status = ?";
         $types .= 's';
         $params[] = $status;
@@ -51,9 +80,10 @@ try {
         $params[] = $date;
     }
     if ($search !== '') {
-        $sql .= " AND (sr.customer_name LIKE ? OR sr.phone LIKE ? OR sr.table_code LIKE ?)";
-        $types .= 'sss';
+        $sql .= " AND (sr.customer_name LIKE ? OR sr.phone LIKE ? OR sr.table_code LIKE ? OR IFNULL(sr.secondary_table_code,'') LIKE ?)";
+        $types .= 'ssss';
         $like = '%' . $search . '%';
+        $params[] = $like;
         $params[] = $like;
         $params[] = $like;
         $params[] = $like;

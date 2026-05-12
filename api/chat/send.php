@@ -2,8 +2,17 @@
 require_once '../config/database.php';
 $userId = requireAuth();
 
+if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+    http_response_code(405);
+    echo json_encode(['success' => false, 'error' => 'Método no permitido']);
+    exit();
+}
+
 $conn = getConnection();
 $data = json_decode(file_get_contents('php://input'), true);
+if (!is_array($data)) {
+    $data = [];
+}
 
 $recipientId = isset($data['recipient_id']) ? intval($data['recipient_id']) : 0;
 $conversationId = isset($data['conversation_id']) ? intval($data['conversation_id']) : 0;
@@ -11,7 +20,8 @@ $content = isset($data['content']) ? trim($data['content']) : '';
 
 if (!$content) {
     http_response_code(400);
-    echo json_encode(['error' => 'content required']);
+    echo json_encode(['success' => false, 'error' => 'content required']);
+    $conn->close();
     exit();
 }
 
@@ -35,7 +45,8 @@ if (!$conversationId && $recipientId) {
     }
 } elseif (!$conversationId) {
     http_response_code(400);
-    echo json_encode(['error' => 'conversation_id or recipient_id required']);
+    echo json_encode(['success' => false, 'error' => 'conversation_id or recipient_id required']);
+    $conn->close();
     exit();
 }
 
@@ -45,7 +56,8 @@ $check->bind_param("iii", $conversationId, $userId, $userId);
 $check->execute();
 if ($check->get_result()->num_rows === 0) {
     http_response_code(403);
-    echo json_encode(['error' => 'Not authorized']);
+    echo json_encode(['success' => false, 'error' => 'Not authorized']);
+    $conn->close();
     exit();
 }
 

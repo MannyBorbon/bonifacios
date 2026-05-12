@@ -1,10 +1,12 @@
 <?php
-// Hostinger SMTP credentials
-define('SMTP_HOST', 'smtp.hostinger.com');
-define('SMTP_PORT', 465);
-define('SMTP_USER', 'info@bonifaciossancarlos.com');
-define('SMTP_PASS', 'Filipenses4:8@');
-define('SMTP_NAME', "Bonifacios Restaurant");
+require_once __DIR__ . '/env.php';
+
+// SMTP credentials must come from environment/.env
+define('SMTP_HOST', getenv('SMTP_HOST') ?: 'smtp.hostinger.com');
+define('SMTP_PORT', (int)(getenv('SMTP_PORT') ?: 465));
+define('SMTP_USER', getenv('SMTP_USER') ?: '');
+define('SMTP_PASS', getenv('SMTP_PASS') ?: '');
+define('SMTP_NAME', getenv('SMTP_FROM_NAME') ?: "Bonifacios Restaurant");
 
 /**
  * Encode a mail header value for UTF-8 subjects.
@@ -49,6 +51,9 @@ function smtpCmd($socket, $cmd) {
  * Returns true on success, false on failure.
  */
 function sendMail($to, $subject, $htmlBody, $replyTo = '') {
+    if (SMTP_USER === '' || SMTP_PASS === '') {
+        return false;
+    }
     $socket = @fsockopen('ssl://' . SMTP_HOST, SMTP_PORT, $errno, $errstr, 8);
     if (!$socket) return false;
 

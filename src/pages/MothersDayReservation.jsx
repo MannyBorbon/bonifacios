@@ -1,9 +1,13 @@
-import { useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import PublicLanguageBar, { readStoredPublicLang, writeStoredPublicLang } from '../components/PublicLanguageBar';
+import { mothersReservationPublic } from '../i18n/mothersAndSpecialPublic';
 import { Link } from 'react-router-dom';
 
 const API_BASE = import.meta.env.VITE_API_URL || '/api';
+const LANGS = ['es', 'en', 'fr', 'zh'];
 
 function MothersDayReservation() {
+  const [language, setLanguage] = useState(() => readStoredPublicLang());
   const [form, setForm] = useState({
     customer_name: '',
     phone: '',
@@ -14,6 +18,19 @@ function MothersDayReservation() {
   });
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [message, setMessage] = useState('');
+
+  const t = useMemo(() => {
+    const code = LANGS.includes(language) ? language : 'es';
+    return mothersReservationPublic[code] || mothersReservationPublic.es;
+  }, [language]);
+
+  useEffect(() => {
+    writeStoredPublicLang(language);
+  }, [language]);
+
+  const setLang = useCallback((code) => {
+    if (LANGS.includes(code)) setLanguage(code);
+  }, []);
 
   // Función para contar mesas únicas ocupadas
   const countUniqueTables = (tableCodes) => {
@@ -137,31 +154,32 @@ function MothersDayReservation() {
       
       <div className="mx-auto max-w-7xl px-3 py-6 sm:px-5 sm:py-8 lg:px-8 lg:py-10">
         {/* Header */}
-        <div className="mb-6 flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-          <div>
+        <div className="mb-6 flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+          <div className="min-w-0 flex-1">
             <p className="mb-2 inline-flex rounded-full border border-[#D4AF37]/30 bg-[#D4AF37]/10 px-3 py-1 text-[10px] uppercase tracking-[0.18em] text-[#D4AF37]">
-              Experiencia Especial
+              {t.badge}
             </p>
-            <h1 className="font-serif text-2xl sm:text-3xl">Reservación Especial Día de las Madres</h1>
-            <p className="mt-2 max-w-2xl text-sm text-[#F4E4C1]/65">
-              Celebra el Día de las Madres en Bonifacio's con una experiencia inolvidable.
-            </p>
+            <h1 className="font-serif text-2xl sm:text-3xl">{t.title}</h1>
+            <p className="mt-2 max-w-2xl text-sm text-[#F4E4C1]/75">{t.subtitle}</p>
             <div className="mt-3 inline-flex items-center gap-2 rounded-full bg-[#D4AF37]/20 px-4 py-2 text-sm font-medium text-[#D4AF37]">
               <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
               </svg>
-              Domingo 10 de Mayo 2026
+              {t.dateLine}
             </div>
           </div>
-          <Link
-            to="/"
-            className="inline-flex items-center gap-2 rounded-lg border border-[#D4AF37]/20 bg-black/40 px-4 py-2 text-sm text-[#D4AF37] transition-colors hover:border-[#D4AF37]/40 hover:bg-black/60"
-          >
-            <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 19l-7-7m0 0l7-7m-7 7h18" />
-            </svg>
-            Volver al inicio
-          </Link>
+          <div className="flex flex-col items-stretch gap-3 sm:flex-row sm:items-center lg:flex-col lg:items-end">
+            <PublicLanguageBar value={language} onChange={setLang} className="justify-start sm:justify-end" />
+            <Link
+              to="/"
+              className="inline-flex items-center justify-center gap-2 rounded-lg border border-[#D4AF37]/20 bg-black/40 px-4 py-2 text-sm text-[#D4AF37] transition-colors hover:border-[#D4AF37]/40 hover:bg-black/60"
+            >
+              <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 19l-7-7m0 0l7-7m-7 7h18" />
+              </svg>
+              {t.back}
+            </Link>
+          </div>
         </div>
 
         {/* Form */}

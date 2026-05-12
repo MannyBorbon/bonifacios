@@ -12,7 +12,7 @@ try {
 
     if ($method === 'GET') {
         $quoteId = intval($_GET['quote_id'] ?? 0);
-        if (!$quoteId) { http_response_code(400); echo json_encode(['error' => 'quote_id required']); exit; }
+        if (!$quoteId) { http_response_code(400); echo json_encode(['success' => false, 'error' => 'quote_id required']); exit; }
 
         $stmt = $conn->prepare("
             SELECT qc.*, u.full_name as created_by_name
@@ -34,6 +34,9 @@ try {
 
     } elseif ($method === 'POST') {
         $input  = json_decode(file_get_contents('php://input'), true);
+        if (!is_array($input)) {
+            $input = [];
+        }
         $action = $input['action'] ?? 'save';
 
         if ($action === 'save') {
@@ -41,7 +44,7 @@ try {
             $data    = $input['data'] ?? [];
             $cotId   = intval($input['id'] ?? 0); // if updating existing
 
-            if (!$quoteId) { http_response_code(400); echo json_encode(['error' => 'quote_id required']); exit; }
+            if (!$quoteId) { http_response_code(400); echo json_encode(['success' => false, 'error' => 'quote_id required']); exit; }
 
             // Get next version number for this quote
             $vStmt = $conn->prepare("SELECT COALESCE(MAX(version_number), 0) + 1 AS next_v FROM quote_cotizaciones WHERE quote_id = ?");
@@ -64,8 +67,6 @@ try {
                 $stmt->execute();
                 $newId = $stmt->insert_id;
 
-                // Update quote status to 'quoted'
-                $conn->prepare("UPDATE event_quotes SET status='quoted' WHERE id=?")->bind_param("i", $quoteId);
                 $upd = $conn->prepare("UPDATE event_quotes SET status='quoted' WHERE id=?");
                 $upd->bind_param("i", $quoteId);
                 $upd->execute();
@@ -77,8 +78,6 @@ try {
             $cotId   = intval($input['id'] ?? 0);
             $quoteId = intval($input['quote_id'] ?? 0);
 
-            // Unmark all for this quote
-            $conn->prepare("UPDATE quote_cotizaciones SET is_final=0 WHERE quote_id=?")->bind_param("i", $quoteId);
             $clr = $conn->prepare("UPDATE quote_cotizaciones SET is_final=0 WHERE quote_id=?");
             $clr->bind_param("i", $quoteId);
             $clr->execute();
@@ -94,7 +93,7 @@ try {
             $cotId = intval($input['id'] ?? 0);
             $to    = trim($input['to'] ?? '');
 
-            if (!$cotId || !$to) { http_response_code(400); echo json_encode(['error' => 'id and to required']); exit; }
+            if (!$cotId || !$to) { http_response_code(400); echo json_encode(['success' => false, 'error' => 'id and to required']); exit; }
 
             // Fetch cotización + quote data
             $stmt = $conn->prepare("
@@ -108,7 +107,7 @@ try {
             $stmt->bind_param("i", $cotId);
             $stmt->execute();
             $row = $stmt->get_result()->fetch_assoc();
-            if (!$row) { http_response_code(404); echo json_encode(['error' => 'Not found']); exit; }
+            if (!$row) { http_response_code(404); echo json_encode(['success' => false, 'error' => 'Not found']); exit; }
 
             $d = json_decode($row['data'] ?? '{}', true);
             $eventDate = $row['event_date'] ? date('d/m/Y', strtotime($row['event_date'])) : '';
@@ -176,15 +175,13 @@ try {
             $result = sendMail($to, $subject, $body);
 
             if ($result) {
-                // Mark as sent
-                $conn->prepare("UPDATE quote_cotizaciones SET sent_at=NOW(), sent_to=? WHERE id=?")->bind_param("si", $to, $cotId);
                 $upd = $conn->prepare("UPDATE quote_cotizaciones SET sent_at=NOW(), sent_to=? WHERE id=?");
                 $upd->bind_param("si", $to, $cotId);
                 $upd->execute();
                 echo json_encode(['success' => true, 'message' => "Cotización enviada a $to"]);
             } else {
                 http_response_code(500);
-                echo json_encode(['error' => 'Error al enviar el correo']);
+                echo json_encode(['success' => false, 'error' => 'Error al enviar el correo']);
             }
 
         } elseif ($action === 'delete') {
@@ -193,11 +190,19 @@ try {
             $stmt->bind_param("i", $cotId);
             $stmt->execute();
             echo json_encode(['success' => true]);
+        } else {
+            http_response_code(400);
+            echo json_encode(['success' => false, 'error' => 'invalid action']);
         }
+    } else {
+        http_response_code(405);
+        echo json_encode(['success' => false, 'error' => 'Método no permitido']);
     }
 } catch (Exception $e) {
     http_response_code(500);
-    echo json_encode(['error' => $e->getMessage()]);
+    echo json_encode(['success' => false, 'error' => $e->getMessage()]);
 }
-$conn->close();
+if (isset($conn) && $conn instanceof mysqli) {
+    $conn->close();
+}
 ?>

@@ -3,8 +3,13 @@
 
 import bcrypt from 'bcrypt';
 
-const password = 'Filipenses4:8@';
+const password = process.env.DEFAULT_USER_PASSWORD || '';
 const saltRounds = 10;
+
+if (!password) {
+  console.error('Falta DEFAULT_USER_PASSWORD en variables de entorno.');
+  process.exit(1);
+}
 
 bcrypt.hash(password, saltRounds, (err, hash) => {
   if (err) {

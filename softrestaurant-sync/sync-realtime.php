@@ -11,7 +11,7 @@ define('API_URL',       'https://bonifaciossancarlos.com/api/softrestaurant/sync
 define('API_KEY',       'bonifacios-sr-sync-2024-secret-key');
 define('SR_DSN',        "sqlsrv:Server=100.84.227.35\\NATIONALSOFT;Database=softrestaurant8pro;Encrypt=false;TrustServerCertificate=true;LoginTimeout=30");
 define('SR_USER',       'usuario_web');
-define('SR_PASS',       'Filipenses4:8@');
+define('SR_PASS',       getenv('SR_PASS') ?: '');
 
 class SyncFinal {
     private $conn = null;
@@ -96,8 +96,13 @@ class SyncFinal {
                     else $pType='cash';
                 }
 
-                $tid = trim(str_replace(["\r","\n","\t"],'', (string)($r['folio'])));
-                
+                $folioNorm = trim(str_replace(["\r","\n","\t"], '', (string)($r['folio'] ?? '')));
+                $numNorm   = trim(str_replace(["\r","\n","\t"], '', (string)($r['numcheque'] ?? '')));
+                $tid = ($numNorm !== '') ? $numNorm : $folioNorm;
+                if ($tid === '') {
+                    continue;
+                }
+
                 $data[] = [
                     'sr_ticket_id'   => $tid,
                     'ticket_number'  => (string)($r['numcheque']),

@@ -1,10 +1,14 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, useId } from 'react'
 import { Link } from 'react-router-dom'
 import PublicTracker from '../components/PublicTracker'
 
 const API_URL = import.meta.env.VITE_API_URL || '/api'
 
 function EventQuote() {
+  const uid = useId().replace(/:/g, '')
+  const panelId = `cot-resumen-${uid}`
+  const mainId = `cot-main-${uid}`
+
   const [categories, setCategories] = useState([])
   const [loadingMenu, setLoadingMenu] = useState(true)
   const [activeCategory, setActiveCategory] = useState(null)
@@ -13,6 +17,8 @@ function EventQuote() {
   const [showSummary, setShowSummary] = useState(false)
   const [menuError, setMenuError] = useState('')
   const [formError, setFormError] = useState('')
+  const [submitLoading, setSubmitLoading] = useState(false)
+  const [savedFolio, setSavedFolio] = useState('')
   const carouselRef = useRef(null)
 
   useEffect(() => {
@@ -82,18 +88,10 @@ function EventQuote() {
     }
   }
 
-  const handleSubmitWhatsApp = () => {
-    if (!contact.name || !contact.phone || !contact.type || !contact.date) {
-      setFormError('Completa nombre, teléfono, tipo y fecha del evento.')
-      return
-    }
-    if (cartItems.length === 0) {
-      setFormError('Agrega al menos un producto antes de enviar la cotización.')
-      return
-    }
-    setFormError('')
-
-    let msg = `🎉 *COTIZACIÓN DE EVENTO - Bonifacio's Restaurant*\n\n`
+  const buildWhatsAppBody = (folioLine) => {
+    let msg = ''
+    if (folioLine) msg += `${folioLine}\n\n`
+    msg += `🎉 *COTIZACIÓN DE EVENTO - Bonifacio's Restaurant*\n\n`
     msg += `👤 *Cliente:* ${contact.name}\n📞 *Tel:* ${contact.phone}\n📧 *Email:* ${contact.email || 'N/A'}\n🎊 *Tipo:* ${contact.type}\n📅 *Fecha:* ${contact.date}\n👥 *Invitados:* ${contact.guests || 'N/A'}\n\n`
     msg += `📋 *PRODUCTOS SELECCIONADOS:*\n`
     msg += `${'─'.repeat(30)}\n`
@@ -103,16 +101,91 @@ function EventQuote() {
     msg += `${'─'.repeat(30)}\n`
     msg += `💰 *TOTAL ESTIMADO: $${totalPrice.toLocaleString()} MXN*\n`
     if (contact.notes) msg += `\n📝 *Notas:* ${contact.notes}`
+    return msg
+  }
+
+  const handleSubmitWhatsApp = async () => {
+    if (!contact.name || !contact.phone || !contact.type || !contact.date) {
+      setFormError('Completa nombre, teléfono, tipo y fecha del evento.')
+      return
+    }
+    if (cartItems.length === 0) {
+      setFormError('Agrega al menos un producto antes de enviar la cotización.')
+      return
+    }
+    setFormError('')
+    setSubmitLoading(true)
+    setSavedFolio('')
+
+    const itemsPayload = cartItems.map((item) => ({
+      id: item.id,
+      name: item.name,
+      price: Number(item.price),
+      qty: item.qty,
+    }))
+
+    const body = {
+      contact: {
+        name: contact.name,
+        phone: contact.phone,
+        email: contact.email,
+        type: contact.type,
+        date: contact.date,
+        guests: contact.guests === '' ? 0 : Number(contact.guests),
+        notes: contact.notes,
+      },
+      items: itemsPayload,
+      total: totalPrice,
+    }
+
+    let folioLine = ''
+    try {
+      const res = await fetch(`${API_URL}/quotes/public-submit.php`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      })
+      let data = null
+      try {
+        data = await res.json()
+      } catch {
+        setFormError('Respuesta inválida del servidor. Intenta de nuevo.')
+        return
+      }
+      if (!res.ok || !data?.success) {
+        setFormError(typeof data?.error === 'string' ? data.error : 'No se pudo guardar la cotización.')
+        return
+      }
+      const folio = data.folio || ''
+      if (folio) {
+        setSavedFolio(folio)
+        folioLine = `🔖 *Folio de solicitud:* ${folio}`
+      }
+    } catch {
+      setFormError('Error de red al guardar. Revisa tu conexión e intenta de nuevo.')
+      return
+    } finally {
+      setSubmitLoading(false)
+    }
+
+    const msg = buildWhatsAppBody(folioLine)
     window.open(`https://wa.me/${phoneE164Mx}?text=${encodeURIComponent(msg)}`, '_blank')
   }
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-[#0f0f14] via-[#1a1a1f] to-[#0a0a0f]">
       <PublicTracker />
-      <div className="absolute inset-0 bg-[url('data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iODAiIGhlaWdodD0iODAiIHhtbG5zPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2ZyI+PGRlZnM+PHBhdHRlcm4gaWQ9ImdyaWQiIHdpZHRoPSI4MCIgaGVpZ2h0PSI4MCIgcGF0dGVyblVuaXRzPSJ1c2VyU3BhY2VPblVzZSI+PGNpcmNsZSBjeD0iMSIgY3k9IjEiIHI9IjAuNSIgZmlsbD0icmdiYSgyMTIsMTc1LDU1LDAuMDMpIi8+PC9wYXR0ZXJuPjwvZGVmcz48cmVjdCB3aWR0aD0iMTAwJSIgaGVpZ2h0PSIxMDAlIiBmaWxsPSJ1cmwoI2dyaWQpIi8+PC9zdmc+')] opacity-40 pointer-events-none" />
+      <div className="absolute inset-0 bg-[url('data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iODAiIGhlaWdodD0iODAiIHhtbG5zPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2ZyI+PGRlZnM+PHBhdHRlcm4gaWQ9ImdyaWQiIHdpZHRoPSI4MCIgaGVpZ2h0PSI4MCIgcGF0dGVyblVuaXRzPSJ1c2VyU3BhY2VPblVzZSI+PGNpcmNsZSBjeD0iMSIgY3k9IjEiIHI9IjAuNSIgZmlsbD0icmdiYSgyMTIsMTc1LDU1LDAuMDMpIi8+PC9wYXR0ZXJuPjwvZGVmcz48cmVjdCB3aWR0aD0iMTAwJSIgaGVpZ2h0PSIxMDAlIiBmaWxsPSJ1cmwoI2dyaWQpIi8+PC9zdmc+')] opacity-40 pointer-events-none" aria-hidden="true" />
+
+      <a
+        href={`#${mainId}`}
+        className="sr-only focus:fixed focus:left-4 focus:top-4 focus:z-[100] focus:m-0 focus:inline-block focus:h-auto focus:w-auto focus:overflow-visible focus:whitespace-normal focus:rounded-lg focus:bg-[#D4AF37] focus:px-4 focus:py-2 focus:text-sm focus:font-medium focus:text-black focus:outline-none focus:ring-2 focus:ring-[#F4E4C1]"
+      >
+        Ir al contenido del cotizador
+      </a>
 
       {/* Nav */}
-      <nav className="relative z-40 border-b border-[#D4AF37]/10 bg-black/30 backdrop-blur-xl">
+      <nav className="relative z-40 border-b border-[#D4AF37]/10 bg-black/30 backdrop-blur-xl" aria-label="Cotizador de eventos Bonifacio's">
         <div className="mx-auto max-w-7xl px-4 sm:px-6 py-3 lg:px-8">
           <div className="flex items-center justify-between">
             <Link to="/" className="flex items-center gap-3">
@@ -123,26 +196,42 @@ function EventQuote() {
                 ← Inicio
               </Link>
               <button
+                type="button"
                 onClick={() => setShowSummary(!showSummary)}
                 className="relative rounded-lg border border-[#D4AF37]/30 bg-[#D4AF37]/10 px-4 py-2 text-xs text-[#D4AF37] hover:bg-[#D4AF37]/20 transition-all"
+                aria-expanded={showSummary}
+                aria-controls={panelId}
+                aria-label={`Resumen de cotización${totalItems > 0 ? `, ${totalItems} productos` : ''}. En pantallas pequeñas abre o cierra el panel.`}
               >
-                🛒 Cotización {totalItems > 0 && <span className="ml-1 inline-flex h-5 w-5 items-center justify-center rounded-full bg-[#D4AF37] text-[10px] font-bold text-black">{totalItems}</span>}
+                <span aria-hidden="true">🛒</span> Cotización{' '}
+                {totalItems > 0 && (
+                  <span className="ml-1 inline-flex h-5 w-5 items-center justify-center rounded-full bg-[#D4AF37] text-[10px] font-bold text-black" aria-hidden="true">
+                    {totalItems}
+                  </span>
+                )}
+                {totalItems > 0 && <span className="sr-only">({totalItems} en carrito)</span>}
               </button>
             </div>
           </div>
         </div>
       </nav>
 
-      <div className="relative z-10 mx-auto max-w-7xl px-4 sm:px-6 py-8 lg:px-8">
+      <main id={mainId} className="relative z-10 mx-auto max-w-7xl px-4 sm:px-6 py-8 lg:px-8" tabIndex={-1}>
         {/* Header */}
         <div className="text-center mb-10">
           <h1 className="font-serif text-3xl sm:text-4xl font-light text-[#F4E4C1]">Cotizador de Eventos</h1>
           <p className="mt-3 text-sm text-[#F4E4C1]/50 max-w-lg mx-auto">
             Selecciona los productos y servicios para tu evento. El precio se calcula en tiempo real.
           </p>
-          {loadingMenu && <p className="mt-4 text-xs text-[#D4AF37]/50 animate-pulse">Cargando productos...</p>}
+          {loadingMenu && (
+            <p className="mt-4 text-xs text-[#D4AF37]/50 motion-safe:animate-pulse" role="status" aria-live="polite">
+              Cargando productos...
+            </p>
+          )}
           {menuError && (
-            <p className="mt-4 text-xs text-red-400/90">{menuError}</p>
+            <p className="mt-4 text-xs text-red-400/90" role="alert">
+              {menuError}
+            </p>
           )}
           {!loadingMenu && categories.length === 0 && (
             <div className="mt-8 rounded-xl border border-[#D4AF37]/20 bg-black/40 p-8">
@@ -163,38 +252,64 @@ function EventQuote() {
           <div className="flex-1 min-w-0">
             {/* Category carousel */}
             <div className="relative mb-6">
-              <button onClick={() => scrollCarousel(-1)} className="absolute left-0 top-1/2 -translate-y-1/2 z-10 flex h-8 w-8 items-center justify-center rounded-full bg-black/60 text-[#D4AF37] border border-[#D4AF37]/20 hover:bg-[#D4AF37]/20 transition-all sm:hidden">
+              <button
+                type="button"
+                onClick={() => scrollCarousel(-1)}
+                className="absolute left-0 top-1/2 -translate-y-1/2 z-10 flex h-8 w-8 items-center justify-center rounded-full bg-black/60 text-[#D4AF37] border border-[#D4AF37]/20 hover:bg-[#D4AF37]/20 transition-all sm:hidden"
+                aria-label="Desplazar categorías hacia la izquierda"
+              >
                 ‹
               </button>
-              <div ref={carouselRef} className="flex gap-2 overflow-x-auto scrollbar-hide pb-2 px-1 snap-x" style={{ scrollbarWidth: 'none' }}>
+              <div
+                ref={carouselRef}
+                className="flex gap-2 overflow-x-auto scrollbar-hide pb-2 px-1 snap-x"
+                style={{ scrollbarWidth: 'none' }}
+                role="radiogroup"
+                aria-label="Categoría de menú para el evento"
+              >
                 {categories.map(cat => (
                   <button
+                    type="button"
                     key={cat.id}
+                    role="radio"
+                    aria-checked={activeCategory === cat.id}
+                    id={`cat-chip-${cat.id}`}
                     onClick={() => setActiveCategory(cat.id)}
-                    className={`snap-start flex-shrink-0 flex items-center gap-2 rounded-xl border px-4 py-2.5 text-sm transition-all duration-300 ${
+                    className={`snap-start flex-shrink-0 flex items-center gap-2 rounded-xl border px-4 py-2.5 text-sm motion-safe:transition-all motion-safe:duration-300 ${
                       activeCategory === cat.id
                         ? 'border-[#D4AF37] bg-[#D4AF37]/20 text-[#D4AF37] shadow-lg shadow-[#D4AF37]/10'
                         : 'border-[#D4AF37]/15 bg-black/30 text-[#F4E4C1]/60 hover:border-[#D4AF37]/30 hover:text-[#F4E4C1]'
                     }`}
                   >
-                    <span className="text-lg">{cat.icon}</span>
+                    <span className="text-lg" aria-hidden="true">
+                      {cat.icon}
+                    </span>
                     <span className="whitespace-nowrap">{cat.label}</span>
                   </button>
                 ))}
               </div>
-              <button onClick={() => scrollCarousel(1)} className="absolute right-0 top-1/2 -translate-y-1/2 z-10 flex h-8 w-8 items-center justify-center rounded-full bg-black/60 text-[#D4AF37] border border-[#D4AF37]/20 hover:bg-[#D4AF37]/20 transition-all sm:hidden">
+              <button
+                type="button"
+                onClick={() => scrollCarousel(1)}
+                className="absolute right-0 top-1/2 -translate-y-1/2 z-10 flex h-8 w-8 items-center justify-center rounded-full bg-black/60 text-[#D4AF37] border border-[#D4AF37]/20 hover:bg-[#D4AF37]/20 transition-all sm:hidden"
+                aria-label="Desplazar categorías hacia la derecha"
+              >
                 ›
               </button>
             </div>
 
             {/* Products grid */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div
+              className="grid grid-cols-1 sm:grid-cols-2 gap-3"
+              role="region"
+              aria-label={currentCat ? `Productos: ${currentCat.label}` : 'Productos del menú'}
+            >
               {currentCat?.items.map(item => {
                 const inCart = cart[item.id]
                 return (
                   <div
                     key={item.id}
-                    className={`group relative overflow-hidden rounded-xl border p-4 backdrop-blur-md transition-all duration-300 ${
+                    className={`group relative overflow-hidden rounded-xl border p-4 backdrop-blur-md motion-safe:transition-all motion-safe:duration-300 ${
                       inCart
                         ? 'border-[#D4AF37]/40 bg-[#D4AF37]/10'
                         : 'border-[#D4AF37]/10 bg-black/40 hover:border-[#D4AF37]/25'
@@ -213,22 +328,28 @@ function EventQuote() {
                       {inCart ? (
                         <div className="flex items-center gap-2">
                           <button
+                            type="button"
                             onClick={() => removeFromCart(item.id)}
                             className="flex h-7 w-7 items-center justify-center rounded-lg border border-[#D4AF37]/30 bg-black/40 text-[#D4AF37] text-sm hover:bg-red-500/20 hover:border-red-500/30 hover:text-red-400 transition-all"
+                            aria-label={`Quitar una unidad de ${item.name}`}
                           >
                             −
                           </button>
                           <input
                             type="number"
+                            inputMode="numeric"
                             value={inCart.qty}
                             min={0}
                             max={999}
                             onChange={(e) => setQty(item.id, parseInt(e.target.value, 10) || 0)}
                             className="w-12 rounded-lg border border-[#D4AF37]/20 bg-black/40 px-2 py-1 text-center text-sm text-[#F4E4C1] focus:outline-none focus:border-[#D4AF37]/40"
+                            aria-label={`Cantidad de ${item.name}`}
                           />
                           <button
+                            type="button"
                             onClick={() => addToCart(item)}
                             className="flex h-7 w-7 items-center justify-center rounded-lg border border-[#D4AF37]/30 bg-[#D4AF37]/10 text-[#D4AF37] text-sm hover:bg-[#D4AF37]/20 transition-all"
+                            aria-label={`Agregar una unidad de ${item.name}`}
                           >
                             +
                           </button>
@@ -236,8 +357,10 @@ function EventQuote() {
                         </div>
                       ) : (
                         <button
+                          type="button"
                           onClick={() => addToCart(item)}
                           className="rounded-lg border border-[#D4AF37]/20 bg-[#D4AF37]/10 px-4 py-1.5 text-xs text-[#D4AF37] hover:bg-[#D4AF37]/20 hover:border-[#D4AF37]/40 transition-all"
+                          aria-label={`Agregar ${item.name} al carrito`}
                         >
                           + Agregar
                         </button>
@@ -251,7 +374,12 @@ function EventQuote() {
 
           {/* Right: Summary sidebar (desktop always visible, mobile toggled) */}
           <div className={`lg:w-96 lg:flex-shrink-0 ${showSummary ? 'block' : 'hidden lg:block'}`}>
-            <div className="sticky top-4 rounded-2xl border border-[#D4AF37]/20 bg-gradient-to-b from-black/60 to-black/40 p-6 backdrop-blur-xl">
+            <div
+              id={panelId}
+              className="sticky top-4 rounded-2xl border border-[#D4AF37]/20 bg-gradient-to-b from-black/60 to-black/40 p-6 backdrop-blur-xl"
+              role="region"
+              aria-label="Resumen de cotización y datos de contacto"
+            >
               <h3 className="font-serif text-lg font-light text-[#F4E4C1] mb-4">Resumen de Cotización</h3>
 
               {/* Cart items */}
@@ -269,7 +397,14 @@ function EventQuote() {
                       </div>
                       <div className="flex items-center gap-2">
                         <span className="text-xs font-medium text-[#D4AF37]">${(item.price * item.qty).toLocaleString()}</span>
-                        <button onClick={() => setQty(item.id, 0)} className="text-red-400/50 hover:text-red-400 text-xs transition-colors">✕</button>
+                        <button
+                          type="button"
+                          onClick={() => setQty(item.id, 0)}
+                          className="text-red-400/50 hover:text-red-400 text-xs transition-colors"
+                          aria-label={`Quitar ${item.name} del carrito`}
+                        >
+                          ✕
+                        </button>
                       </div>
                     </div>
                   ))}
@@ -288,23 +423,38 @@ function EventQuote() {
               {/* Contact form */}
               <div className="space-y-3">
                 <h4 className="text-xs uppercase tracking-widest text-[#D4AF37]/50">Datos de contacto</h4>
+                <label htmlFor={`${uid}-name`} className="sr-only">
+                  Nombre completo (obligatorio)
+                </label>
                 <input
+                  id={`${uid}-name`}
                   type="text"
+                  autoComplete="name"
                   placeholder="Nombre completo *"
                   value={contact.name}
                   onChange={(e) => setContact({ ...contact, name: e.target.value })}
                   className="w-full rounded-lg border border-[#D4AF37]/15 bg-black/40 px-3 py-2.5 text-sm text-[#F4E4C1] placeholder-[#F4E4C1]/20 focus:border-[#D4AF37]/40 focus:outline-none transition-colors"
                 />
                 <div className="grid grid-cols-2 gap-2">
+                  <label htmlFor={`${uid}-phone`} className="sr-only">
+                    Teléfono (obligatorio)
+                  </label>
                   <input
+                    id={`${uid}-phone`}
                     type="tel"
+                    autoComplete="tel"
                     placeholder="Teléfono *"
                     value={contact.phone}
                     onChange={(e) => setContact({ ...contact, phone: e.target.value })}
                     className="w-full rounded-lg border border-[#D4AF37]/15 bg-black/40 px-3 py-2.5 text-sm text-[#F4E4C1] placeholder-[#F4E4C1]/20 focus:border-[#D4AF37]/40 focus:outline-none transition-colors"
                   />
+                  <label htmlFor={`${uid}-email`} className="sr-only">
+                    Correo electrónico
+                  </label>
                   <input
+                    id={`${uid}-email`}
                     type="email"
+                    autoComplete="email"
                     placeholder="Email"
                     value={contact.email}
                     onChange={(e) => setContact({ ...contact, email: e.target.value })}
@@ -312,29 +462,48 @@ function EventQuote() {
                   />
                 </div>
                 <div className="grid grid-cols-2 gap-2">
+                  <label htmlFor={`${uid}-type`} className="sr-only">
+                    Tipo de evento (obligatorio)
+                  </label>
                   <select
+                    id={`${uid}-type`}
                     value={contact.type}
                     onChange={(e) => setContact({ ...contact, type: e.target.value })}
                     className="w-full rounded-lg border border-[#D4AF37]/15 bg-black/40 px-3 py-2.5 text-sm text-[#F4E4C1] focus:border-[#D4AF37]/40 focus:outline-none transition-colors"
                   >
-                    <option value="" className="bg-[#1a1a1f]">Tipo de evento *</option>
+                    <option value="" disabled className="bg-[#1a1a1f]">
+                      Tipo de evento *
+                    </option>
                     {eventTypes.map(t => <option key={t} value={t} className="bg-[#1a1a1f]">{t}</option>)}
                   </select>
+                  <label htmlFor={`${uid}-date`} className="sr-only">
+                    Fecha del evento (obligatorio)
+                  </label>
                   <input
+                    id={`${uid}-date`}
                     type="date"
                     value={contact.date}
                     onChange={(e) => setContact({ ...contact, date: e.target.value })}
                     className="w-full rounded-lg border border-[#D4AF37]/15 bg-black/40 px-3 py-2.5 text-sm text-[#F4E4C1] focus:border-[#D4AF37]/40 focus:outline-none transition-colors"
                   />
                 </div>
+                <label htmlFor={`${uid}-guests`} className="sr-only">
+                  Número aproximado de invitados
+                </label>
                 <input
+                  id={`${uid}-guests`}
                   type="number"
+                  min={0}
                   placeholder="Número de invitados"
                   value={contact.guests}
                   onChange={(e) => setContact({ ...contact, guests: e.target.value })}
                   className="w-full rounded-lg border border-[#D4AF37]/15 bg-black/40 px-3 py-2.5 text-sm text-[#F4E4C1] placeholder-[#F4E4C1]/20 focus:border-[#D4AF37]/40 focus:outline-none transition-colors"
                 />
+                <label htmlFor={`${uid}-notes`} className="sr-only">
+                  Notas adicionales
+                </label>
                 <textarea
+                  id={`${uid}-notes`}
                   placeholder="Notas adicionales..."
                   value={contact.notes}
                   onChange={(e) => setContact({ ...contact, notes: e.target.value })}
@@ -344,18 +513,38 @@ function EventQuote() {
               </div>
 
               {/* Submit */}
+              <p id={`${uid}-submit-hint`} className="sr-only">
+                Requiere nombre, teléfono, tipo y fecha del evento, y al menos un producto en el carrito.
+              </p>
+              {savedFolio && (
+                <p className="mt-3 rounded-lg border border-[#D4AF37]/30 bg-[#D4AF37]/10 px-3 py-2 text-center text-xs text-[#F4E4C1]" role="status">
+                  Solicitud registrada. Tu folio: <span className="font-mono font-semibold text-[#D4AF37]">{savedFolio}</span>
+                  {' '}— conserva este número para seguimiento.
+                </p>
+              )}
               <button
+                type="button"
                 onClick={handleSubmitWhatsApp}
-                disabled={!contact.name || !contact.phone || !contact.type || !contact.date || cartItems.length === 0}
-                className="mt-4 w-full group relative inline-flex items-center justify-center gap-3 overflow-hidden rounded-full border border-[#D4AF37]/40 bg-gradient-to-r from-[#D4AF37]/90 via-[#F4E4C1]/80 to-[#D4AF37]/90 px-6 py-3.5 font-serif text-sm font-medium tracking-wider text-black shadow-2xl shadow-[#D4AF37]/30 transition-all duration-500 hover:scale-[1.02] hover:shadow-[#D4AF37]/50 disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:scale-100"
+                disabled={
+                  submitLoading ||
+                  !contact.name ||
+                  !contact.phone ||
+                  !contact.type ||
+                  !contact.date ||
+                  cartItems.length === 0
+                }
+                className="mt-4 w-full group relative inline-flex items-center justify-center gap-3 overflow-hidden rounded-full border border-[#D4AF37]/40 bg-gradient-to-r from-[#D4AF37]/90 via-[#F4E4C1]/80 to-[#D4AF37]/90 px-6 py-3.5 font-serif text-sm font-medium tracking-wider text-black shadow-2xl shadow-[#D4AF37]/30 motion-safe:transition-all motion-safe:duration-500 motion-safe:hover:scale-[1.02] motion-safe:hover:shadow-[#D4AF37]/50 disabled:opacity-40 disabled:cursor-not-allowed disabled:motion-safe:hover:scale-100"
+                aria-describedby={`${uid}-submit-hint`}
               >
-                <svg className="h-5 w-5" fill="currentColor" viewBox="0 0 24 24">
+                <svg className="h-5 w-5 shrink-0" fill="currentColor" viewBox="0 0 24 24" aria-hidden="true">
                   <path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413Z"/>
                 </svg>
-                Enviar Cotización por WhatsApp
+                {submitLoading ? 'Guardando solicitud…' : 'Enviar cotización (guardar y WhatsApp)'}
               </button>
               {formError && (
-                <p className="mt-2 text-center text-[11px] text-red-400">{formError}</p>
+                <p className="mt-2 text-center text-[11px] text-red-400" role="alert">
+                  {formError}
+                </p>
               )}
               <p className="mt-2 text-center text-[9px] text-[#F4E4C1]/25">Los precios son estimados y están sujetos a confirmación</p>
             </div>
@@ -368,19 +557,22 @@ function EventQuote() {
             © {new Date().getFullYear()} BONIFACIO'S RESTAURANT · SAN CARLOS, SONORA
           </p>
         </div>
-      </div>
+      </main>
 
       {/* Mobile floating total bar */}
       {totalItems > 0 && (
-        <div className="fixed bottom-0 inset-x-0 z-50 lg:hidden border-t border-[#D4AF37]/20 bg-black/90 backdrop-blur-xl px-4 py-3">
+        <div className="fixed bottom-0 inset-x-0 z-50 lg:hidden border-t border-[#D4AF37]/20 bg-black/90 backdrop-blur-xl px-4 py-3 pb-[max(0.75rem,env(safe-area-inset-bottom))]">
           <div className="flex items-center justify-between">
             <div>
               <p className="text-xs text-[#F4E4C1]/50">{totalItems} items</p>
               <p className="font-serif text-lg font-medium text-[#D4AF37]">${totalPrice.toLocaleString()} MXN</p>
             </div>
             <button
+              type="button"
               onClick={() => setShowSummary(true)}
-              className="rounded-full bg-[#D4AF37]/20 border border-[#D4AF37]/40 px-5 py-2.5 text-sm text-[#D4AF37] hover:bg-[#D4AF37]/30 transition-all"
+              className="rounded-full bg-[#D4AF37]/20 border border-[#D4AF37]/40 px-5 py-2.5 text-sm text-[#D4AF37] hover:bg-[#D4AF37]/30 transition-all min-h-[44px]"
+              aria-controls={panelId}
+              aria-label="Abrir resumen de cotización y formulario de contacto"
             >
               Ver Cotización →
             </button>

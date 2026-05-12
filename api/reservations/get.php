@@ -14,7 +14,11 @@ try {
         exit;
     }
 
-    $sql = "SELECT id, customer_name, phone, email, guests, reservation_date, reservation_time, table_code, notes, occasion, source, status, ip_address, created_at, updated_at
+    try {
+        $conn->query("ALTER TABLE special_reservations ADD COLUMN event_type_id INT NULL AFTER occasion");
+    } catch (Throwable $e) { /* ignore if exists */ }
+
+    $sql = "SELECT id, customer_name, phone, email, guests, reservation_date, reservation_time, table_code, notes, occasion, event_type_id, status, created_at, updated_at
             FROM special_reservations
             WHERE id = ?
             LIMIT 1";

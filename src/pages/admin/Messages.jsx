@@ -23,6 +23,8 @@ const fmtDur = (s) => { const m = Math.floor(s / 60); const sec = Math.floor(s %
 function JitsiMeeting({ roomName, displayName, onClose }) {
   const containerRef = useRef(null);
   const apiRef = useRef(null);
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
 
   useEffect(() => {
     let cancelled = false;
@@ -50,7 +52,7 @@ function JitsiMeeting({ roomName, displayName, onClose }) {
         },
       });
       apiRef.current = api;
-      api.addListener('readyToClose', () => onClose());
+      api.addListener('readyToClose', () => onCloseRef.current?.());
     };
 
     if (window.JitsiMeetExternalAPI) {
@@ -60,7 +62,7 @@ function JitsiMeeting({ roomName, displayName, onClose }) {
       script.src = 'https://meet.jit.si/external_api.js';
       script.async = true;
       script.onload = loadAndStart;
-      script.onerror = () => { alert('No se pudo cargar Jitsi Meet'); onClose(); };
+      script.onerror = () => { alert('No se pudo cargar Jitsi Meet'); onCloseRef.current?.(); };
       document.head.appendChild(script);
     }
 
@@ -68,13 +70,13 @@ function JitsiMeeting({ roomName, displayName, onClose }) {
       cancelled = true;
       if (apiRef.current) { try { apiRef.current.dispose(); } catch { /* intentional */ } apiRef.current = null; }
     };
-  }, [roomName, displayName, onClose]);
+  }, [roomName, displayName]);
 
   return (
     <div className="relative border-b border-cyan-500/10" style={{ height: '45vh', minHeight: 280 }}>
       <div ref={containerRef} className="w-full h-full" />
       <button onClick={onClose}
-        className="absolute top-2 right-2 rounded-full bg-red-500/90 text-white p-1.5 hover:bg-red-600 transition-colors shadow-lg z-10">
+        className="absolute top-2 right-2 rounded-full bg-red-500/90 text-white p-2.5 sm:p-1.5 hover:bg-red-600 transition-colors shadow-lg z-10 touch-manipulation min-w-[44px] min-h-[44px] flex items-center justify-center">
         <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
       </button>
     </div>
@@ -311,7 +313,7 @@ function MessageBubble({ msg, isMine }) {
       </div>
       {preview && t === 'image' && (
         <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/95 p-4 animate-[fadeIn_0.2s]" onClick={() => setPreview(false)}>
-          <button className="absolute top-4 right-4 text-white/60 hover:text-white z-10" onClick={() => setPreview(false)}>
+          <button className="absolute top-4 right-4 text-white/60 hover:text-white z-10 touch-manipulation min-w-[44px] min-h-[44px] flex items-center justify-center rounded-xl" onClick={() => setPreview(false)}>
             <svg className="h-8 w-8" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
           </button>
           <img src={f} alt="" className="max-h-[90vh] max-w-[95vw] rounded-xl shadow-2xl" />
@@ -628,7 +630,7 @@ function Messages() {
   };
 
   return (
-    <div className="flex h-[calc(100vh-120px)] rounded-xl border border-cyan-500/10 bg-gradient-to-br from-[#040c1a] to-[#060f20] overflow-hidden">
+    <div className="flex h-[calc(100dvh-120px)] sm:h-[calc(100vh-120px)] rounded-xl border border-cyan-500/10 bg-gradient-to-br from-[#040c1a] to-[#060f20] overflow-hidden">
       <style>{`@keyframes fadeIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }`}</style>
 
       {/* ── Sidebar ── */}
@@ -638,7 +640,7 @@ function Messages() {
             <h2 className="text-lg font-light text-white tracking-wide">Chat</h2>
             {totalUnread > 0 && <span className="rounded-full bg-cyan-400 px-1.5 py-0.5 text-[9px] text-[#030712] font-bold min-w-[18px] text-center">{totalUnread}</span>}
           </div>
-          <button onClick={() => setShowNewChat(true)} className="rounded-full bg-cyan-500/10 p-2 text-cyan-400 hover:bg-cyan-500/20 transition-all hover:scale-105 active:scale-95" title="Nuevo chat">
+          <button onClick={() => setShowNewChat(true)} className="rounded-full bg-cyan-500/10 p-2.5 sm:p-2 text-cyan-400 hover:bg-cyan-500/20 transition-all hover:scale-105 active:scale-95 touch-manipulation min-w-[44px] min-h-[44px] flex items-center justify-center" title="Nuevo chat">
             <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M12 4v16m8-8H4" /></svg>
           </button>
         </div>
@@ -749,7 +751,7 @@ function Messages() {
         {activeConv ? (
           <>
             <div className="flex items-center gap-3 px-4 py-3 border-b border-cyan-500/8 bg-[#040c1a]/50 backdrop-blur-sm">
-              <button onClick={() => setShowSidebar(true)} className="sm:hidden text-cyan-500/60 hover:text-cyan-400 p-1">
+              <button onClick={() => setShowSidebar(true)} className="sm:hidden text-cyan-500/60 hover:text-cyan-400 p-2 touch-manipulation min-w-[44px] min-h-[44px] flex items-center justify-center rounded-xl active:bg-cyan-500/10">
                 <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" /></svg>
               </button>
               <div className="h-10 w-10 rounded-full bg-cyan-500/8 border border-cyan-500/15 flex items-center justify-center overflow-hidden">{avatar(activeConv)}</div>
@@ -758,7 +760,7 @@ function Messages() {
                 <p className="text-[10px] text-slate-700">@{activeConv.other_username}</p>
               </div>
               <button onClick={() => setVideoCall(v => !v)} title={videoCall ? 'Cerrar videollamada' : 'Videollamada'}
-                className={`rounded-full p-2 transition-all hover:scale-105 active:scale-95 ${videoCall ? 'bg-red-500/20 text-red-400 hover:bg-red-500/30' : 'text-cyan-500/40 hover:text-cyan-400 hover:bg-cyan-500/10'}`}>
+                className={`rounded-full p-2.5 sm:p-2 transition-all hover:scale-105 active:scale-95 touch-manipulation min-w-[44px] min-h-[44px] flex items-center justify-center ${videoCall ? 'bg-red-500/20 text-red-400 hover:bg-red-500/30' : 'text-cyan-500/40 hover:text-cyan-400 hover:bg-cyan-500/10'}`}>
                 {videoCall ? (
                   <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
                 ) : (
@@ -768,7 +770,7 @@ function Messages() {
               <button
                 onClick={() => setShowSupport(true)}
                 title="Soporte técnico"
-                className="rounded-full p-2 text-amber-400/60 hover:text-amber-300 hover:bg-amber-500/10 transition-all"
+                className="rounded-full p-2.5 sm:p-2 text-amber-400/60 hover:text-amber-300 hover:bg-amber-500/10 transition-all touch-manipulation min-w-[44px] min-h-[44px] flex items-center justify-center"
               >
                 <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M18.364 5.636l-1.414 1.414m0 0A9 9 0 003 12v1m13.95-5.95A9 9 0 0121 12v1m-4.05-5.95L12 12m0 0v9m0-9L7.05 7.05" />
@@ -833,7 +835,7 @@ function Messages() {
               ) : (
                 <div className="flex items-end gap-2">
                   <button onClick={() => fileInputRef.current?.click()} disabled={!!uploading}
-                    className="flex-shrink-0 rounded-full p-2 text-cyan-500/40 hover:text-cyan-400 hover:bg-cyan-500/10 transition-all active:scale-90 disabled:opacity-30">
+                    className="flex-shrink-0 rounded-full p-2.5 sm:p-2 text-cyan-500/40 hover:text-cyan-400 hover:bg-cyan-500/10 transition-all active:scale-90 disabled:opacity-30 touch-manipulation min-w-[44px] min-h-[44px] flex items-center justify-center">
                     <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13" /></svg>
                   </button>
                   <input ref={fileInputRef} type="file" onChange={handleFileUpload} className="hidden" accept="image/*,video/*,audio/*,.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.zip,.rar" />
@@ -877,20 +879,20 @@ function Messages() {
           <div className="w-full max-w-sm rounded-2xl border border-cyan-500/20 bg-gradient-to-br from-[#040c1a] to-[#060f20] shadow-2xl overflow-hidden" onClick={e => e.stopPropagation()}>
             <div className="px-5 py-4 border-b border-cyan-500/10 flex items-center justify-between">
               <h3 className="text-base font-light text-white">Nueva Conversación</h3>
-              <button onClick={() => setShowNewChat(false)} className="text-slate-500 hover:text-slate-200 transition-colors">
+              <button onClick={() => setShowNewChat(false)} className="text-slate-500 hover:text-slate-200 transition-colors touch-manipulation min-w-[44px] min-h-[44px] flex items-center justify-center rounded-xl hover:bg-slate-800/50">
                 <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
               </button>
             </div>
-            <div className="max-h-72 overflow-y-auto p-2">
+            <div className="max-h-72 overflow-y-auto overscroll-contain p-2">
               {users.map(u => (
                 <button key={u.id} onClick={() => startNewChat(u)}
-                  className="w-full flex items-center gap-3 px-3 py-3 rounded-xl text-left hover:bg-cyan-500/5 transition-all active:scale-[0.98]">
+                  className="w-full flex items-center gap-3 px-3 py-3 rounded-xl text-left hover:bg-cyan-500/5 transition-all active:scale-[0.98] touch-manipulation min-h-[48px]">
                   <div className="h-10 w-10 rounded-full bg-cyan-500/8 border border-cyan-500/15 flex items-center justify-center overflow-hidden">
                     {u.profile_photo ? <img src={u.profile_photo} alt="" className="w-full h-full object-cover" /> : <span className="text-cyan-400 font-semibold">{u.full_name[0].toUpperCase()}</span>}
                   </div>
                   <div className="flex-1 min-w-0">
                     <p className="text-sm text-slate-200 font-medium">{u.full_name}</p>
-                    <p className="text-[10px] text-slate-700">@{u.username} · {u.role}</p>
+                    <p className="text-[10px] text-slate-700">@{u.username}</p>
                   </div>
                   <svg className="h-4 w-4 text-cyan-500/20" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" /></svg>
                 </button>
@@ -904,7 +906,7 @@ function Messages() {
           <div className="w-full max-w-xl rounded-2xl border border-amber-500/20 bg-gradient-to-br from-[#040c1a] to-[#060f20] shadow-2xl overflow-hidden" onClick={(e) => e.stopPropagation()}>
             <div className="px-5 py-4 border-b border-amber-500/10 flex items-center justify-between">
               <h3 className="text-base font-light text-white">Tickets de soporte</h3>
-              <button onClick={() => setShowSupport(false)} className="text-slate-500 hover:text-slate-200 transition-colors">
+              <button onClick={() => setShowSupport(false)} className="text-slate-500 hover:text-slate-200 transition-colors touch-manipulation min-w-[44px] min-h-[44px] flex items-center justify-center rounded-xl hover:bg-slate-800/50">
                 <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
               </button>
             </div>
@@ -914,15 +916,15 @@ function Messages() {
                   value={ticketTitle}
                   onChange={(e) => setTicketTitle(e.target.value)}
                   placeholder="Describe el problema técnico..."
-                  className="flex-1 rounded-xl border border-slate-700/60 bg-[#030b18] px-3 py-2 text-sm text-slate-200"
+                  className="flex-1 rounded-xl border border-slate-700/60 bg-[#030b18] px-3 py-2.5 sm:py-2 text-sm text-slate-200 min-h-[44px]"
                 />
-                <select value={ticketCategory} onChange={(e) => setTicketCategory(e.target.value)} className="rounded-xl border border-slate-700/60 bg-[#030b18] px-2 py-2 text-xs text-slate-200">
+                <select value={ticketCategory} onChange={(e) => setTicketCategory(e.target.value)} className="rounded-xl border border-slate-700/60 bg-[#030b18] px-2 py-2.5 sm:py-2 text-xs text-slate-200 min-h-[44px] touch-manipulation">
                   <option value="general">General</option>
                   <option value="sistema">Sistema</option>
                   <option value="pagos">Pagos</option>
                   <option value="reservaciones">Reservaciones</option>
                 </select>
-                <button onClick={createSupportTicket} className="rounded-xl border border-amber-500/25 bg-amber-500/10 px-3 py-2 text-xs text-amber-300">
+                <button onClick={createSupportTicket} className="rounded-xl border border-amber-500/25 bg-amber-500/10 px-3.5 py-2.5 sm:py-2 text-xs text-amber-300 touch-manipulation min-h-[44px] active:scale-95">
                   Crear
                 </button>
               </div>

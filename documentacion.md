@@ -340,6 +340,42 @@ Los archivos PHP ya tienen configurada la zona horaria:
 date_default_timezone_set('America/Hermosillo');
 ```
 
+### **4b. phpMyAdmin / MySQL y zonas horarias (Hostinger)**
+En el servidor MySQL del hosting **no** asumas `SET time_zone = 'America/Hermosillo'`: si las tablas de zona horaria del sistema no estan cargadas, MySQL responde **`#1298 Unknown or incorrect time zone`**.
+
+Para consultas manuales en phpMyAdmin que deben alinearse con Sonora (UTC-7 todo el año), usa **`CONVERT_TZ(UTC_TIMESTAMP(), '+00:00', '-07:00')`** (no requiere tablas `mysql.time_zone_*`). Si en tu servidor devuelve **NULL**, el `BETWEEN` no devuelve filas: usa **`COALESCE(CONVERT_TZ(...), DATE_SUB(UTC_TIMESTAMP(), INTERVAL 7 HOUR))`** como abajo, **o** literales copiados del dashboard.
+
+**Variables `@...` en phpMyAdmin:** si ejecutas solo el `SELECT ... BETWEEN @ayer_inicio AND @ayer_fin` sin haber corrido en **la misma pestaña y el mismo lote** los `SET @...`, las variables quedan **NULL** o inconsistentes (a veces phpMyAdmin muestra `[BLOB]`). Soluciones: pegar **todo el bloque SET+SELECT en una sola ejecución**, o usar **una sola consulta** sin variables (abajo).
+
+**Si el SELECT devuelve 0 filas**, antes de culpar a `sales.php` comprueba si hay datos y en qué fechas caen:
+
+```sql
+SELECT COUNT(*) AS filas, MIN(sale_datetime) AS primera, MAX(sale_datetime) AS ultima
+FROM sr_sales;
+```
+
+**Ventas del turno “ayer” (misma lógica que `api/softrestaurant/sales.php`), una sola query, sin `SET time_zone` ni variables:**
+
+```sql
+SELECT s.*
+FROM sr_sales s
+JOIN (
+  SELECT
+    CONCAT(DATE_FORMAT(DATE_SUB(st, INTERVAL 1 DAY), '%Y-%m-%d'), ' 08:00:00') AS di,
+    CONCAT(DATE_FORMAT(st, '%Y-%m-%d'), ' 07:59:59') AS df
+  FROM (
+    SELECT IF(HOUR(mx) < 8, DATE_SUB(dt, INTERVAL 1 DAY), dt) AS st
+    FROM (
+      SELECT
+        COALESCE(CONVERT_TZ(UTC_TIMESTAMP(), '+00:00', '-07:00'), DATE_SUB(UTC_TIMESTAMP(), INTERVAL 7 HOUR)) AS mx,
+        DATE(COALESCE(CONVERT_TZ(UTC_TIMESTAMP(), '+00:00', '-07:00'), DATE_SUB(UTC_TIMESTAMP(), INTERVAL 7 HOUR))) AS dt
+    ) q
+  ) r
+) w ON 1 = 1
+WHERE s.sale_datetime BETWEEN w.di AND w.df
+ORDER BY s.sale_datetime DESC;
+```
+
 ---
 
 ## 📊 **Relaciones entre Tablas**

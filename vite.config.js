@@ -3,6 +3,19 @@ import react from '@vitejs/plugin-react'
 import { VitePWA } from 'vite-plugin-pwa'
 
 export default defineConfig({
+  // En local, /api → mismo host que producción (PHP); evita que /api caiga en Vite y devuelva JS/HTML.
+  server: {
+    proxy: {
+      '/api': {
+        target: 'https://bonifaciossancarlos.com',
+        changeOrigin: true,
+        secure: true,
+      },
+    },
+  },
+  build: {
+    minify: false, // Desactivar minificado para evitar conflictos de variables
+  },
   plugins: [
     react(),
     VitePWA({
@@ -26,11 +39,13 @@ export default defineConfig({
       },
       workbox: {
         globPatterns: ['**/*.{js,css,html,svg,png,webp,woff2}'],
+        // Aumentar límite de tamaño para archivos grandes
+        maximumFileSizeToCacheInBytes: 5 * 1024 * 1024, // 5MB
+        // No cachear respuestas de /api (evita JSON/HTML equivocado en el SW y datos viejos en admin).
         runtimeCaching: [
           {
-            urlPattern: /^\/api\//,
-            handler: 'NetworkFirst',
-            options: { cacheName: 'api-cache', networkTimeoutSeconds: 10 },
+            urlPattern: ({ url }) => url.pathname.startsWith('/api/'),
+            handler: 'NetworkOnly',
           },
         ],
       },

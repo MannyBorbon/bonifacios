@@ -17,9 +17,10 @@ try {
     
     $data = json_decode(file_get_contents('php://input'), true);
 
-// Check if this is an auto-accept from admin
+// Check if this is an auto-accept from admin.
+// Enum real de BD: pending/reviewing/accepted/rejected
 $autoAccept = isset($data['autoAccept']) && $data['autoAccept'] === true;
-$initialStatus = $autoAccept ? 'Aceptada' : 'Pendiente';
+$initialStatus = $autoAccept ? 'accepted' : 'pending';
 
 if (!isset($data['name']) || !isset($data['phone']) || !isset($data['position']) || !isset($data['experience'])) {
     http_response_code(400);

@@ -354,7 +354,7 @@ function Applications() {
   }
 
   return (
-    <div className="space-y-5 sm:space-y-6">
+    <div className="space-y-4 sm:space-y-6 pb-[calc(env(safe-area-inset-bottom)+1rem)]">
       <div>
         <h1 className="text-xl sm:text-3xl font-light text-white tracking-wide leading-tight">Solicitudes de Empleo</h1>
         <p className="mt-1 text-sm text-slate-500">Gestiona las solicitudes recibidas</p>
@@ -381,10 +381,10 @@ function Applications() {
           <button
             key={status}
             onClick={() => setFilter(status)}
-            className={`rounded-lg px-3 sm:px-4 py-2 text-xs sm:text-sm font-light transition-all ${
+            className={`rounded-xl px-3.5 sm:px-4 py-2.5 sm:py-2 text-xs sm:text-sm font-light transition-all touch-manipulation min-h-[44px] sm:min-h-0 ${
               filter === status
                 ? 'border border-cyan-400/50 bg-cyan-500/15 text-cyan-400'
-                : 'border border-cyan-500/15 bg-[#040c1a]/60 text-slate-500 hover:border-cyan-500/25 hover:text-slate-300'
+                : 'border border-cyan-500/15 bg-[#040c1a]/60 text-slate-500 hover:border-cyan-500/25 hover:text-slate-300 active:bg-cyan-500/10'
             }`}
           >
             {status === 'all' ? 'Todas' : getStatusText(status)}
@@ -453,7 +453,7 @@ function Applications() {
               <div className="flex gap-2 self-end sm:self-start">
                 <button
                   onClick={() => handleDownloadPDF(app.id)}
-                  className="rounded-lg border border-cyan-500/20 bg-[#040c1a]/60 p-2 text-cyan-400/60 transition-all hover:text-cyan-400 hover:border-cyan-400/40"
+                  className="rounded-xl border border-cyan-500/20 bg-[#040c1a]/60 p-2.5 sm:p-2 text-cyan-400/60 transition-all hover:text-cyan-400 hover:border-cyan-400/40 active:bg-cyan-500/10 touch-manipulation min-w-[44px] min-h-[44px] flex items-center justify-center"
                   title="Descargar PDF"
                 >
                   <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -462,7 +462,7 @@ function Applications() {
                 </button>
                 <button
                   onClick={() => setSelectedApp(app)}
-                  className="rounded-lg border border-cyan-500/20 bg-[#040c1a]/60 p-2 text-cyan-400/60 transition-all hover:text-cyan-400 hover:border-cyan-400/40"
+                  className="rounded-xl border border-cyan-500/20 bg-[#040c1a]/60 p-2.5 sm:p-2 text-cyan-400/60 transition-all hover:text-cyan-400 hover:border-cyan-400/40 active:bg-cyan-500/10 touch-manipulation min-w-[44px] min-h-[44px] flex items-center justify-center"
                   title="Ver detalles"
                 >
                   <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -532,8 +532,8 @@ function Applications() {
       </div>
 
       {selectedApp && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-[#030712]/90 backdrop-blur-sm p-6">
-          <div className="max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-2xl border border-cyan-500/20 bg-gradient-to-br from-[#040c1a]/95 to-[#060f20]/90 p-8">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-[#030712]/90 backdrop-blur-sm p-3 sm:p-6">
+          <div className="max-h-[90vh] w-full max-w-2xl overflow-y-auto overscroll-contain rounded-2xl border border-cyan-500/20 bg-gradient-to-br from-[#040c1a]/95 to-[#060f20]/90 p-5 sm:p-8">
             {/* Applicant photo in modal */}
             <div className="flex flex-col items-center mb-6 gap-2">
               {selectedApp.photo_url ? (
@@ -559,7 +559,7 @@ function Applications() {
               <h2 className="text-2xl font-light text-white">Detalles de Solicitud</h2>
               <button
                 onClick={() => setSelectedApp(null)}
-                className="text-slate-500 hover:text-slate-200 transition-colors"
+                className="text-slate-500 hover:text-slate-200 transition-colors touch-manipulation min-w-[44px] min-h-[44px] flex items-center justify-center rounded-xl hover:bg-slate-800/50 active:bg-slate-700/50"
               >
                 <svg className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
@@ -614,11 +614,11 @@ function Applications() {
                 <div className="flex gap-2 pt-2">
                   {editing ? (
                     <>
-                      <button onClick={handleSaveFields} className="rounded-lg border border-cyan-500/25 bg-cyan-500/10 px-4 py-2 text-xs text-cyan-400 hover:bg-cyan-500/20 transition-all">Guardar</button>
-                      <button onClick={() => { setEditing(false); setEditData({}); }} className="rounded-lg border border-slate-700/40 bg-[#040c1a]/60 px-4 py-2 text-xs text-slate-500 hover:text-slate-300 transition-all">Cancelar</button>
+                      <button onClick={handleSaveFields} className="rounded-xl border border-cyan-500/25 bg-cyan-500/10 px-4 py-2.5 sm:py-2 text-xs text-cyan-400 hover:bg-cyan-500/20 active:scale-95 transition-all touch-manipulation min-h-[44px]">Guardar</button>
+                      <button onClick={() => { setEditing(false); setEditData({}); }} className="rounded-xl border border-slate-700/40 bg-[#040c1a]/60 px-4 py-2.5 sm:py-2 text-xs text-slate-500 hover:text-slate-300 transition-all touch-manipulation min-h-[44px]">Cancelar</button>
                     </>
                   ) : (
-                    <button onClick={() => setEditing(true)} className="rounded-lg border border-cyan-500/25 bg-cyan-500/10 px-4 py-2 text-xs text-cyan-400 hover:bg-cyan-500/20 transition-all">Editar datos</button>
+                    <button onClick={() => setEditing(true)} className="rounded-xl border border-cyan-500/25 bg-cyan-500/10 px-4 py-2.5 sm:py-2 text-xs text-cyan-400 hover:bg-cyan-500/20 active:scale-95 transition-all touch-manipulation min-h-[44px]">Editar datos</button>
                   )}
                 </div>
               )}
@@ -654,12 +654,12 @@ function Applications() {
             </div>
 
             {isAdmin && (
-              <div className="mt-6 flex gap-2">
+              <div className="mt-6 grid grid-cols-2 sm:flex gap-2">
                 {['pending', 'reviewing', 'accepted', 'rejected'].map((status) => (
                   <button
                     key={status}
                     onClick={() => handleUpdateStatus(selectedApp.id, status, '')}
-                    className={`flex-1 rounded-lg px-4 py-2 text-sm transition-all ${getStatusColor(status)} hover:opacity-80`}
+                    className={`flex-1 rounded-xl px-3 sm:px-4 py-3 sm:py-2 text-xs sm:text-sm transition-all touch-manipulation min-h-[44px] active:scale-95 ${getStatusColor(status)} hover:opacity-80`}
                   >
                     {getStatusText(status)}
                   </button>
@@ -679,7 +679,7 @@ function Applications() {
           <div className="relative max-w-4xl max-h-[90vh]">
             <button
               onClick={() => setViewingFullImage(false)}
-              className="absolute -top-12 right-0 text-white/80 hover:text-white transition-colors"
+              className="absolute -top-12 right-0 text-white/80 hover:text-white transition-colors touch-manipulation min-w-[44px] min-h-[44px] flex items-center justify-center rounded-xl"
               title="Cerrar (ESC)"
             >
               <svg className="h-8 w-8" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>

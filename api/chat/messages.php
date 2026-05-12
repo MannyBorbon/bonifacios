@@ -2,6 +2,12 @@
 require_once '../config/database.php';
 $userId = requireAuth();
 
+if ($_SERVER['REQUEST_METHOD'] !== 'GET') {
+    http_response_code(405);
+    echo json_encode(['success' => false, 'error' => 'Método no permitido']);
+    exit();
+}
+
 $conn = getConnection();
 
 $conversationId = isset($_GET['conversation_id']) ? intval($_GET['conversation_id']) : 0;
@@ -10,7 +16,8 @@ $limit = 50;
 
 if (!$conversationId) {
     http_response_code(400);
-    echo json_encode(['error' => 'conversation_id required']);
+    echo json_encode(['success' => false, 'error' => 'conversation_id required']);
+    $conn->close();
     exit();
 }
 
@@ -20,7 +27,8 @@ $check->bind_param("iii", $conversationId, $userId, $userId);
 $check->execute();
 if ($check->get_result()->num_rows === 0) {
     http_response_code(403);
-    echo json_encode(['error' => 'Not authorized']);
+    echo json_encode(['success' => false, 'error' => 'Not authorized']);
+    $conn->close();
     exit();
 }
 

@@ -1,0 +1,28 @@
+---
+description: Obligatorio 100% — leer repositorio-esquemas-datos.md antes de backend/API/sync/datos
+alwaysApply: true
+---
+
+# Esquemas de datos — obligatorio antes de implementar
+
+**Regla absoluta:** en toda tarea que implique **APIs**, **sync** (`softrestaurant-sync/`), **PHP/SQL contra bases de datos**, **mapeo de columnas**, o **frontend que consuma o muestre datos persistidos** (nombres de campos, tipos, filtros, formularios ligados a la BD), debes **consultar primero y sin excepción** el archivo:
+
+**`docs/repositorio-esquemas-datos.md`**
+
+Ese documento es la referencia única que reúne **MariaDB (web)** y **SQL Server (SoftRestaurant)**. **No sustituir** por memoria, suposiciones o convenciones genéricas. Lee la **Parte A** si solo aplica el sitio/MySQL; la **Parte B** si aplica POS/sync/lecturas al esquema `dbo`; **ambas** si el flujo cruza sync o ventas.
+
+## Prohibido (anti-alucinación y errores)
+
+- Inventar nombres de **tablas**, **columnas**, **tipos**, **nullable** o **relaciones** que no figuren en ese documento o en el código ya alineado con él.
+- Asumir que “debería existir” una columna o tabla sin verificarla en `repositorio-esquemas-datos.md`.
+- Renombrar campos en API o UI sin coincidencia con el esquema documentado (salvo capa de DTO explícita y acordada).
+
+Si algo **no aparece** en el repositorio: **declararlo**, proponer export/regeneración (`update-database-schema-doc.py` / `build-data-model-repository.py` / flujo SoftRestaurant) y **no** rellenar el hueco inventando.
+
+## Workflow mínimo (orden fijo)
+
+1. Abrir **`docs/repositorio-esquemas-datos.md`** y localizar tablas/columnas relevantes.
+2. Implementar alineado a nombres y tipos documentados.
+3. Si el servidor ya tiene cambios no reflejados: actualizar orígenes y regenerar el doc (ver `docs/database/README.md`).
+
+**Única excepción:** cambios puramente estáticos (copy, CSS sin variables de API) que **no** lean ni escriban datos ni nombres de campos. Si hay la menor duda sobre contratos de datos, volver al paso 1.

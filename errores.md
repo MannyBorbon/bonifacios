@@ -507,3 +507,39 @@ ALTER TABLE employee_files
 - **Causa raíz:** Sección temporal de ayuda técnica quedó renderizada en UI.
 - **Fix aplicado:** Eliminado el bloque de `src/pages/admin/Permissions.jsx`.
 - **Estado:** ✅ Resuelto.
+
+### 36. `sync-historico.php` se caía por método MAPAS faltante
+- **Síntoma:** El sincronizador en Windows se reiniciaba con fatal error.
+- **Evidencia:** `Call to undefined method ...::syncPosTableLiveFromSr()`.
+- **Causa raíz:** Desalineación de archivo desplegado: `run()` llamaba MAPAS pero el método no estaba definido en esa copia.
+- **Fix aplicado:** Se restauró `syncPosTableLiveFromSr()` y se blindó `run()` con `method_exists + try/catch` no bloqueante para MAPAS.
+- **Estado:** ✅ Resuelto.
+
+### 37. SQL Server ODBC18: conversión `BAR` -> `int` en sincronización de mesas
+- **Síntoma:** Error repetido en consola: `SQLSTATE[22018] ... convertir varchar 'BAR' a int`.
+- **Causa raíz:** Comparación/joins entre `mesa` textual y columnas numéricas (`idmesa`) provocaban conversión implícita del motor.
+- **Fix aplicado:** Se retiró la dependencia de JOIN riesgoso para ocupación y se pasó a lógica basada en cheques abiertos + mapeo en PHP (`lookup`).
+- **Estado:** ✅ Resuelto.
+
+### 38. Estado de mesa incorrecto (verde/ámbar) aun con cheque abierto
+- **Síntoma:** Dashboard mostraba 0 ocupadas o ámbar incorrecto con mesa en uso en Comandero.
+- **Evidencia de log:** `raw=M2P4 resolved=20061`, `campo mesa sin mapeo al plano: 20061`.
+- **Causa raíz:** El resolver priorizaba id interno (`idmesasistema`) sobre código legible de mesa (`M2P4`), perdiendo el mapeo al plano (`M2`).
+- **Fix aplicado:**
+  - Priorizar código canónico del plano (M/T/TB/BARR) frente a id interno.
+  - Regla de negocio por cheque: abierto no impreso=rojo, abierto impreso=ámbar, pagado=verde.
+  - Selección por fila abierta más reciente por mesa para evitar falsos ámbar.
+  - Mapeo adicional: `B-11..B-18 -> TB1..TB8`.
+- **Estado:** ✅ Resuelto.
+
+### 39. `HTTP 500` en ventas por DDL repetido (`receipt_printed`)
+- **Síntoma:** Respuesta API: `{"error":"Duplicate column name 'receipt_printed'"}`.
+- **Causa raíz:** `api/softrestaurant/sync.php` intentaba `ALTER TABLE ... ADD COLUMN` en cada ciclo.
+- **Fix aplicado:** Guard idempotente con `INFORMATION_SCHEMA.COLUMNS`; solo agregar columna si no existe.
+- **Estado:** ✅ Resuelto.
+
+### 40. SQLSTATE[22007] en `movtoscaja` y `turnos` por comparación datetime
+- **Síntoma:** Errores en `[CAJA]` y `[TURNOS]` con conversión datetime fuera de intervalo.
+- **Causa raíz:** Filtro tipo `fecha > '$ls'` / `cierre > '$ls'` sensible a formato regional/ODBC.
+- **Fix aplicado:** Reemplazo por filtro robusto `YEAR/MONTH/DAY/DATEPART` (comparación por partes).
+- **Estado:** ✅ Resuelto.

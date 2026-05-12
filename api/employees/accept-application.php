@@ -73,7 +73,7 @@ if ($stmt->execute()) {
     $employeeId = $stmt->insert_id;
     
     // Update application status
-    $updateSql = "UPDATE job_applications SET status = 'aceptado' WHERE id = ?";
+    $updateSql = "UPDATE job_applications SET status = 'accepted' WHERE id = ?";
     $updateStmt = $conn->prepare($updateSql);
     $updateStmt->bind_param("i", $appId);
     $updateStmt->execute();

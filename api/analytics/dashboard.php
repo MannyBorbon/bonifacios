@@ -27,7 +27,7 @@ $pageViews = [];
 $totalAppsSql = "SELECT COUNT(*) as total FROM job_applications";
 $totalApps = $conn->query($totalAppsSql)->fetch_assoc()['total'];
 
-$pendingAppsSql = "SELECT COUNT(*) as total FROM job_applications WHERE status = 'Pendiente'";
+$pendingAppsSql = "SELECT COUNT(*) as total FROM job_applications WHERE status = 'pending'";
 $pendingApps = $conn->query($pendingAppsSql)->fetch_assoc()['total'];
 
 $totalUsersSql = "SELECT COUNT(*) as total FROM users WHERE is_active = TRUE";

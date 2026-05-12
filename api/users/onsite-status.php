@@ -59,7 +59,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET') {
 
     if (!$currentUser || strtolower($currentUser['username']) !== 'manuel') {
         http_response_code(403);
-        echo json_encode(['error' => 'Solo Manuel puede actualizar su estado de presencia']);
+        echo json_encode(['success' => false, 'error' => 'Solo Manuel puede actualizar su estado de presencia']);
         $conn->close();
         exit();
     }
@@ -117,6 +117,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET') {
         'onsite' => (bool)$isOnsite,
         'updated_at' => date('Y-m-d H:i:s')
     ]);
+} else {
+    http_response_code(405);
+    echo json_encode(['success' => false, 'error' => 'Método no permitido']);
 }
 
 $conn->close();

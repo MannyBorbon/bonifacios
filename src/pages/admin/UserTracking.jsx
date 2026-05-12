@@ -91,7 +91,7 @@ function SessionCard({ session, defaultOpen = false }) {
   return (
     <div className="rounded-xl border border-cyan-500/15 bg-gradient-to-br from-[#040c1a] to-[#060f20] overflow-hidden">
       {/* Row summary */}
-      <button onClick={toggle} className="w-full text-left p-4 hover:bg-cyan-500/5 transition-all">
+      <button onClick={toggle} className="w-full text-left p-4 hover:bg-cyan-500/5 transition-all touch-manipulation">
         <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
           <span className={`h-2 w-2 rounded-full flex-shrink-0 ${isActive ? 'bg-emerald-400 shadow-[0_0_6px_rgba(52,211,153,0.6)]' : 'bg-neutral-500'}`} />
 
@@ -136,10 +136,10 @@ function SessionCard({ session, defaultOpen = false }) {
               <button
                 key={t.key}
                 onClick={() => setTab(t.key)}
-                className={`px-4 py-2.5 text-xs font-medium transition-all ${
+                className={`px-4 py-3 sm:py-2.5 text-xs font-medium transition-all touch-manipulation min-h-[44px] sm:min-h-0 ${
                   tab === t.key
                     ? 'text-cyan-400 border-b-2 border-cyan-400'
-                    : 'text-slate-500 hover:text-slate-300'
+                    : 'text-slate-500 hover:text-slate-300 active:text-slate-200'
                 }`}
               >
                 {t.label}
@@ -237,7 +237,7 @@ function UserDetailView({ user, onBack }) {
     <div className="space-y-5">
       {/* Back + Header */}
       <div className="flex items-center gap-3">
-        <button onClick={onBack} className="flex items-center gap-1.5 text-cyan-500/70 hover:text-cyan-400 transition-colors text-sm">
+        <button onClick={onBack} className="flex items-center gap-1.5 text-cyan-500/70 hover:text-cyan-400 transition-colors text-sm touch-manipulation min-h-[44px] active:scale-95">
           <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7"/></svg>
           Volver
         </button>
@@ -315,10 +315,10 @@ function UserDetailView({ user, onBack }) {
               type="date"
               value={selectedDate}
               onChange={handleDateChange}
-              className="rounded-lg border border-cyan-500/20 bg-[#030b18]/60 px-3 py-1.5 text-xs text-slate-300 focus:outline-none focus:border-cyan-400/50"
+              className="rounded-lg border border-cyan-500/20 bg-[#030b18]/60 px-3 py-2.5 sm:py-1.5 text-xs text-slate-300 focus:outline-none focus:border-cyan-400/50 min-h-[44px] sm:min-h-0"
             />
             {selectedDate && (
-              <button onClick={() => { setSelectedDate(''); load(null); }} className="text-xs text-cyan-500/50 hover:text-cyan-400 transition-colors">✕ Limpiar</button>
+              <button onClick={() => { setSelectedDate(''); load(null); }} className="text-xs text-cyan-500/50 hover:text-cyan-400 transition-colors touch-manipulation min-h-[44px] sm:min-h-0 flex items-center">✕ Limpiar</button>
             )}
           </div>
         </div>
@@ -448,7 +448,7 @@ function UserTracking() {
           )}
           <button
             onClick={loadDashboard}
-            className="rounded-lg border border-cyan-500/20 bg-[#040c1a]/60 px-3 py-1.5 text-xs text-cyan-400 hover:bg-cyan-500/10 transition-all"
+            className="rounded-lg border border-cyan-500/20 bg-[#040c1a]/60 px-4 py-2.5 sm:px-3 sm:py-1.5 text-xs text-cyan-400 hover:bg-cyan-500/10 transition-all touch-manipulation min-h-[44px] sm:min-h-0 active:scale-95"
           >
             ↻ Actualizar
           </button>
@@ -507,7 +507,7 @@ function UserTracking() {
               <button
                 key={u.id}
                 onClick={() => setSelectedUser(u)}
-                className="rounded-xl border border-cyan-500/15 bg-gradient-to-br from-[#040c1a] to-[#060f20] p-4 text-left hover:border-cyan-400/30 hover:shadow-cyan-500/10 hover:shadow-lg transition-all group"
+                className="rounded-xl border border-cyan-500/15 bg-gradient-to-br from-[#040c1a] to-[#060f20] p-4 text-left hover:border-cyan-400/30 hover:shadow-cyan-500/10 hover:shadow-lg transition-all group touch-manipulation active:scale-[0.98]"
               >
                 {/* Card Header */}
                 <div className="flex items-center gap-3 mb-3">

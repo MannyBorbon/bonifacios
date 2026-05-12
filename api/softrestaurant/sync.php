@@ -5,64 +5,136 @@
  */
 
 require_once '../config/database.php';
-header('Content-Type: application/json');
+require_once __DIR__ . '/../lib/table_venue_codes.php';
+header('Content-Type: application/json; charset=utf-8');
 
-// Verificar API Key (compatible con diferentes configuraciones de servidor)
+$srSyncAllowedModules = [
+    'products',
+    'employees',
+    'tables',
+    'reservations',
+    'sales',
+    'cheque_payments',
+    'cash_movements',
+    'inventory',
+    'attendance',
+    'cancellations',
+    'ticket_items',
+    'shifts',
+    'pos_table_states',
+];
+
+$method = $_SERVER['REQUEST_METHOD'] ?? '';
+if ($method !== 'POST') {
+    http_response_code(405);
+    echo json_encode(['success' => false, 'error' => 'Método no permitido']);
+    exit;
+}
+
+$expectedKey = trim((string) envOrDefault('SR_SYNC_API_KEY', ''));
+if ($expectedKey === '') {
+    // Fallback de compatibilidad para hosting compartido donde .env no se carga.
+    // Debe coincidir con API_KEY del cliente (softrestaurant-sync/sync-v3.php).
+    $expectedKey = 'bonifacios-sr-sync-2024-secret-key';
+}
+
 $apiKey = '';
 if (function_exists('getallheaders')) {
     $headers = getallheaders();
-    $apiKey = $headers['X-API-Key'] ?? $headers['X-Api-Key'] ?? '';
+    if (is_array($headers)) {
+        foreach ($headers as $k => $v) {
+            if (strcasecmp((string) $k, 'X-API-Key') === 0) {
+                $apiKey = (string) $v;
+                break;
+            }
+        }
+    }
 }
-if (empty($apiKey)) {
-    $apiKey = $_SERVER['HTTP_X_API_KEY'] ?? '';
+if ($apiKey === '') {
+    $apiKey = (string) ($_SERVER['HTTP_X_API_KEY'] ?? '');
 }
 
-if ($apiKey !== 'bonifacios-sr-sync-2024-secret-key') {
+if (!hash_equals($expectedKey, $apiKey)) {
     http_response_code(401);
-    echo json_encode([
-        'error' => 'API Key inválida',
-        'received' => $apiKey,
-        'debug' => 'Check X-API-Key header'
-    ]);
+    echo json_encode(['success' => false, 'error' => 'No autorizado']);
     exit;
 }
 
-$method = $_SERVER['REQUEST_METHOD'];
-
-if ($method !== 'POST') {
-    http_response_code(405);
-    echo json_encode(['error' => 'Método no permitido']);
+$rawBody = file_get_contents('php://input');
+$input = json_decode($rawBody !== false && $rawBody !== '' ? $rawBody : 'null', true);
+if (!is_array($input)) {
+    http_response_code(400);
+    echo json_encode(['success' => false, 'error' => 'JSON inválido o vacío']);
     exit;
 }
+
+$module = trim((string) ($input['module'] ?? ''));
+$data = $input['data'] ?? null;
+if (!is_array($data)) {
+    $data = [];
+}
+
+if ($module === '' || $data === []) {
+    http_response_code(400);
+    echo json_encode(['success' => false, 'error' => 'Módulo y datos requeridos']);
+    exit;
+}
+
+if (!in_array($module, $srSyncAllowedModules, true)) {
+    http_response_code(400);
+    echo json_encode(['success' => false, 'error' => 'Módulo no reconocido']);
+    exit;
+}
+
+$logId = null;
+$conn = null;
 
 try {
     $conn = getConnection();
 
-    $input = json_decode(file_get_contents('php://input'), true);
-    
-    $module = $input['module'] ?? '';
-    $data = $input['data'] ?? [];
-    $syncDatetime = $input['sync_datetime'] ?? date('Y-m-d H:i:s');
-    
-    if (empty($module) || empty($data)) {
-        http_response_code(400);
-        echo json_encode(['error' => 'Módulo y datos requeridos']);
-        exit;
-    }
-    
+    // Asegurar que sr_sync_log existe antes de usarla
+    $conn->query("CREATE TABLE IF NOT EXISTS sr_sync_log (
+        id INT UNSIGNED NOT NULL AUTO_INCREMENT,
+        module_name VARCHAR(64) NOT NULL,
+        sync_started_at DATETIME NOT NULL,
+        sync_finished_at DATETIME NULL,
+        records_processed INT NOT NULL DEFAULT 0,
+        records_inserted INT NOT NULL DEFAULT 0,
+        records_updated INT NOT NULL DEFAULT 0,
+        records_failed INT NOT NULL DEFAULT 0,
+        status ENUM('running','completed','failed') NOT NULL DEFAULT 'running',
+        error_details TEXT NULL,
+        PRIMARY KEY (id),
+        KEY idx_module (module_name),
+        KEY idx_started (sync_started_at)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+
+    // Asegurar que sr_sync_config existe
+    $conn->query("CREATE TABLE IF NOT EXISTS sr_sync_config (
+        module_name VARCHAR(64) NOT NULL,
+        last_sync_at DATETIME NULL,
+        sync_status VARCHAR(32) NULL DEFAULT 'idle',
+        records_synced INT NOT NULL DEFAULT 0,
+        PRIMARY KEY (module_name)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
+
     // Iniciar log de sincronización
     $logStmt = $conn->prepare("
         INSERT INTO sr_sync_log (module_name, sync_started_at, status)
         VALUES (?, NOW(), 'running')
     ");
+    if ($logStmt === false) {
+        throw new RuntimeException('prepare sr_sync_log failed: ' . $conn->error);
+    }
     $logStmt->bind_param("s", $module);
     $logStmt->execute();
-    $logId = $logStmt->insert_id;
+    $logId = (int) $logStmt->insert_id;
     
     $inserted = 0;
     $updated = 0;
     $failed = 0;
-    
+    $lastSyncError = null;
+
     // Procesar según el módulo
     switch ($module) {
         case 'products':
@@ -83,6 +155,10 @@ try {
             
         case 'sales':
             list($inserted, $updated, $failed, $lastSyncError) = syncSales($conn, $data);
+            break;
+
+        case 'cheque_payments':
+            list($inserted, $updated, $failed) = syncChequePayments($conn, $data);
             break;
             
         case 'cash_movements':
@@ -108,39 +184,45 @@ try {
         case 'shifts':
             list($inserted, $updated, $failed) = syncShifts($conn, $data);
             break;
-            
+
+        case 'pos_table_states':
+            list($inserted, $updated, $failed) = syncPosTableLiveStates($conn, $data);
+            break;
+
         default:
-            http_response_code(400);
-            echo json_encode(['error' => 'Módulo no reconocido']);
-            exit;
+            throw new RuntimeException('Módulo no implementado en el servidor');
     }
     
     // Actualizar log de sincronización
     $status = $failed > 0 ? 'failed' : 'completed';
-    $updateLogStmt = $conn->prepare("
-        UPDATE sr_sync_log 
-        SET sync_finished_at = NOW(),
-            records_processed = ?,
-            records_inserted = ?,
-            records_updated = ?,
-            records_failed = ?,
-            status = ?
-        WHERE id = ?
-    ");
     $totalProcessed = $inserted + $updated + $failed;
-    $updateLogStmt->bind_param("iiiisi", $totalProcessed, $inserted, $updated, $failed, $status, $logId);
-    $updateLogStmt->execute();
-    
-    // Actualizar configuración del módulo
-    $updateConfigStmt = $conn->prepare("
-        UPDATE sr_sync_config 
-        SET last_sync_at = NOW(),
-            sync_status = 'success',
-            records_synced = ?
-        WHERE module_name = ?
+    if ($logId > 0) {
+        $updateLogStmt = $conn->prepare("
+            UPDATE sr_sync_log
+            SET sync_finished_at = NOW(),
+                records_processed = ?,
+                records_inserted = ?,
+                records_updated = ?,
+                records_failed = ?,
+                status = ?
+            WHERE id = ?
+        ");
+        if ($updateLogStmt !== false) {
+            $updateLogStmt->bind_param("iiiisi", $totalProcessed, $inserted, $updated, $failed, $status, $logId);
+            $updateLogStmt->execute();
+        }
+    }
+
+    // Upsert configuración del módulo
+    $upsertConfigStmt = $conn->prepare("
+        INSERT INTO sr_sync_config (module_name, last_sync_at, sync_status, records_synced)
+        VALUES (?, NOW(), 'success', ?)
+        ON DUPLICATE KEY UPDATE last_sync_at = NOW(), sync_status = 'success', records_synced = ?
     ");
-    $updateConfigStmt->bind_param("is", $totalProcessed, $module);
-    $updateConfigStmt->execute();
+    if ($upsertConfigStmt !== false) {
+        $upsertConfigStmt->bind_param("sii", $module, $totalProcessed, $totalProcessed);
+        $upsertConfigStmt->execute();
+    }
     
     $resp = [
         'success'  => true,
@@ -150,15 +232,29 @@ try {
         'failed'   => $failed,
         'total'    => $totalProcessed,
     ];
-    if (!empty($lastSyncError)) $resp['last_error'] = $lastSyncError;
+    if (!empty($lastSyncError)) {
+        $resp['last_error'] = $lastSyncError;
+    }
     echo json_encode($resp);
-    
-} catch (Exception $e) {
+} catch (Throwable $e) {
+    $errMsg = $e->getMessage();
+    error_log('[sr_sync] ' . $errMsg . ' in ' . $e->getFile() . ':' . $e->getLine());
     http_response_code(500);
-    echo json_encode(['error' => $e->getMessage()]);
+    if ($conn instanceof mysqli && $logId > 0) {
+        $failStmt = $conn->prepare(
+            "UPDATE sr_sync_log SET sync_finished_at = NOW(), status = 'failed', error_details = ? WHERE id = ? AND status = 'running'"
+        );
+        if ($failStmt) {
+            $failStmt->bind_param('si', $errMsg, $logId);
+            $failStmt->execute();
+        }
+    }
+    echo json_encode(['success' => false, 'error' => $errMsg]);
+} finally {
+    if ($conn instanceof mysqli) {
+        $conn->close();
+    }
 }
-
-$conn->close();
 
 // ── FUNCIONES DE SINCRONIZACIÓN ────────────────────────────
 
@@ -240,18 +336,32 @@ function syncEmployees($conn, $employees) {
     
     foreach ($employees as $e) {
         try {
+            $srEmployeeId = (string)($e['sr_employee_id'] ?? $e['employee_id'] ?? '');
+            $employeeCode = (string)($e['employee_code'] ?? $e['internal_id'] ?? $srEmployeeId);
+            $fullName = (string)($e['full_name'] ?? $e['name'] ?? $e['employee_name'] ?? '');
+            $position = isset($e['position']) ? (string)$e['position'] : ((((string)($e['type'] ?? '')) === '1') ? 'Mesero' : '');
+            $department = (string)($e['department'] ?? 'Servicio');
+            $isWaiter = (string)(((int)($e['is_waiter'] ?? 1)) === 1 ? '1' : '0');
+            $isActive = ((int)($e['is_active'] ?? $e['visible'] ?? 1)) === 1 ? 1 : 0;
+            $hireDate = (string)($e['hire_date'] ?? date('Y-m-d'));
+            $phone = (string)($e['phone'] ?? '');
+            $email = (string)($e['email'] ?? '');
+            $commissionRate = floatval($e['commission_rate'] ?? 0);
+            if ($srEmployeeId === '' || $fullName === '') {
+                continue;
+            }
             $stmt->bind_param("ssssssisssd",
-                $e['sr_employee_id'],
-                $e['employee_code'],
-                $e['full_name'],
-                $e['position'],
-                $e['department'],
-                $e['is_waiter'],
-                $e['is_active'],
-                $e['hire_date'],
-                $e['phone'],
-                $e['email'],
-                $e['commission_rate']
+                $srEmployeeId,
+                $employeeCode,
+                $fullName,
+                $position,
+                $department,
+                $isWaiter,
+                $isActive,
+                $hireDate,
+                $phone,
+                $email,
+                $commissionRate
             );
             $stmt->execute();
             
@@ -374,20 +484,43 @@ function syncReservations($conn, $reservations) {
     return [$inserted, $updated, $failed];
 }
 
+/**
+ * Normaliza status enviado por scripts de sync (evita forzar 'open' si llega Pagado/paid/1).
+ */
+function normalize_sr_sale_status($status) {
+    if ($status === true) {
+        return 'closed';
+    }
+    if ($status === false || $status === null) {
+        return 'open';
+    }
+    if (is_int($status) || is_float($status)) {
+        return ((int) $status) === 1 ? 'closed' : 'open';
+    }
+    $s = strtolower(trim((string) $status));
+    if ($s === '1' || in_array($s, ['closed', 'cerrado', 'cerrada', 'cobrado', 'pagado', 'paid'], true)) {
+        return 'closed';
+    }
+    if (in_array($s, ['cancelled', 'canceled', 'cancelado'], true)) {
+        return 'cancelled';
+    }
+    if (in_array($s, ['open', 'abierto', 'pending', '0'], true)) {
+        return 'open';
+    }
+    return 'open';
+}
+
 function syncSales($conn, $sales) {
     $inserted  = 0;
     $updated   = 0;
     $failed    = 0;
     $lastError = null;
 
-    // Asegurarse de que autocommit esté activo (sin transacciones pendientes)
-    $conn->autocommit(true);
+    // receipt_printed ya existe en el schema; no ejecutar INFORMATION_SCHEMA por cada llamada
 
     foreach ($sales as $sale) {
         try {
-            $status = $sale['status'] ?? 'open';
-            if ($status === 'canceled') $status = 'cancelled';
-            if (!in_array($status, ['open', 'closed', 'cancelled'])) $status = 'open';
+            $status = normalize_sr_sale_status($sale['status'] ?? 'open');
 
             $rawSrId     = trim((string)($sale['sr_ticket_id'] ?? $sale['folio'] ?? $sale['ticket_number'] ?? ''));
             if ($rawSrId === '') {
@@ -398,7 +531,16 @@ function syncSales($conn, $sales) {
             $folio       = $conn->escape_string($sale['folio']          ?? $sale['ticket_number'] ?? '');
             $saleDate    = $conn->escape_string($sale['sale_date']      ?? '');
             $saleTime    = $conn->escape_string($sale['sale_time']      ?? '');
-            $saleDt      = $conn->escape_string($sale['sale_datetime']  ?? '');
+            // sale_datetime vacío rompe filtros BETWEEN en sales.php / phpMyAdmin; derivar de fecha+hora SR.
+            $saleDtRaw = trim((string) ($sale['sale_datetime'] ?? ''));
+            if ($saleDtRaw === '') {
+                $sd = trim((string) ($sale['sale_date'] ?? ''));
+                $stRaw = trim((string) ($sale['sale_time'] ?? ''));
+                if ($sd !== '') {
+                    $saleDtRaw = $stRaw !== '' ? ($sd . ' ' . $stRaw) : ($sd . ' 00:00:00');
+                }
+            }
+            $saleDt      = $conn->escape_string($saleDtRaw);
             $tableNum    = $conn->escape_string($sale['table_number']   ?? '');
             $waiterName  = $conn->escape_string($sale['waiter_name']    ?? '');
             $payType     = $conn->escape_string($sale['payment_type']   ?? 'pending');
@@ -419,6 +561,8 @@ function syncSales($conn, $sales) {
             $other   = floatval($sale['other_amount']  ?? 0);
 
             $tipPaid = intval($sale['tip_paid'] ?? 0);
+            $receiptPrinted = intval($sale['receipt_printed'] ?? 0);
+            $receiptPrinted = $receiptPrinted === 1 ? 1 : 0;
 
             $sql = "INSERT INTO sr_sales (
                         sr_ticket_id, ticket_number, folio,
@@ -427,6 +571,7 @@ function syncSales($conn, $sales) {
                         subtotal, tax, discount, tip, tip_paid, total,
                         status, payment_type,
                         cash_amount, card_amount, voucher_amount, other_amount,
+                        receipt_printed,
                         opened_at, closed_at
                     ) VALUES (
                         '$srId', '$ticketNum', '$folio',
@@ -435,6 +580,7 @@ function syncSales($conn, $sales) {
                         $sub, $tax, $disc, $tip, $tipPaid, $total,
                         '$status', '$payType',
                         $cash, $card, $voucher, $other,
+                        $receiptPrinted,
                         '$openedAt', $closedAtVal
                     )
                     ON DUPLICATE KEY UPDATE
@@ -452,17 +598,67 @@ function syncSales($conn, $sales) {
                         tip             = VALUES(tip),
                         tip_paid        = VALUES(tip_paid),
                         total           = VALUES(total),
-                        status          = VALUES(status),
-                        payment_type    = VALUES(payment_type),
-                        cash_amount     = VALUES(cash_amount),
-                        card_amount     = VALUES(card_amount),
-                        voucher_amount  = VALUES(voucher_amount),
-                        other_amount    = VALUES(other_amount),
+                        status          = CASE
+                            WHEN (
+                                (
+                                    LOWER(COALESCE(sr_sales.status,'')) IN ('closed','cerrado','cobrado','pagado','paid')
+                                    OR COALESCE(sr_sales.cash_amount,0)+COALESCE(sr_sales.card_amount,0)+COALESCE(sr_sales.voucher_amount,0)+COALESCE(sr_sales.other_amount,0) > 0.005
+                                    OR sr_sales.closed_at IS NOT NULL
+                                    OR LOWER(TRIM(COALESCE(sr_sales.payment_type,''))) NOT IN ('','pending','open','abierto')
+                                )
+                                AND (
+                                    LOWER(COALESCE(VALUES(status),'')) IN ('open','abierto','pending')
+                                    AND COALESCE(VALUES(cash_amount),0)+COALESCE(VALUES(card_amount),0)+COALESCE(VALUES(voucher_amount),0)+COALESCE(VALUES(other_amount),0) <= 0.005
+                                    AND (VALUES(closed_at) IS NULL OR VALUES(closed_at) = '0000-00-00 00:00:00')
+                                    AND LOWER(TRIM(COALESCE(VALUES(payment_type),''))) IN ('','pending','open','abierto')
+                                )
+                            ) THEN sr_sales.status
+                            ELSE VALUES(status)
+                        END,
+                        payment_type    = CASE
+                            WHEN (
+                                (
+                                    LOWER(COALESCE(sr_sales.status,'')) IN ('closed','cerrado','cobrado','pagado','paid')
+                                    OR COALESCE(sr_sales.cash_amount,0)+COALESCE(sr_sales.card_amount,0)+COALESCE(sr_sales.voucher_amount,0)+COALESCE(sr_sales.other_amount,0) > 0.005
+                                    OR sr_sales.closed_at IS NOT NULL
+                                    OR LOWER(TRIM(COALESCE(sr_sales.payment_type,''))) NOT IN ('','pending','open','abierto')
+                                )
+                                AND (
+                                    LOWER(COALESCE(VALUES(status),'')) IN ('open','abierto','pending')
+                                    AND COALESCE(VALUES(cash_amount),0)+COALESCE(VALUES(card_amount),0)+COALESCE(VALUES(voucher_amount),0)+COALESCE(VALUES(other_amount),0) <= 0.005
+                                    AND (VALUES(closed_at) IS NULL OR VALUES(closed_at) = '0000-00-00 00:00:00')
+                                    AND LOWER(TRIM(COALESCE(VALUES(payment_type),''))) IN ('','pending','open','abierto')
+                                )
+                            ) THEN sr_sales.payment_type
+                            ELSE VALUES(payment_type)
+                        END,
+                        cash_amount     = GREATEST(COALESCE(sr_sales.cash_amount,0), COALESCE(VALUES(cash_amount),0)),
+                        card_amount     = GREATEST(COALESCE(sr_sales.card_amount,0), COALESCE(VALUES(card_amount),0)),
+                        voucher_amount  = GREATEST(COALESCE(sr_sales.voucher_amount,0), COALESCE(VALUES(voucher_amount),0)),
+                        other_amount    = GREATEST(COALESCE(sr_sales.other_amount,0), COALESCE(VALUES(other_amount),0)),
+                        receipt_printed = VALUES(receipt_printed),
                         opened_at       = VALUES(opened_at),
-                        closed_at       = VALUES(closed_at)";
+                        closed_at       = CASE
+                            WHEN sr_sales.closed_at IS NOT NULL AND (VALUES(closed_at) IS NULL OR VALUES(closed_at) = '0000-00-00 00:00:00')
+                                THEN sr_sales.closed_at
+                            ELSE VALUES(closed_at)
+                        END";
 
             if ($conn->query($sql) === false) {
                 throw new Exception($conn->error);
+            }
+
+            // Limpiar pos_table_live_state cuando la cuenta se cierra
+            if ($status === 'closed') {
+                $venueCode = bonifacios_table_canonical_venue_code($tableNum);
+                if ($venueCode !== null && $venueCode !== '') {
+                    $clearPos = $conn->prepare('DELETE FROM pos_table_live_state WHERE table_code = ?');
+                    if ($clearPos) {
+                        $clearPos->bind_param('s', $venueCode);
+                        $clearPos->execute();
+                        $clearPos->close();
+                    }
+                }
             }
 
             $affectedRows = $conn->affected_rows;
@@ -488,6 +684,205 @@ function syncSales($conn, $sales) {
     }
 
     return [$inserted, $updated, $failed, $lastError];
+}
+
+/**
+ * Líneas de chequespagos (SR) → sr_cheque_payments para desglose real en dashboard.
+ * @return array{0:int,1:int,2:int}
+ */
+function syncChequePayments($conn, $rows) {
+    $inserted = 0;
+    $updated  = 0;
+    $failed   = 0;
+    $folioAgg = [];
+
+    try {
+        $conn->query(
+            'CREATE TABLE IF NOT EXISTS sr_cheque_payments (
+              id INT UNSIGNED NOT NULL AUTO_INCREMENT,
+              folio VARCHAR(64) NOT NULL,
+              line_id VARCHAR(96) NOT NULL,
+              id_forma_pago VARCHAR(32) NOT NULL DEFAULT \'\',
+              amount DECIMAL(14,4) NOT NULL DEFAULT 0.0000,
+              reference VARCHAR(255) NULL,
+              payment_datetime DATETIME NULL,
+              created_at TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP,
+              updated_at TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+              PRIMARY KEY (id),
+              UNIQUE KEY uq_sr_cheque_payments_line (line_id),
+              KEY idx_sr_cheque_payments_folio (folio),
+              KEY idx_sr_cheque_payments_dt (payment_datetime)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci'
+        );
+    } catch (Throwable $e) {
+        // DDL idempotente
+    }
+
+    $stmt = $conn->prepare(
+        'INSERT INTO sr_cheque_payments (folio, line_id, id_forma_pago, amount, reference, payment_datetime)
+         VALUES (?,?,?,?,?,?)
+         ON DUPLICATE KEY UPDATE
+            id_forma_pago = VALUES(id_forma_pago),
+            amount = VALUES(amount),
+            reference = VALUES(reference),
+            payment_datetime = VALUES(payment_datetime)'
+    );
+    if (!$stmt) {
+        return [0, 0, count($rows)];
+    }
+
+    foreach ($rows as $r) {
+        try {
+            $folio = trim((string)($r['folio'] ?? ''));
+            $lineId = trim((string)($r['line_id'] ?? ''));
+            $idForma = trim((string)($r['id_forma_pago'] ?? $r['idformadepago'] ?? ''));
+            $amount  = floatval($r['amount'] ?? $r['importe'] ?? 0);
+            $ref     = trim((string)($r['reference'] ?? $r['referencia'] ?? ''));
+            $payDt   = trim((string)($r['payment_datetime'] ?? ''));
+
+            if ($lineId === '' && $folio !== '') {
+                $lineId = $folio . '|' . $idForma . '|' . number_format($amount, 4, '.', '') . '|' . ($payDt !== '' ? $payDt : date('Y-m-d H:i:s'));
+            }
+
+            if ($folio === '' || $lineId === '' || abs($amount) < 0.00001) {
+                continue;
+            }
+            if ($payDt === '') {
+                $payDt = date('Y-m-d H:i:s');
+            }
+
+            $stmt->bind_param(
+                'sssdss',
+                $folio,
+                $lineId,
+                $idForma,
+                $amount,
+                $ref,
+                $payDt
+            );
+            if (!$stmt->execute()) {
+                throw new Exception($stmt->error);
+            }
+            $folioKey = trim(str_replace('#', '', $folio));
+            if ($folioKey !== '') {
+                if (!isset($folioAgg[$folioKey])) {
+                    $folioAgg[$folioKey] = [
+                        'cash' => 0.0,
+                        'card' => 0.0,
+                        'voucher' => 0.0,
+                        'other' => 0.0,
+                        'max_dt' => $payDt,
+                    ];
+                }
+                $bucket = mapChequePaymentBucket($idForma, $ref);
+                if (!isset($folioAgg[$folioKey][$bucket])) {
+                    $bucket = 'other';
+                }
+                $folioAgg[$folioKey][$bucket] += $amount;
+                if ($payDt > $folioAgg[$folioKey]['max_dt']) {
+                    $folioAgg[$folioKey]['max_dt'] = $payDt;
+                }
+            }
+            $ar = $stmt->affected_rows;
+            if ($ar === 1) {
+                $inserted++;
+            } elseif ($ar === 2 || $ar === 0) {
+                $updated++;
+            }
+        } catch (Throwable $e) {
+            $failed++;
+            error_log('syncChequePayments: ' . $e->getMessage());
+        }
+    }
+
+    $stmt->close();
+    if (!empty($folioAgg)) {
+        applyChequePaymentAggregatesToSales($conn, $folioAgg);
+    }
+    return [$inserted, $updated, $failed];
+}
+
+function mapChequePaymentBucket($rawId, $reference = '') {
+    $txt = strtolower(trim((string)$rawId . ' ' . (string)$reference));
+    $idf = strtolower(trim((string)$rawId));
+    if ($idf === 'efectivo' || $idf === 'cash' || $idf === 'contado') {
+        return 'cash';
+    }
+    if (str_contains($txt, 'tarjeta') || str_contains($txt, 'card') || $idf === 'tc' || $idf === 'td'
+        || str_contains($txt, 'visa') || str_contains($txt, 'master') || str_contains($txt, 'amex')
+        || str_contains($txt, 'credito') || str_contains($txt, 'debito')) {
+        return 'card';
+    }
+    if (str_contains($txt, 'vale') || $idf === 'voucher') {
+        return 'voucher';
+    }
+    $v = (float)preg_replace('/[^\d.\-]/', '', (string)$rawId);
+    if (abs($v - 1) < 0.05) return 'cash';
+    if (abs($v - 2) < 0.05) return 'card';
+    if (abs($v - 3) < 0.05) return 'voucher';
+    return 'other';
+}
+
+function paymentTypeFromAggregates($cash, $card, $voucher, $other) {
+    $parts = 0;
+    if ($cash > 0.005) $parts++;
+    if ($card > 0.005) $parts++;
+    if ($voucher > 0.005) $parts++;
+    if ($other > 0.005) $parts++;
+    if ($parts <= 0) return 'pending';
+    if ($parts > 1) return 'mixed';
+    if ($card > 0.005) return 'card';
+    if ($voucher > 0.005) return 'voucher';
+    if ($other > 0.005) return 'transfer';
+    return 'cash';
+}
+
+function applyChequePaymentAggregatesToSales($conn, $folioAgg) {
+    $sql = "UPDATE sr_sales
+            SET cash_amount = ?,
+                card_amount = ?,
+                voucher_amount = ?,
+                other_amount = ?,
+                status = 'closed',
+                payment_type = ?,
+                closed_at = CASE
+                    WHEN closed_at IS NULL OR closed_at < ? THEN ?
+                    ELSE closed_at
+                END
+            WHERE REPLACE(TRIM(COALESCE(sr_ticket_id,'')), '#', '') = ?
+               OR REPLACE(TRIM(COALESCE(folio,'')), '#', '') = ?
+               OR REPLACE(TRIM(COALESCE(ticket_number,'')), '#', '') = ?";
+    $stmt = $conn->prepare($sql);
+    if (!$stmt) {
+        return;
+    }
+    foreach ($folioAgg as $folioKey => $a) {
+        $cash = (float)($a['cash'] ?? 0);
+        $card = (float)($a['card'] ?? 0);
+        $voucher = (float)($a['voucher'] ?? 0);
+        $other = (float)($a['other'] ?? 0);
+        $ptype = paymentTypeFromAggregates($cash, $card, $voucher, $other);
+        $closedAt = trim((string)($a['max_dt'] ?? ''));
+        if ($closedAt === '') {
+            $closedAt = date('Y-m-d H:i:s');
+        }
+        $match = (string)$folioKey;
+        $stmt->bind_param(
+            'ddddsssss',
+            $cash,
+            $card,
+            $voucher,
+            $other,
+            $ptype,
+            $closedAt,
+            $closedAt,
+            $match,
+            $match,
+            $match
+        );
+        $stmt->execute();
+    }
+    $stmt->close();
 }
 
 function syncSaleItems($conn, $saleId, $items, $srTicketId = null) {
@@ -907,6 +1302,100 @@ function syncCancellationsData($conn, $cancellations) {
             $stmtMarkCancelled->bind_param('s', $ticketNumber);
             $stmtMarkCancelled->execute();
 
+        } catch (Exception $e) {
+            $failed++;
+        }
+    }
+
+    return [$inserted, $updated, $failed];
+}
+
+/**
+ * Sincroniza estado POS por mesa (mapa de reservaciones / dashboard).
+ * Payload: array de { table_code: 'M1'|'T17'|..., state: 'free'|'open_ticket'|'printed_unpaid' }
+ * Alineado con api/reservations/pos-table-state.php y assign-table.php (códigos SR).
+ */
+function bonifacios_sr_pos_table_code_valid(string $c): bool
+{
+    $c = strtoupper(trim($c));
+    if ($c === '') {
+        return false;
+    }
+    if (preg_match('/^(CD|TA|TB)-\d+$/', $c)) {
+        return true;
+    }
+    if (preg_match('/^M([1-9]|1[0-1])$/', $c)) {
+        return true;
+    }
+    if (preg_match('/^T(1[6-9]|2[0-2])$/', $c)) {
+        return true;
+    }
+    if (preg_match('/^TB[1-8]$/', $c)) {
+        return true;
+    }
+    if (preg_match('/^BARR-I[1-5]$/', $c) || preg_match('/^BARR-E[1-5]$/', $c)) {
+        return true;
+    }
+
+    return false;
+}
+
+function syncPosTableLiveStates($conn, $data)
+{
+    require_once __DIR__ . '/../lib/table_venue_codes.php';
+
+    $inserted = 0;
+    $updated = 0;
+    $failed = 0;
+
+    try {
+        $conn->query("CREATE TABLE IF NOT EXISTS pos_table_live_state (
+            table_code VARCHAR(32) NOT NULL,
+            state ENUM('free','open_ticket','printed_unpaid') NOT NULL DEFAULT 'free',
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+            PRIMARY KEY (table_code)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
+    } catch (Exception $e) {
+        // ignorar si no hay permiso; el resto fallará de forma visible
+    }
+
+    $stmtDel = $conn->prepare('DELETE FROM pos_table_live_state WHERE table_code = ?');
+    $stmtUp = $conn->prepare(
+        'INSERT INTO pos_table_live_state (table_code, state) VALUES (?, ?)
+         ON DUPLICATE KEY UPDATE state = VALUES(state), updated_at = CURRENT_TIMESTAMP'
+    );
+
+    foreach ($data as $row) {
+        if (!is_array($row)) {
+            $failed++;
+            continue;
+        }
+        $rawCode = strtoupper(trim((string) ($row['table_code'] ?? '')));
+        $code = bonifacios_table_canonical_venue_code($rawCode) ?? $rawCode;
+        $state = trim((string) ($row['state'] ?? ''));
+        if (!bonifacios_sr_pos_table_code_valid($code) || !in_array($state, ['free', 'open_ticket', 'printed_unpaid'], true)) {
+            $failed++;
+            continue;
+        }
+        try {
+            if ($state === 'free') {
+                $stmtDel->bind_param('s', $code);
+                $stmtDel->execute();
+                if ($stmtDel->affected_rows > 0) {
+                    $updated++;
+                }
+            } else {
+                $stmtUp->bind_param('ss', $code, $state);
+                $stmtUp->execute();
+                $ar = $stmtUp->affected_rows;
+                if ($ar === 1) {
+                    $inserted++;
+                } elseif ($ar === 2) {
+                    $updated++;
+                } else {
+                    $inserted++;
+                }
+            }
         } catch (Exception $e) {
             $failed++;
         }

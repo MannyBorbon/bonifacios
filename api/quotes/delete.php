@@ -8,18 +8,27 @@ header('Content-Type: application/json');
 
 try {
     $userId = requireAuth();
+
+    if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+        http_response_code(405);
+        echo json_encode(['success' => false, 'error' => 'Método no permitido']);
+        exit;
+    }
+
     $conn = getConnection();
-    
-    // Check if user is admin
+
+    // Check if user is admin (rol real en BD: administrador / variantes legacy)
     $userStmt = $conn->prepare("SELECT role FROM users WHERE id = ?");
     $userStmt->bind_param("i", $userId);
     $userStmt->execute();
     $userResult = $userStmt->get_result();
     $user = $userResult->fetch_assoc();
-    
-    if ($user['role'] !== 'admin') {
+
+    $role = strtolower((string)($user['role'] ?? ''));
+    if (!in_array($role, ['administrador', 'admin', 'superadmin'], true)) {
         http_response_code(403);
-        echo json_encode(['error' => 'Only administrators can delete quotes']);
+        echo json_encode(['success' => false, 'error' => 'Only administrators can delete quotes']);
+        $conn->close();
         exit;
     }
     
@@ -27,7 +36,8 @@ try {
     $quoteId = isset($_GET['id']) ? intval($_GET['id']) : 0;
     if (!$quoteId) {
         http_response_code(400);
-        echo json_encode(['error' => 'Quote ID is required']);
+        echo json_encode(['success' => false, 'error' => 'Quote ID is required']);
+        $conn->close();
         exit;
     }
     
@@ -39,7 +49,8 @@ try {
     
     if ($checkResult->num_rows === 0) {
         http_response_code(404);
-        echo json_encode(['error' => 'Quote not found']);
+        echo json_encode(['success' => false, 'error' => 'Quote not found']);
+        $conn->close();
         exit;
     }
     
@@ -58,8 +69,10 @@ try {
     
 } catch (Exception $e) {
     http_response_code(500);
-    echo json_encode(['error' => $e->getMessage()]);
+    echo json_encode(['success' => false, 'error' => $e->getMessage()]);
 }
 
-$conn->close();
+if (isset($conn) && $conn instanceof mysqli) {
+    $conn->close();
+}
 ?>

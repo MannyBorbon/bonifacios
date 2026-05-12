@@ -26,7 +26,7 @@ function AdminLogin() {
   };
 
   return (
-    <div className="min-h-screen bg-[#030712] bg-gradient-to-br from-[#030712] via-[#060d1f] to-[#030b18] flex items-center justify-center px-6">
+    <div className="min-h-[100dvh] sm:min-h-screen bg-[#030712] bg-gradient-to-br from-[#030712] via-[#060d1f] to-[#030b18] flex items-center justify-center px-4 sm:px-6 pb-[env(safe-area-inset-bottom)]">
       <div className="absolute inset-0 bg-[url('data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iNDAiIGhlaWdodD0iNDAiIHhtbG5zPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2ZyI+PGRlZnM+PHBhdHRlcm4gaWQ9ImdyaWQiIHdpZHRoPSI0MCIgaGVpZ2h0PSI0MCIgcGF0dGVyblVuaXRzPSJ1c2VyU3BhY2VPblVzZSI+PHBhdGggZD0iTSA0MCAwIEwgMCAwIDAgNDAiIGZpbGw9Im5vbmUiIHN0cm9rZT0icmdiYSgzNCwyMTEsMjM4LDAuMDQpIiBzdHJva2Utd2lkdGg9IjEiLz48L3BhdHRlcm4+PC9kZWZzPjxyZWN0IHdpZHRoPSIxMDAlIiBoZWlnaHQ9IjEwMCUiIGZpbGw9InVybCgjZ3JpZCkiLz48L3N2Zz4=')] opacity-100" />
       
       <div className="relative w-full max-w-md">
@@ -53,7 +53,7 @@ function AdminLogin() {
                 id="username"
                 value={formData.username}
                 onChange={(e) => setFormData({ ...formData, username: e.target.value })}
-                className="w-full rounded-lg border border-cyan-500/20 bg-[#030b18]/60 px-4 py-3 text-slate-200 backdrop-blur-sm transition-all focus:border-cyan-400/50 focus:outline-none focus:ring-2 focus:ring-cyan-500/20 placeholder:text-slate-600"
+                className="w-full rounded-lg border border-cyan-500/20 bg-[#030b18]/60 px-4 py-3.5 sm:py-3 text-slate-200 backdrop-blur-sm transition-all focus:border-cyan-400/50 focus:outline-none focus:ring-2 focus:ring-cyan-500/20 placeholder:text-slate-600 min-h-[48px]"
                 required
               />
             </div>
@@ -67,7 +67,7 @@ function AdminLogin() {
                 id="password"
                 value={formData.password}
                 onChange={(e) => setFormData({ ...formData, password: e.target.value })}
-                className="w-full rounded-lg border border-cyan-500/20 bg-[#030b18]/60 px-4 py-3 text-slate-200 backdrop-blur-sm transition-all focus:border-cyan-400/50 focus:outline-none focus:ring-2 focus:ring-cyan-500/20 placeholder:text-slate-600"
+                className="w-full rounded-lg border border-cyan-500/20 bg-[#030b18]/60 px-4 py-3.5 sm:py-3 text-slate-200 backdrop-blur-sm transition-all focus:border-cyan-400/50 focus:outline-none focus:ring-2 focus:ring-cyan-500/20 placeholder:text-slate-600 min-h-[48px]"
                 required
               />
             </div>
@@ -75,7 +75,7 @@ function AdminLogin() {
             <button
               type="submit"
               disabled={loading}
-              className="w-full rounded-xl border border-cyan-500/40 bg-gradient-to-r from-cyan-500/20 to-blue-600/20 px-6 py-3 text-sm font-light tracking-widest text-cyan-300 uppercase transition-all hover:scale-[1.02] hover:border-cyan-400/60 hover:bg-cyan-500/25 disabled:opacity-50 disabled:cursor-not-allowed"
+              className="w-full rounded-xl border border-cyan-500/40 bg-gradient-to-r from-cyan-500/20 to-blue-600/20 px-6 py-3.5 sm:py-3 text-sm font-light tracking-widest text-cyan-300 uppercase transition-all hover:scale-[1.02] hover:border-cyan-400/60 hover:bg-cyan-500/25 active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed touch-manipulation min-h-[48px]"
             >
               {loading ? 'Iniciando sesión...' : 'Iniciar Sesión'}
             </button>

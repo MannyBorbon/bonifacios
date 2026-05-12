@@ -1,5 +1,6 @@
 <?php
 require_once '../config/database.php';
+require_once __DIR__ . '/../lib/table_venue_codes.php';
 
 date_default_timezone_set('America/Hermosillo');
 header('Content-Type: application/json');
@@ -60,6 +61,18 @@ try {
     try {
         $conn->query("ALTER TABLE special_reservations ADD COLUMN event_type_id INT NULL AFTER occasion");
     } catch (Throwable $e) { /* ignore if already exists */ }
+
+    $canonical = $tableCode !== '' ? bonifacios_table_canonical_venue_code($tableCode) : null;
+    if ($canonical !== null && $canonical !== '' && !preg_match('/^WEB-/i', $canonical)) {
+        if ($reservationDate === date('Y-m-d') && bonifacios_table_live_busy($conn, $canonical, $reservationDate)) {
+            http_response_code(409);
+            echo json_encode([
+                'success' => false,
+                'error' => 'Esa mesa está ocupada en servicio (POS o venta abierta). Elige otra o espera a que se libere.',
+            ]);
+            exit;
+        }
+    }
 
     // Insertar reservación
     $sql = "INSERT INTO special_reservations 

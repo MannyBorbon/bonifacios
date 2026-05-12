@@ -39,8 +39,14 @@ try {
     error_log('permissions.php auto-migrate error: ' . $e->getMessage());
 }
 
-// GET: obtener todos los permisos de francisco y santiago
+// GET: obtener todos los permisos de francisco y santiago (solo quien puede editarlos)
 if ($_SERVER['REQUEST_METHOD'] === 'GET') {
+    if (!in_array($callerName, ['manuel', 'misael'], true)) {
+        http_response_code(403);
+        echo json_encode(['success' => false, 'error' => 'No autorizado']);
+        $conn->close();
+        exit();
+    }
     $res = $conn->query("SELECT id, username, full_name, " . implode(', ', $VALID_PERMS) . " FROM users WHERE LOWER(username) IN ('francisco','santiago') ORDER BY username");
     $users = [];
     while ($row = $res->fetch_assoc()) {
@@ -118,6 +124,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 }
 
 http_response_code(405);
-echo json_encode(['error' => 'Method not allowed']);
+header('Content-Type: application/json');
+echo json_encode(['success' => false, 'error' => 'Method not allowed']);
 $conn->close();
 ?>
