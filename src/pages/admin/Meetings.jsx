@@ -58,7 +58,7 @@ export default function Meetings() {
     (async () => {
       try {
         const res = await messagesAPI.getUsers()
-        setAllUsers(res.data?.users || [])
+        setAllUsers(Array.isArray(res.data) ? res.data : (res.data?.users || []))
       } catch { /* silent */ }
     })()
   }, [])
@@ -87,6 +87,7 @@ export default function Meetings() {
       }
       setModal(false)
       setForm(EMPTY)
+      setInvitedIds([])
       await load()
       if (res.data.status === 'active') navigate(`/admin/meetings/${res.data.id}`)
     } catch (err) {
@@ -192,7 +193,7 @@ export default function Meetings() {
           <p className="text-[11px] sm:text-xs text-slate-500 mt-0.5">Sala de juntas del equipo Bonifacio's</p>
         </div>
         <button
-          onClick={() => setModal(true)}
+          onClick={() => { setModal(true); setForm(EMPTY); setInvitedIds([]) }}
           className="inline-flex items-center gap-2 rounded-full border border-emerald-500/30 bg-emerald-500/10 px-3.5 sm:px-4 py-2.5 sm:py-2 text-sm font-medium text-emerald-400 hover:border-emerald-400/60 hover:bg-emerald-500/20 active:scale-95 transition-all touch-manipulation min-h-[44px]"
         >
           <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
@@ -265,7 +266,10 @@ export default function Meetings() {
             className="fixed inset-0 flex items-center justify-center bg-[#030712]/90 p-4 backdrop-blur-sm"
             style={{ zIndex: 200 }}
             onMouseDown={(e) => {
-              if (e.target === e.currentTarget && !saving) setModal(false)
+              if (e.target === e.currentTarget && !saving) {
+                setModal(false)
+                setInvitedIds([])
+              }
             }}
           >
             <div
@@ -286,15 +290,33 @@ export default function Meetings() {
 
                 {/* Invitados */}
                 <div>
-                  <label className="block text-[10px] uppercase tracking-widest text-slate-500 mb-1.5">Invitados</label>
-                  <select multiple value={invitedIds.map(String)} onChange={(e) => {
-                    const opts = Array.from(e.target.selectedOptions).map(o => parseInt(o.value))
-                    setInvitedIds(opts)
-                  }} className={`${inputCls} h-32`}>
-                    {allUsers.filter(u => u.id !== currentUser.id).map(u => (
-                      <option key={u.id} value={u.id}>{u.full_name || u.username}</option>
-                    ))}
-                  </select>
+                  <label className="block text-[10px] uppercase tracking-widest text-slate-500 mb-2">Invitados</label>
+                  <div className="rounded-xl border border-cyan-500/15 bg-[#030b18]/60 p-3 space-y-2 max-h-40 overflow-y-auto overscroll-contain">
+                    {allUsers.filter(u => u.id !== currentUser.id).length === 0 ? (
+                      <p className="text-xs text-slate-600 text-center py-2">No hay usuarios disponibles para invitar</p>
+                    ) : (
+                      allUsers.filter(u => u.id !== currentUser.id).map(u => (
+                        <label key={u.id} className="flex items-center gap-2.5 cursor-pointer p-2 rounded-lg hover:bg-cyan-500/5 active:bg-cyan-500/10 transition-colors touch-manipulation min-h-[44px]">
+                          <input
+                            type="checkbox"
+                            checked={invitedIds.includes(u.id)}
+                            onChange={(e) => {
+                              if (e.target.checked) {
+                                setInvitedIds([...invitedIds, u.id])
+                              } else {
+                                setInvitedIds(invitedIds.filter(id => id !== u.id))
+                              }
+                            }}
+                            className="h-4 w-4 rounded border-cyan-500/30 bg-[#030b18] text-cyan-400 focus:ring-2 focus:ring-cyan-500/20 focus:ring-offset-0"
+                          />
+                          <span className="text-sm text-slate-200">{u.full_name || u.username}</span>
+                        </label>
+                      ))
+                    )}
+                  </div>
+                  {invitedIds.length > 0 && (
+                    <p className="text-[10px] text-cyan-400/60 mt-1.5">{invitedIds.length} usuario{invitedIds.length !== 1 ? 's' : ''} seleccionado{invitedIds.length !== 1 ? 's' : ''}</p>
+                  )}
                 </div>
 
                 <div className="rounded-lg border border-cyan-500/10 bg-[#030b18]/40 p-3 space-y-3">
@@ -334,7 +356,7 @@ export default function Meetings() {
                 </div>
               )}
               <div className="mt-5 flex flex-col-reverse sm:flex-row sm:justify-end gap-2">
-                <button type="button" onClick={() => setModal(false)} className="rounded-xl px-4 py-2.5 sm:py-2 text-xs text-slate-400 transition-colors hover:text-slate-200 touch-manipulation min-h-[44px]">
+                <button type="button" onClick={() => { setModal(false); setInvitedIds([]) }} className="rounded-xl px-4 py-2.5 sm:py-2 text-xs text-slate-400 transition-colors hover:text-slate-200 touch-manipulation min-h-[44px]">
                   Cancelar
                 </button>
                 <button

@@ -3,6 +3,31 @@ require_once '../config/database.php';
 date_default_timezone_set('America/Hermosillo');
 header('Content-Type: application/json');
 
+/**
+ * Solo el usuario Manuel puede editar minutas (misma lógica que MeetingRoom.jsx).
+ */
+function bonifacios_user_is_meeting_minuta_editor(mysqli $conn, int $userId): bool {
+    $stmt = $conn->prepare('SELECT username, full_name FROM users WHERE id = ? AND is_active = TRUE LIMIT 1');
+    $stmt->bind_param('i', $userId);
+    $stmt->execute();
+    $row = $stmt->get_result()->fetch_assoc();
+    if (!$row) {
+        return false;
+    }
+    $un = strtolower(trim((string) ($row['username'] ?? '')));
+    $fn = strtolower(trim((string) ($row['full_name'] ?? '')));
+    if ($un === 'manuel') {
+        return true;
+    }
+    if ($fn === 'manuel') {
+        return true;
+    }
+    if (strpos($fn, 'manuel ') === 0) {
+        return true;
+    }
+    return false;
+}
+
 $method = $_SERVER['REQUEST_METHOD'];
 
 try {
@@ -30,6 +55,12 @@ try {
         $content   = $data['content'] ?? '';
 
         if (!$meetingId) { http_response_code(400); echo json_encode(['error' => 'meeting_id required']); exit; }
+
+        if (!bonifacios_user_is_meeting_minuta_editor($conn, $userId)) {
+            http_response_code(403);
+            echo json_encode(['error' => 'Solo el usuario autorizado puede editar la minuta.']);
+            exit;
+        }
 
         $check = $conn->prepare("SELECT id FROM meeting_minutes WHERE meeting_id = ?");
         $check->bind_param("i", $meetingId);

@@ -146,6 +146,11 @@ export default function MeetingRoom() {
   // Derived flags must be declared before any hook that lists them in dependency arrays
   // (otherwise TDZ: "Cannot access before initialization" in production bundles).
 
+  useEffect(() => {
+    window.dispatchEvent(new Event('meeting:start'))
+    return () => { window.dispatchEvent(new Event('meeting:end')) }
+  }, [])
+
   const isCreator = meeting?.created_by == currentUser.id
   const isAdmin = currentUser.role === 'administrador'
   const canEnd = isCreator || isAdmin
@@ -156,6 +161,16 @@ export default function MeetingRoom() {
     isCreator ||
     isAdmin
   )
+  /** Solo Manuel puede editar/guardar la minuta (usuario de login o nombre visible). */
+  const isMinutaEditor = (() => {
+    const un = String(currentUser?.username ?? '').trim().toLowerCase()
+    const fn = String(currentUser?.full_name ?? '').trim().toLowerCase()
+    if (un === 'manuel') return true
+    if (fn === 'manuel') return true
+    if (fn.startsWith('manuel ')) return true
+    return false
+  })()
+  const canEditMinuta = isMinutaEditor
 
   const parseMinuta = (content) => {
     if (!content) return EMPTY_MINUTA
@@ -303,6 +318,7 @@ export default function MeetingRoom() {
   }, [chatError])
 
   const upd = (key) => (e) => {
+    if (!isMinutaEditor) return
     const value = e.target.value
     setMinuta(prev => ({ ...prev, [key]: value }))
     setSaved(false)
@@ -311,6 +327,7 @@ export default function MeetingRoom() {
   }
 
   const doSave = async (data) => {
+    if (!isMinutaEditor) return
     setSaving(true)
     try {
       const res = await meetingsAPI.saveMinutes({ meeting_id: parseInt(id), content: JSON.stringify(data) })
@@ -488,17 +505,19 @@ export default function MeetingRoom() {
                 Minuta guardada
               </span>
             )}
+            {canEditMinuta && (
+              <button
+                type="button"
+                onClick={handleSaveNow}
+                disabled={saving}
+                className="rounded-xl border border-cyan-500/25 bg-cyan-500/[0.08] px-3 sm:px-3.5 py-2.5 sm:py-2 text-xs font-medium text-cyan-300 transition-all hover:border-cyan-400/45 hover:bg-cyan-500/15 active:scale-95 disabled:opacity-40 focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400/40 touch-manipulation min-h-[44px]"
+              >
+                <span className="hidden sm:inline">Guardar minuta</span>
+                <span className="sm:hidden">Guardar</span>
+              </button>
+            )}
             {!isEnded && (
               <>
-                <button
-                  type="button"
-                  onClick={handleSaveNow}
-                  disabled={saving}
-                  className="rounded-xl border border-cyan-500/25 bg-cyan-500/[0.08] px-3 sm:px-3.5 py-2.5 sm:py-2 text-xs font-medium text-cyan-300 transition-all hover:border-cyan-400/45 hover:bg-cyan-500/15 active:scale-95 disabled:opacity-40 focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400/40 touch-manipulation min-h-[44px]"
-                >
-                  <span className="hidden sm:inline">Guardar minuta</span>
-                  <span className="sm:hidden">Guardar</span>
-                </button>
                 <button
                   type="button"
                   onClick={handleLeave}
@@ -517,6 +536,15 @@ export default function MeetingRoom() {
                   </button>
                 )}
               </>
+            )}
+            {isEnded && canEditMinuta && (
+              <button
+                type="button"
+                onClick={handleLeave}
+                className="rounded-xl border border-slate-600/35 bg-slate-800/40 px-3 sm:px-3.5 py-2.5 sm:py-2 text-xs font-medium text-slate-300 transition-all hover:border-slate-500/50 active:scale-95 focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-500/35 touch-manipulation min-h-[44px]"
+              >
+                Salir
+              </button>
             )}
           </div>
         </div>
@@ -575,27 +603,27 @@ export default function MeetingRoom() {
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div className="sm:col-span-2">
                 <Field label="Título / Motivo de la reunión">
-                  {isEnded
+                  {!canEditMinuta
                     ? <p className="text-sm text-slate-300">{minuta.titulo || '—'}</p>
                     : <input value={minuta.titulo} onChange={upd('titulo')} placeholder="Ej: Revisión de cotizaciones Q1" className={inCls} />
                   }
                 </Field>
               </div>
               <Field label="Fecha y hora de inicio">
-                {isEnded
+                {!canEditMinuta
                   ? <p className="text-sm text-slate-300">{minuta.fecha_inicio ? fmtDT(minuta.fecha_inicio) : '—'}</p>
                   : <input type="datetime-local" value={minuta.fecha_inicio} onChange={upd('fecha_inicio')} className={inCls} />
                 }
               </Field>
               <Field label="Fecha y hora de término">
-                {isEnded
+                {!canEditMinuta
                   ? <p className="text-sm text-slate-300">{minuta.fecha_fin ? fmtDT(minuta.fecha_fin) : '—'}</p>
                   : <input type="datetime-local" value={minuta.fecha_fin} onChange={upd('fecha_fin')} className={inCls} />
                 }
               </Field>
               <div className="sm:col-span-2">
                 <Field label="Lugar o plataforma">
-                  {isEnded
+                  {!canEditMinuta
                     ? <p className="text-sm text-slate-300">{minuta.lugar || '—'}</p>
                     : <input value={minuta.lugar} onChange={upd('lugar')} placeholder="Ej: Comedor Bonifacio's / Zoom / Teams" className={inCls} />
                   }
@@ -608,7 +636,6 @@ export default function MeetingRoom() {
           <Section number="2" title="Asistentes y ausentes"
             icon={<svg className="h-3.5 w-3.5 text-cyan-500/40" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0z" /></svg>}
           >
-            {!isAdmin && <p className="text-[10px] text-slate-600 mb-2">Solo administradores pueden modificar la lista de asistentes.</p>}
             <div className="space-y-1 max-h-60 overflow-y-auto overscroll-contain">
               {allUsers.map(u => {
                 const checked = attendeeIds.includes(u.id)
@@ -616,17 +643,19 @@ export default function MeetingRoom() {
                 return (
                   <label key={u.id} className={`flex items-center gap-2.5 px-3 py-2 rounded-lg transition-all touch-manipulation min-h-[40px] ${
                     checked ? 'bg-cyan-500/5 border border-cyan-500/15' : 'border border-transparent hover:bg-white/[0.02]'
-                  } ${!isAdmin ? 'pointer-events-none opacity-70' : 'cursor-pointer'}`}>
-                    <input
-                      type="checkbox"
-                      checked={checked}
-                      disabled={!isAdmin || isCreatorUser}
-                      onChange={() => handleToggleAttendee(u.id)}
-                      className="h-4 w-4 rounded border-slate-600 bg-[#030712]/60 text-cyan-500 focus:ring-cyan-500/30 accent-cyan-500 disabled:opacity-50"
-                    />
-                    <span className={`text-sm ${checked ? 'text-slate-200' : 'text-slate-500 line-through'}`}>{u.full_name || u.username}</span>
-                    {isCreatorUser && <span className="text-[9px] text-amber-500/60 ml-auto">Creador</span>}
-                    {!checked && !isCreatorUser && <span className="text-[9px] text-red-400/50 ml-auto">No verá la reunión</span>}
+                  } ${!isAdmin ? 'pointer-events-none' : 'cursor-pointer'}`}>
+                    {isAdmin && (
+                      <input
+                        type="checkbox"
+                        checked={checked}
+                        disabled={!isAdmin || isCreatorUser}
+                        onChange={() => handleToggleAttendee(u.id)}
+                        className="h-4 w-4 rounded border-slate-600 bg-[#030712]/60 text-cyan-500 focus:ring-cyan-500/30 accent-cyan-500 disabled:opacity-50"
+                      />
+                    )}
+                    <span className={`text-sm ${isAdmin && !checked ? 'text-slate-500 line-through' : 'text-slate-200'}`}>{u.full_name || u.username}</span>
+                    {isAdmin && isCreatorUser && <span className="text-[9px] text-amber-500/60 ml-auto">Creador</span>}
+                    {isAdmin && !checked && !isCreatorUser && <span className="text-[9px] text-red-400/50 ml-auto">No verá la reunión</span>}
                   </label>
                 )
               })}
@@ -634,7 +663,7 @@ export default function MeetingRoom() {
             </div>
             <div className="mt-3 pt-3 border-t border-cyan-500/8">
               <Field label="Ausentes (con justificación si aplica)">
-                {isEnded
+                {!canEditMinuta
                   ? <p className="text-sm text-slate-300 whitespace-pre-wrap">{minuta.ausentes || '—'}</p>
                   : <textarea value={minuta.ausentes} onChange={upd('ausentes')} rows={2} placeholder="Ej: Carlos Ruiz — permiso personal" className={taCls} />
                 }
@@ -646,7 +675,7 @@ export default function MeetingRoom() {
           <Section number="3" title="Orden del día (Agenda)"
             icon={<svg className="h-3.5 w-3.5 text-cyan-500/40" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M4 6h16M4 10h16M4 14h16M4 18h7" /></svg>}
           >
-            {isEnded ? (
+            {!canEditMinuta ? (
               <ul className="space-y-1">
                 {(Array.isArray(minuta.orden_del_dia) ? minuta.orden_del_dia : (minuta.orden_del_dia || '').split('\n').filter(Boolean)).map((item, i) => (
                   <li key={i} className="text-sm text-slate-300 flex items-start gap-2"><span className="text-cyan-500/60 font-medium shrink-0">{i+1}.</span>{item}</li>
@@ -667,7 +696,7 @@ export default function MeetingRoom() {
           <Section number="4" title="Resumen de temas discutidos"
             icon={<svg className="h-3.5 w-3.5 text-cyan-500/40" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" /></svg>}
           >
-            {isEnded
+            {!canEditMinuta
               ? <p className="text-sm text-slate-300 whitespace-pre-wrap">{minuta.resumen_temas || '—'}</p>
               : <textarea value={minuta.resumen_temas} onChange={upd('resumen_temas')} rows={5} placeholder="Describe brevemente los puntos tratados en cada tema de la agenda…" className={taCls} />
             }
@@ -677,7 +706,7 @@ export default function MeetingRoom() {
           <Section number="5" title="Decisiones tomadas"
             icon={<svg className="h-3.5 w-3.5 text-cyan-500/40" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>}
           >
-            {isEnded ? (
+            {!canEditMinuta ? (
               <ul className="space-y-1">
                 {(Array.isArray(minuta.decisiones) ? minuta.decisiones : (minuta.decisiones || '').split('\n').filter(Boolean)).map((item, i) => (
                   <li key={i} className="text-sm text-slate-300 flex items-start gap-2"><span className="text-emerald-400/60">✓</span>{item}</li>
@@ -697,7 +726,7 @@ export default function MeetingRoom() {
           <Section number="6" title="Plan de acción — Tareas asignadas"
             icon={<svg className="h-3.5 w-3.5 text-cyan-500/40" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4" /></svg>}
           >
-            {isEnded ? (
+            {!canEditMinuta ? (
               <ul className="space-y-1">
                 {(Array.isArray(minuta.plan_accion) ? minuta.plan_accion : (minuta.plan_accion || '').split('\n').filter(Boolean)).map((item, i) => (
                   <li key={i} className="text-sm text-slate-300 flex items-start gap-2"><span className="text-amber-400/60 font-medium shrink-0">{i+1}.</span>{item}</li>
@@ -720,13 +749,13 @@ export default function MeetingRoom() {
           >
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <Field label="Fecha y hora de la próxima reunión (si aplica)">
-                {isEnded
+                {!canEditMinuta
                   ? <p className="text-sm text-slate-300">{minuta.proxima_reunion ? fmtDT(minuta.proxima_reunion) : 'No definida'}</p>
                   : <input type="datetime-local" value={minuta.proxima_reunion} onChange={upd('proxima_reunion')} className={inCls} />
                 }
               </Field>
               <Field label="Minuta elaborada por">
-                {isEnded
+                {!canEditMinuta
                   ? <p className="text-sm text-slate-300">{minuta.elabora_minuta || '—'}</p>
                   : <input value={minuta.elabora_minuta} onChange={upd('elabora_minuta')} placeholder="Nombre de quien levanta la minuta" className={inCls} />
                 }
@@ -734,9 +763,9 @@ export default function MeetingRoom() {
             </div>
           </Section>
 
-          {!isEnded && (
+          {canEditMinuta && (
             <div className="flex justify-end">
-              <button onClick={handleSaveNow} disabled={saving} className="inline-flex items-center gap-2 rounded-full border border-cyan-500/30 bg-cyan-500/10 px-5 sm:px-6 py-2.5 sm:py-2 text-sm font-medium text-cyan-400 hover:border-cyan-400/60 hover:bg-cyan-500/20 active:scale-95 disabled:opacity-40 transition-all touch-manipulation min-h-[44px]">
+              <button type="button" onClick={handleSaveNow} disabled={saving} className="inline-flex items-center gap-2 rounded-full border border-cyan-500/30 bg-cyan-500/10 px-5 sm:px-6 py-2.5 sm:py-2 text-sm font-medium text-cyan-400 hover:border-cyan-400/60 hover:bg-cyan-500/20 active:scale-95 disabled:opacity-40 transition-all touch-manipulation min-h-[44px]">
                 {saving ? 'Guardando…' : saved ? '✓ Guardado' : 'Guardar minuta'}
               </button>
             </div>
@@ -899,7 +928,7 @@ export default function MeetingRoom() {
                                 <span className="ml-2 text-[10px] font-normal uppercase tracking-wide text-cyan-500/55">tú</span>
                               )}
                             </p>
-                            <RoleBadge role={p.participant_role} />
+                            {isAdmin && <RoleBadge role={p.participant_role} />}
                           </div>
                           <p className="mt-0.5 text-[10px] text-slate-600">
                             {!isEnded && <>En sala desde · {fmtChatTime(p.joined_at)}</>}

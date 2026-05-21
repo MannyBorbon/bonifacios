@@ -28,6 +28,7 @@ function Employees() {
   const [filterAge, setFilterAge] = useState('all');
   const [empTabs, setEmpTabs] = useState({});
   const [empAttendance, setEmpAttendance] = useState({});
+  const [empAttendanceSummary, setEmpAttendanceSummary] = useState({});
   const [attendanceLoading, setAttendanceLoading] = useState({});
   const [payrollPeriodOffset, setPayrollPeriodOffset] = useState({});
   const [empSchedules, setEmpSchedules] = useState({});
@@ -72,6 +73,11 @@ function Employees() {
   const formatMoney = (amount) => {
     const num = parseFloat(amount || 0);
     return num.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  };
+
+  const formatHours = (hours) => {
+    const num = Number(hours || 0);
+    return `${num.toLocaleString('es-MX', { minimumFractionDigits: 0, maximumFractionDigits: 2 })}h`;
   };
 
   const normalizeName = (value) => String(value || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/\s+/g, ' ').trim().toUpperCase();
@@ -335,10 +341,17 @@ function Employees() {
     setAttendanceLoading(p => ({ ...p, [empId]: true }));
     const dates = getPayrollDates(offset);
     try {
-      const params = new URLSearchParams({ id: empId, sr_id: srId || '', name: name || '', start: dates.start, end: dates.end });
+      const params = new URLSearchParams({ start: dates.start, end: dates.end });
+      if (srId) params.set('sr_id', srId);
+      else if (name) params.set('name', name);
+      else params.set('id', empId);
       const res = await fetch(`${import.meta.env.VITE_API_URL}/employees/get-attendance.php?${params.toString()}`, { credentials: 'include' });
       const result = await res.json();
-      if (result.success) { setEmpAttendance(p => ({ ...p, [empId]: result.data })); setPayrollPeriodOffset(p => ({...p, [empId]: offset})); }
+      if (result.success) {
+        setEmpAttendance(p => ({ ...p, [empId]: result.data }));
+        setEmpAttendanceSummary(p => ({ ...p, [empId]: result.summary || null }));
+        setPayrollPeriodOffset(p => ({...p, [empId]: offset}));
+      }
     } catch (error) { console.error('Error attendance:', error); }
     setAttendanceLoading(p => ({ ...p, [empId]: false }));
   };
@@ -789,6 +802,7 @@ function Employees() {
           const expanded = expandedItems[item.id];
           const activeTab = empTabs[item.id] || 'nomina';
           const payroll = calculatePayroll(empAttendance[item.id] || [], item);
+          const attendanceSummary = empAttendanceSummary[item.id] || null;
           const attendance = getAttendanceForItem(item);
 
           return (
@@ -994,6 +1008,8 @@ function Employees() {
                           </div>
                           <div className="space-y-3">
                             <div className="flex justify-between text-xs"><span>Sueldo Base (7d)</span><span className="text-white font-mono">${formatMoney(payroll.baseWeekly)}</span></div>
+                            <div className="flex justify-between text-xs"><span className="text-slate-500">Horas programadas</span><span className="text-slate-300 font-mono">{formatHours(attendanceSummary?.scheduled_hours)}</span></div>
+                            <div className="flex justify-between text-xs"><span className="text-slate-500">Horas hechas (clock in)</span><span className="text-cyan-300 font-mono">{formatHours(attendanceSummary?.worked_hours)}</span></div>
                             <div className="flex justify-between text-xs text-red-400"><span>Faltas ({payroll.absences})</span><span className="font-mono">-${formatMoney(payroll.deduction)}</span></div>
                             <div className="flex justify-between text-xs text-cyan-400"><span>Hrs extra ({payroll.extraHours}h × $50)</span><span className="font-mono">+${formatMoney(payroll.extraPay)}</span></div>
                             <div className="pt-3 border-t border-slate-800 flex justify-between font-black text-white text-base"><span>PAGO NETO</span><span className="text-emerald-400 font-mono">${formatMoney(payroll.netPay)}</span></div>
@@ -1127,6 +1143,8 @@ function Employees() {
                           </div>
                           <div className="space-y-2.5">
                             <div className="flex justify-between text-xs"><span className="text-slate-500">Sueldo Base (7d)</span><span className="text-white font-mono">${formatMoney(payroll.baseWeekly)}</span></div>
+                            <div className="flex justify-between text-xs"><span className="text-slate-500">Horas programadas</span><span className="text-slate-300 font-mono">{formatHours(attendanceSummary?.scheduled_hours)}</span></div>
+                            <div className="flex justify-between text-xs"><span className="text-slate-500">Horas hechas (clock in)</span><span className="text-cyan-300 font-mono">{formatHours(attendanceSummary?.worked_hours)}</span></div>
                             <div className="flex justify-between text-xs text-red-400"><span>Faltas ({payroll.absences})</span><span className="font-mono">-${formatMoney(payroll.deduction)}</span></div>
                             <div className="flex justify-between text-xs text-cyan-400"><span>Hrs extra ({payroll.extraHours}h × $50)</span><span className="font-mono">+${formatMoney(payroll.extraPay)}</span></div>
                             <div className="pt-3 border-t border-slate-800 flex justify-between font-black text-white text-base"><span>Pago Neto</span><span className="text-emerald-400 font-mono">${formatMoney(payroll.netPay)}</span></div>
@@ -1772,6 +1790,7 @@ function Employees() {
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
             {activeList.map(emp => {
               const payroll = calculatePayroll(empAttendance[emp.id] || [], emp);
+              const attendanceSummary = empAttendanceSummary[emp.id] || null;
               return (
                 <div key={emp.id} className="bg-[#040c1a] border border-slate-800 hover:border-cyan-500/30 p-4 rounded-2xl transition-all">
                   <div className="flex items-center gap-3 mb-3">
@@ -1806,6 +1825,8 @@ function Employees() {
                   </div>
                   <div className="space-y-1.5">
                     <div className="flex justify-between text-[10px]"><span className="text-slate-500">Sueldo base (7d)</span><span className="text-white font-mono">${formatMoney(payroll.baseWeekly)}</span></div>
+                    <div className="flex justify-between text-[10px]"><span className="text-slate-500">Horas programadas</span><span className="text-slate-300 font-mono">{formatHours(attendanceSummary?.scheduled_hours)}</span></div>
+                    <div className="flex justify-between text-[10px]"><span className="text-slate-500">Horas hechas</span><span className="text-cyan-300 font-mono">{formatHours(attendanceSummary?.worked_hours)}</span></div>
                     <div className="flex justify-between text-[10px]"><span className="text-red-400">Faltas ({payroll.absences})</span><span className="text-red-400 font-mono">-${formatMoney(payroll.deduction)}</span></div>
                     <div className="flex justify-between text-[10px]"><span className="text-cyan-400">Hrs extra ({payroll.extraHours}h × $50)</span><span className="text-cyan-400 font-mono">+${formatMoney(payroll.extraPay)}</span></div>
                     <div className="flex justify-between pt-2 border-t border-slate-800 text-xs font-black"><span className="text-white">Neto</span><span className="text-emerald-400 font-mono">${formatMoney(payroll.netPay)}</span></div>

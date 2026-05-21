@@ -213,6 +213,19 @@ try {
         ? getHistoricalOpenStats($pdo, $todayStart)
         : ['total' => 0.0, 'tips' => 0.0, 'checks' => 0, 'average' => 0.0, 'covers' => 0];
 
+    $monitorCompatTotal = getSrMonitorComparableTotal($pdo, $start, $end);
+    if (is_array($currentStats)) {
+        $currentStats['sr_monitor_total'] = $monitorCompatTotal;
+    }
+    if (is_array($stats)) {
+        foreach (['today', 'yesterday', 'week', 'month', 'custom'] as $rk) {
+            if ($rk === $range && isset($stats[$rk]) && is_array($stats[$rk])) {
+                $stats[$rk]['sr_monitor_total'] = $monitorCompatTotal;
+                break;
+            }
+        }
+    }
+
     $cancellations = getCancellations($pdo, $start, $end);
 
     $paymentMethods = getPaymentMethods($pdo, $start, $end, 'closed', $includePaymentLines);
@@ -279,6 +292,7 @@ try {
         'current_stats' => $currentStats,
         'dashboard' => [
             'include_pending_in_total' => $includePendingInDashboardTotal,
+            'monitor_compat_total'     => $monitorCompatTotal,
         ],
         'selected_period' => [
             'range' => $range,
@@ -333,6 +347,9 @@ try {
  */
 function sales_emit_json(array $payload): void
 {
+    if (!headers_sent()) {
+        header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');
+    }
     $json = json_encode($payload, JSON_INVALID_UTF8_SUBSTITUTE | JSON_UNESCAPED_UNICODE);
     if ($json === false) {
         http_response_code(500);
@@ -678,6 +695,44 @@ function getHistoricalOpenStats($pdo, $todayStart) {
     ];
 }
 
+/**
+ * Total «estilo Monitor de ventas» SR: una sola contribución por ticket en el período.
+ * Prioriza líneas en sr_sale_items (consumo/catalogado tipo artículos); si no hay líneas usa el neto encabezado.
+ * Incluye abiertos y cerrados del rango (excluye cancelados/cortesía). Pensado para alinear el KPI grande del admin.
+ */
+function getSrMonitorComparableTotal(\PDO $pdo, string $start, string $end): float {
+    try {
+        $sql = '
+            SELECT COALESCE(SUM(
+                CASE
+                    WHEN COALESCE(it.ln, 0) > 0.005 THEN it.ln
+                    WHEN NOT (s.total = 0 AND COALESCE(s.subtotal, 0) > 0) THEN s.total
+                    ELSE 0
+                END
+            ), 0) AS v
+            FROM sr_sales s
+            LEFT JOIN (
+                SELECT
+                    TRIM(REPLACE(CAST(sr_ticket_id AS CHAR), \'#\', \'\')) AS tid,
+                    SUM(subtotal) AS ln
+                FROM sr_sale_items
+                WHERE TRIM(REPLACE(CAST(sr_ticket_id AS CHAR), \'#\', \'\')) <> \'\'
+                GROUP BY TRIM(REPLACE(CAST(sr_ticket_id AS CHAR), \'#\', \'\'))
+            ) it ON TRIM(REPLACE(CAST(s.sr_ticket_id AS CHAR), \'#\', \'\')) = it.tid
+            WHERE s.sale_datetime BETWEEN ? AND ?
+              AND NOT (' . getCancelledStatusSql('s') . ')
+              AND NOT (s.total = 0 AND COALESCE(s.subtotal, 0) > 0)
+        ';
+        $stmt = $pdo->prepare($sql);
+        $stmt->execute([$start, $end]);
+        $row = $stmt->fetch(PDO::FETCH_ASSOC);
+
+        return round((float) ($row['v'] ?? 0), 2);
+    } catch (Exception $e) {
+        return 0.0;
+    }
+}
+
 function getSalesStats($pdo, $start, $end, bool $includeOpen = true) {
     // Replica exacta del reporte SoftRestaurant "Ventas por día sin impuestos":
     // - TOTAL CON IMPUESTOS = SUM(total) donde pagado=1, cancelado=0, NO cortesía
@@ -924,8 +979,14 @@ function getDailySales($pdo, $start, $end, $statusFilter = 'closed') {
  * Categorías de bebida: contiene "bebida", "drink", "refresco", "cerveza", "cocktail", "coctel", "vino", "licor", "copa", "shot", "café", "te ", "agua", "juice", "jugo", "smoothie", "bar".
  */
 function getDailySalesWithCategories($pdo, $start, $end, $statusFilter = 'closed') {
-    $statusCond = getStatusCondition($statusFilter);
-    $statusCondS = $statusCond ? str_replace('AND status', 'AND s.status', $statusCond) : '';
+    // Build status condition with explicit 's' alias (avoids column ambiguity when joining items tables with sr_sales s)
+    if ($statusFilter === 'open') {
+        $statusCondS = 'AND ' . getUncollectedPendingSql('s');
+    } elseif ($statusFilter === 'closed') {
+        $statusCondS = 'AND ' . getCollectedSaleSql('s');
+    } else {
+        $statusCondS = 'AND NOT (' . getCancelledStatusSql('s') . ')';
+    }
 
     // Bebida keywords (case-insensitive match)
     $bebidaKeywords = "'bebida','drink','refresco','cerveza','cocktail','coctel','vino','licor','copa','shot','café','cafe','te','agua','juice','jugo','smoothie','bar','mezcal','tequila','whisky','ron','brandy','vodka','gin','margarita','michelada','carajillo','limonada','horchata','soda','sprite','coca'";
@@ -933,28 +994,27 @@ function getDailySalesWithCategories($pdo, $start, $end, $statusFilter = 'closed
     $bebidaRegex = 'bebida|drink|refresco|cerveza|cocktail|coctel|vino|licor|copa|shot|caf[eé]|agua|juice|jugo|smoothie|bar|mezcal|tequila|whisky|ron|brandy|vodka|gin|margarita|michelada|carajillo|limonada|horchata|soda|sprite|coca';
 
     $results = [];
+
+    // Strategy 1 (PRIMARY): sr_sale_items + sr_products — most complete, joins directly on sr_ticket_id
     try {
-        // Strategy: sr_ticket_items has category directly; join to sr_sales for date/status
         $sql = "
             SELECT
                 DATE(DATE_SUB(s.sale_datetime, INTERVAL 8 HOUR)) AS sale_date,
                 CASE
-                    WHEN LOWER(COALESCE(ti.category, '')) REGEXP '$bebidaRegex'
-                      OR LOWER(COALESCE(ti.product_name, '')) REGEXP '$bebidaRegex'
+                    WHEN LOWER(COALESCE(p.category, '')) REGEXP '$bebidaRegex'
+                      OR LOWER(COALESCE(p.subcategory, '')) REGEXP '$bebidaRegex'
+                      OR LOWER(COALESCE(si.product_name, '')) REGEXP '$bebidaRegex'
                     THEN 'bebida'
                     ELSE 'comida'
                 END AS tipo,
-                SUM(ti.subtotal) AS total,
-                SUM(ti.qty) AS qty
-            FROM sr_ticket_items ti
-            INNER JOIN sr_sales s ON (
-                REPLACE(TRIM(CAST(ti.folio AS CHAR)), '#', '') = REPLACE(TRIM(CAST(s.folio AS CHAR)), '#', '')
-                OR REPLACE(TRIM(CAST(ti.folio AS CHAR)), '#', '') = REPLACE(TRIM(CAST(s.ticket_number AS CHAR)), '#', '')
-                OR REPLACE(TRIM(CAST(ti.folio AS CHAR)), '#', '') = REPLACE(TRIM(CAST(s.sr_ticket_id AS CHAR)), '#', '')
-            )
+                SUM(si.subtotal) AS total,
+                SUM(si.quantity) AS qty
+            FROM sr_sale_items si
+            INNER JOIN sr_sales s ON si.sr_ticket_id = s.sr_ticket_id
+            LEFT JOIN sr_products p ON si.product_name = p.product_name
             WHERE s.sale_datetime BETWEEN ? AND ?
               $statusCondS
-              AND ti.product_name IS NOT NULL AND ti.product_name != ''
+              AND si.product_name IS NOT NULL AND si.product_name != ''
             GROUP BY sale_date, tipo
             ORDER BY sale_date, tipo
         ";
@@ -965,25 +1025,29 @@ function getDailySalesWithCategories($pdo, $start, $end, $statusFilter = 'closed
         $results = [];
     }
 
-    // If sr_ticket_items is empty, try sr_sale_items + sr_products
+    // Strategy 2 (FALLBACK): sr_ticket_items — only if sr_sale_items returned nothing
     if (empty($results)) {
         try {
             $sql = "
                 SELECT
                     DATE(DATE_SUB(s.sale_datetime, INTERVAL 8 HOUR)) AS sale_date,
                     CASE
-                        WHEN LOWER(COALESCE(p.category, '')) REGEXP 'bebida|drink|refresco|cerveza|cocktail|coctel|vino|licor|copa|shot|caf[eé]|agua|juice|jugo|smoothie|bar|mezcal|tequila|whisky|ron|brandy|vodka|gin|margarita|michelada|carajillo|limonada|horchata|soda|sprite|coca'
+                        WHEN LOWER(COALESCE(ti.category, '')) REGEXP '$bebidaRegex'
+                          OR LOWER(COALESCE(ti.product_name, '')) REGEXP '$bebidaRegex'
                         THEN 'bebida'
                         ELSE 'comida'
                     END AS tipo,
-                    SUM(si.subtotal) AS total,
-                    SUM(si.quantity) AS qty
-                FROM sr_sale_items si
-                INNER JOIN sr_sales s ON si.sr_ticket_id = s.sr_ticket_id
-                LEFT JOIN sr_products p ON si.product_name = p.product_name
+                    SUM(ti.subtotal) AS total,
+                    SUM(ti.qty) AS qty
+                FROM sr_ticket_items ti
+                INNER JOIN sr_sales s ON (
+                    REPLACE(TRIM(CAST(ti.folio AS CHAR)), '#', '') = REPLACE(TRIM(CAST(s.folio AS CHAR)), '#', '')
+                    OR REPLACE(TRIM(CAST(ti.folio AS CHAR)), '#', '') = REPLACE(TRIM(CAST(s.ticket_number AS CHAR)), '#', '')
+                    OR REPLACE(TRIM(CAST(ti.folio AS CHAR)), '#', '') = REPLACE(TRIM(CAST(s.sr_ticket_id AS CHAR)), '#', '')
+                )
                 WHERE s.sale_datetime BETWEEN ? AND ?
                   $statusCondS
-                  AND si.product_name IS NOT NULL AND si.product_name != ''
+                  AND ti.product_name IS NOT NULL AND ti.product_name != ''
                 GROUP BY sale_date, tipo
                 ORDER BY sale_date, tipo
             ";
@@ -1055,9 +1119,19 @@ function getYearOverYearDaily($pdo, $startMD, $endMD, $years, $statusFilter = 'c
 }
 
 function getTopProducts($pdo, $start, $end, $statusFilter = 'closed') {
-    $cond = getStatusCondition($statusFilter);
-    $statusCond = $cond ? str_replace('AND status', 'AND s.status', $cond) : '';
+    // Build status condition with explicit 's' alias to avoid column ambiguity
+    // when joining sr_sale_items si (has sr_ticket_id) or sr_ticket_items ti (has folio)
+    // with sr_sales s — getChequePaymentEvidenceSql() uses unqualified column names
+    // that would be ambiguous without the alias qualifier.
+    if ($statusFilter === 'open') {
+        $statusCond = 'AND ' . getUncollectedPendingSql('s');
+    } elseif ($statusFilter === 'closed') {
+        $statusCond = 'AND ' . getCollectedSaleSql('s');
+    } else {
+        $statusCond = 'AND NOT (' . getCancelledStatusSql('s') . ')';
+    }
     $results = [];
+    $lastError = null;
 
     // Estrategia 1: fuente unificada (sr_sale_items + sr_ticket_items)
     try {
@@ -1108,6 +1182,7 @@ function getTopProducts($pdo, $start, $end, $statusFilter = 'closed') {
         $results = $stmt->fetchAll(PDO::FETCH_ASSOC);
     } catch (Exception $e) {
         $results = [];
+        $lastError = $e->getMessage();
     }
 
     // Estrategia 2 (fallback): solo sr_sale_items
@@ -1132,6 +1207,7 @@ function getTopProducts($pdo, $start, $end, $statusFilter = 'closed') {
             $results = $stmt->fetchAll(PDO::FETCH_ASSOC);
         } catch (Exception $e) {
             $results = [];
+            $lastError = $e->getMessage();
         }
     }
 
@@ -1162,13 +1238,14 @@ function getTopProducts($pdo, $start, $end, $statusFilter = 'closed') {
             $results = $stmt->fetchAll(PDO::FETCH_ASSOC);
         } catch (Exception $e) {
             $results = [];
+            error_log('[sales.php] getTopProducts error (Estrategia 3): ' . $e->getMessage());
         }
     }
     
     // Calcular porcentaje sobre venta de top productos
     $totalSales = array_sum(array_map(fn($r) => floatval($r['total_sales'] ?? 0), $results));
     
-    return array_map(function($r) use ($totalSales) {
+    $mapped = array_map(function($r) use ($totalSales) {
         return [
             'product_name' => (string)($r['product_name'] ?? ''),
             'total_qty' => floatval($r['total_qty'] ?? 0),
@@ -1177,6 +1254,10 @@ function getTopProducts($pdo, $start, $end, $statusFilter = 'closed') {
             'percentage' => $totalSales > 0 ? round((floatval($r['total_sales'] ?? 0) / $totalSales) * 100, 1) : 0
         ];
     }, $results);
+    if (empty($mapped) && $lastError !== null) {
+        error_log('[sales.php] getTopProducts error: ' . $lastError);
+    }
+    return $mapped;
 }
 
 function getWaiterPerformance($pdo, $start, $end, $statusFilter = 'closed') {
@@ -1410,79 +1491,78 @@ function try_payment_methods_from_sr_cheque_payments_by_datetime(PDO $pdo, strin
     return aggregate_payment_lines_rows($rows);
 }
 
-/** Desglose por columnas de sr_sales (sync) + imputación por payment_type. */
+/** Desglose por columnas de sr_sales — suma simple por ticket deduplicando folio (sync a veces duplica filas). */
 function getPaymentMethodsFromSrSalesColumns(PDO $pdo, string $start, string $end, string $statusFilter = 'closed'): array
 {
     $statusCond = getStatusCondition($statusFilter);
-    $nc = 'NOT (total=0 AND COALESCE(subtotal,0)>0)';
-    $pt = 'LOWER(TRIM(COALESCE(payment_type,\'\')))';
-    // SR / BD locales usan enum español (efectivo, tarjeta, transferencia, otro) además de inglés.
-    $ptCash = "({$pt} IN ('cash','efectivo','contado'))";
-    $ptCard = "({$pt} IN ('card','tarjeta','tc','td','credito','debito'))";
-    $ptVoucher = "({$pt} IN ('voucher','vale','vales'))";
-    $ptTransfer = "({$pt} IN ('transfer','otros','transferencia','otro'))";
-    // Sin columnas de pago: imputar desde total si status cerrado O si SR ya dejó forma de pago distinta de pending
-    // Paréntesis: ( split AND ( status OR ( total AND ( ptCash OR … ) ) ) ) — 4 cierres tras el grupo de pt*.
-    $imputeWhen = '(' . getPaymentSplitZeroOrEmptySql() . ' AND ('
-        . getClosedStatusSql()
-        . " OR (COALESCE(total,0) > 0.005 AND ({$ptCash} OR {$ptCard} OR {$ptVoucher} OR {$ptTransfer}))))";
-    $imCash = "(($nc) AND (COALESCE(cash_amount,0) > 0.005 OR ($imputeWhen AND {$ptCash})))";
-    $imCard = "(($nc) AND (COALESCE(card_amount,0) > 0.005 OR ($imputeWhen AND {$ptCard})))";
-    $imVoucher = "(($nc) AND (COALESCE(voucher_amount,0) > 0.005 OR ($imputeWhen AND {$ptVoucher})))";
-    // No contar other_amount como "otros" si el ticket es efectivo/tarjeta/vale (evita doble conteo con columnas en 0).
-    $imOther = "(($nc) AND (
-        (COALESCE(other_amount,0) > 0.005 AND NOT ({$ptCash}) AND NOT ({$ptCard}) AND NOT ({$ptVoucher}))
-        OR ($imputeWhen AND {$ptTransfer})
-    ))";
-
-    $sql = "SELECT 
-                COALESCE(SUM(CASE WHEN $nc THEN GREATEST(COALESCE(cash_amount,0), CASE WHEN $imputeWhen AND {$ptCash} THEN COALESCE(total,0) ELSE 0 END) ELSE 0 END), 0) as cash_total,
-                COALESCE(SUM(CASE WHEN $nc THEN GREATEST(COALESCE(card_amount,0), CASE WHEN $imputeWhen AND {$ptCard} THEN COALESCE(total,0) ELSE 0 END) ELSE 0 END), 0) as card_total,
-                COALESCE(SUM(CASE WHEN $nc THEN GREATEST(COALESCE(voucher_amount,0), CASE WHEN $imputeWhen AND {$ptVoucher} THEN COALESCE(total,0) ELSE 0 END) ELSE 0 END), 0) as voucher_total,
-                COALESCE(SUM(CASE WHEN $nc THEN GREATEST(COALESCE(other_amount,0), CASE WHEN $imputeWhen AND {$ptTransfer} THEN COALESCE(total,0) ELSE 0 END) ELSE 0 END), 0) as other_total,
-                COUNT(CASE WHEN $imCash THEN 1 END) as cash_count,
-                COUNT(CASE WHEN $imCard THEN 1 END) as card_count,
-                COUNT(CASE WHEN $imVoucher THEN 1 END) as voucher_count,
-                COUNT(CASE WHEN $imOther THEN 1 END) as other_count
+    $nc = 'NOT (total = 0 AND COALESCE(subtotal, 0) > 0)';
+    // tid estable aunque sr_ticket_id venga vacío (no agrupamos tickets distintos con id distinto).
+    $tidExpr = "COALESCE(NULLIF(TRIM(REPLACE(CAST(sr_ticket_id AS CHAR), '#', '')), ''), CONCAT('id-', CAST(id AS CHAR)))";
+    $sql = "
+        SELECT
+            COALESCE(SUM(mcash), 0) AS cash_total,
+            COALESCE(SUM(mcard), 0) AS card_total,
+            COALESCE(SUM(mvoucher), 0) AS voucher_total,
+            COALESCE(SUM(mother), 0) AS other_total,
+            COALESCE(SUM(CASE WHEN mcash > 0.005 THEN 1 ELSE 0 END), 0) AS cash_count,
+            COALESCE(SUM(CASE WHEN mcard > 0.005 THEN 1 ELSE 0 END), 0) AS card_count,
+            COALESCE(SUM(CASE WHEN mvoucher > 0.005 THEN 1 ELSE 0 END), 0) AS voucher_count,
+            COALESCE(SUM(CASE WHEN mother > 0.005 THEN 1 ELSE 0 END), 0) AS other_count
+        FROM (
+            SELECT
+                {$tidExpr} AS tid,
+                MAX(COALESCE(cash_amount, 0))    AS mcash,
+                MAX(COALESCE(card_amount, 0))    AS mcard,
+                MAX(COALESCE(voucher_amount, 0)) AS mvoucher,
+                MAX(COALESCE(other_amount, 0))   AS mother
             FROM sr_sales
             WHERE sale_datetime BETWEEN ? AND ?
-              $statusCond";
+              AND NOT (" . getCancelledStatusSql() . ")
+              {$statusCond}
+              AND {$nc}
+            GROUP BY {$tidExpr}
+        ) grp
+    ";
 
     $stmt = $pdo->prepare($sql);
     $stmt->execute([$start, $end]);
-    $result = $stmt->fetch(PDO::FETCH_ASSOC);
+    $result = $stmt->fetch(PDO::FETCH_ASSOC) ?: [];
 
     $methods = [];
 
-    if ($result['cash_total'] > 0) {
+    $cashTot = floatval($result['cash_total'] ?? 0);
+    if ($cashTot > 0.005) {
         $methods[] = [
-            'name' => 'Efectivo',
-            'count' => intval($result['cash_count']),
-            'value' => floatval($result['cash_total']),
+            'name'  => 'Efectivo',
+            'count' => intval($result['cash_count'] ?? 0),
+            'value' => $cashTot,
         ];
     }
 
-    if ($result['card_total'] > 0) {
+    $cardTot = floatval($result['card_total'] ?? 0);
+    if ($cardTot > 0.005) {
         $methods[] = [
-            'name' => 'Tarjeta',
-            'count' => intval($result['card_count']),
-            'value' => floatval($result['card_total']),
+            'name'  => 'Tarjeta',
+            'count' => intval($result['card_count'] ?? 0),
+            'value' => $cardTot,
         ];
     }
 
-    if ($result['voucher_total'] > 0) {
+    $voucherTot = floatval($result['voucher_total'] ?? 0);
+    if ($voucherTot > 0.005) {
         $methods[] = [
-            'name' => 'Vales',
-            'count' => intval($result['voucher_count']),
-            'value' => floatval($result['voucher_total']),
+            'name'  => 'Vales',
+            'count' => intval($result['voucher_count'] ?? 0),
+            'value' => $voucherTot,
         ];
     }
 
-    if ($result['other_total'] > 0) {
+    $otherTot = floatval($result['other_total'] ?? 0);
+    if ($otherTot > 0.005) {
         $methods[] = [
-            'name' => 'Transferencia / Otros',
-            'count' => intval($result['other_count']),
-            'value' => floatval($result['other_total']),
+            'name'  => 'Transferencia / Otros',
+            'count' => intval($result['other_count'] ?? 0),
+            'value' => $otherTot,
         ];
     }
 
@@ -1491,6 +1571,7 @@ function getPaymentMethodsFromSrSalesColumns(PDO $pdo, string $start, string $en
             'SELECT COUNT(*) AS n, COALESCE(SUM(total), 0) AS v FROM sr_sales
              WHERE sale_datetime BETWEEN ? AND ?
                AND ' . getCollectedSaleSql() . '
+               AND NOT (' . getCancelledStatusSql() . ')
                AND NOT (total = 0 AND COALESCE(subtotal, 0) > 0)'
         );
         $stmtFb->execute([$start, $end]);
@@ -1498,7 +1579,7 @@ function getPaymentMethodsFromSrSalesColumns(PDO $pdo, string $start, string $en
         $v = floatval($fb['v'] ?? 0);
         if ($v > 0.005) {
             $methods[] = [
-                'name' => 'Sin desglose en POS (cobros sin detalle)',
+                'name'  => 'Sin desglose en POS (cobros sin detalle)',
                 'count' => intval($fb['n'] ?? 0),
                 'value' => $v,
             ];
@@ -1564,7 +1645,7 @@ function getCardPaymentBreakdown(PDO $pdo, string $start, string $end): array
     $r = $stmt->fetch(PDO::FETCH_ASSOC) ?: [];
     $cardTotal = floatval($r['card_total'] ?? 0);
     $cardTip = floatval($r['card_tip'] ?? 0);
-    $cardSales = max(0.0, $cardTotal - $cardTip);
+    $cardSales = max(0.0, $cardTotal - $cardTip); // card_amount incluye propina; venta = total - propina
     return [
         'card_total' => round($cardTotal, 2),
         'card_sales' => round($cardSales, 2),
@@ -1575,6 +1656,15 @@ function getCardPaymentBreakdown(PDO $pdo, string $start, string $end): array
 
 function getDetailedAnalytics($pdo, $start, $end, $statusFilter = 'closed') {
     $statusCond = getStatusCondition($statusFilter);
+    // statusCondS: same filter but with 's' alias for queries that JOIN sr_sales s with items tables
+    // (avoids ambiguous column errors when joined table shares column names like sr_ticket_id/folio)
+    if ($statusFilter === 'open') {
+        $statusCondS = 'AND ' . getUncollectedPendingSql('s');
+    } elseif ($statusFilter === 'closed') {
+        $statusCondS = 'AND ' . getCollectedSaleSql('s');
+    } else {
+        $statusCondS = 'AND NOT (' . getCancelledStatusSql('s') . ')';
+    }
     $itemsSource = "
         SELECT
             sr_ticket_id AS ticket_ref,
@@ -1615,7 +1705,7 @@ function getDetailedAnalytics($pdo, $start, $end, $statusFilter = 'closed') {
                 FROM ($itemsSource) i
                 INNER JOIN sr_sales s ON $ticketJoinCond
                 WHERE s.sale_datetime BETWEEN ? AND ?
-                  $statusCond
+                  $statusCondS
                   AND i.product_name IS NOT NULL
                   AND i.product_name != ''
                 GROUP BY i.product_name
@@ -1632,7 +1722,7 @@ function getDetailedAnalytics($pdo, $start, $end, $statusFilter = 'closed') {
                  FROM ($itemsSource) i
                  INNER JOIN sr_sales s ON $ticketJoinCond
                  WHERE s.sale_datetime BETWEEN ? AND ?
-                   $statusCond
+                   $statusCondS
                    AND i.product_name IS NOT NULL
                    AND i.product_name != ''
                  GROUP BY i.product_name
@@ -1642,7 +1732,7 @@ function getDetailedAnalytics($pdo, $start, $end, $statusFilter = 'closed') {
         $stmt2->execute([$start, $end]);
         $bottomProducts = $stmt2->fetchAll(PDO::FETCH_ASSOC);
     } catch (Exception $e) {
-        // Tabla items puede no existir
+        error_log('[sales.php] getDetailedAnalytics products error: ' . $e->getMessage());
     }
     
     // 2. Bebidas más y menos vendidas (asumiendo categoría o nombre)
@@ -1655,7 +1745,7 @@ function getDetailedAnalytics($pdo, $start, $end, $statusFilter = 'closed') {
                 FROM ($itemsSource) i
                 INNER JOIN sr_sales s ON $ticketJoinCond
                 WHERE s.sale_datetime BETWEEN ? AND ?
-                  $statusCond
+                  $statusCondS
                   AND (i.product_name LIKE '%BEBIDA%' 
                        OR i.product_name LIKE '%REFRESCO%'
                        OR i.product_name LIKE '%AGUA%'
@@ -1675,7 +1765,7 @@ function getDetailedAnalytics($pdo, $start, $end, $statusFilter = 'closed') {
                  FROM ($itemsSource) i
                  INNER JOIN sr_sales s ON $ticketJoinCond
                  WHERE s.sale_datetime BETWEEN ? AND ?
-                   $statusCond
+                   $statusCondS
                    AND (i.product_name LIKE '%BEBIDA%' 
                         OR i.product_name LIKE '%REFRESCO%'
                         OR i.product_name LIKE '%AGUA%'
@@ -1689,7 +1779,7 @@ function getDetailedAnalytics($pdo, $start, $end, $statusFilter = 'closed') {
         $stmt2->execute([$start, $end]);
         $bottomBeverages = $stmt2->fetchAll(PDO::FETCH_ASSOC);
     } catch (Exception $e) {
-        // Tabla items puede no existir
+        error_log('[sales.php] getDetailedAnalytics beverages error: ' . $e->getMessage());
     }
     
     // 3. Propinas (pagadas vs no pagadas)
@@ -1832,7 +1922,7 @@ function getDetailedAnalytics($pdo, $start, $end, $statusFilter = 'closed') {
         $sqlBev = "SELECT i.product_name, SUM(i.qty) as total_qty, SUM(i.sub) as total_sales
                    FROM ($itemsSource) i
                    INNER JOIN sr_sales s ON $ticketJoinCond
-                   WHERE s.sale_datetime BETWEEN ? AND ? $statusCond
+                   WHERE s.sale_datetime BETWEEN ? AND ? $statusCondS
                      AND (i.product_name LIKE '%CERVEZA%' OR i.product_name LIKE '%REFRESCO%'
                           OR i.product_name LIKE '%AGUA%' OR i.product_name LIKE '%VINO%'
                           OR i.product_name LIKE '%JUGO%' OR i.product_name LIKE '%BEBIDA%'
@@ -1850,7 +1940,7 @@ function getDetailedAnalytics($pdo, $start, $end, $statusFilter = 'closed') {
         $sqlFood = "SELECT i.product_name, SUM(i.qty) as total_qty, SUM(i.sub) as total_sales
                     FROM ($itemsSource) i
                     INNER JOIN sr_sales s ON $ticketJoinCond
-                    WHERE s.sale_datetime BETWEEN ? AND ? $statusCond
+                    WHERE s.sale_datetime BETWEEN ? AND ? $statusCondS
                       AND i.product_name IS NOT NULL AND i.product_name != ''
                       AND i.product_name NOT LIKE '%CERVEZA%' AND i.product_name NOT LIKE '%REFRESCO%'
                       AND i.product_name NOT LIKE '%AGUA%' AND i.product_name NOT LIKE '%VINO%'
@@ -1872,7 +1962,7 @@ function getDetailedAnalytics($pdo, $start, $end, $statusFilter = 'closed') {
             $topByCategory['overall'] = $topProducts[0];
         }
     } catch (Exception $e) {
-        // Error en consulta de categorías
+        error_log('[sales.php] getDetailedAnalytics topByCategory error: ' . $e->getMessage());
     }
 
     return [

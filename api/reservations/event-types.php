@@ -5,7 +5,13 @@ date_default_timezone_set('America/Hermosillo');
 header('Content-Type: application/json');
 
 try {
-    requireAuth();
+    $method = $_SERVER['REQUEST_METHOD'];
+    $isPublicGet = $method === 'GET' && isset($_GET['public']) && $_GET['public'] === '1';
+
+    if (!$isPublicGet) {
+        requireAuth();
+    }
+
     $conn = getConnection();
 
     // Create table on demand for shared-hosting compatibility
@@ -29,8 +35,6 @@ try {
     $conn->query("UPDATE reservation_event_types SET name = 'Día de las Madres' WHERE slug = 'dia-madres'");
     $conn->query("UPDATE reservation_event_types SET name = 'Día del Padre' WHERE slug = 'dia-del-padre'");
     $conn->query("UPDATE reservation_event_types SET name = 'Año Nuevo' WHERE slug = 'ano-nuevo'");
-
-    $method = $_SERVER['REQUEST_METHOD'];
 
     if ($method === 'GET') {
         $public = isset($_GET['public']) && $_GET['public'] === '1';

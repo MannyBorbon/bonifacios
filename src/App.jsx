@@ -32,6 +32,7 @@ import MothersDayReservation from './pages/MothersDayReservation'
 import ReservationClientDetail from './pages/ReservationClientDetail'
 import SpecialEventReservation from './pages/SpecialEventReservation'
 import StandardReservation from './pages/StandardReservation'
+import EventQuoteSimple from './pages/EventQuoteSimple'
 import DialDevLab from './pages/dev/DialDevLab'
 import { applySandboxSeoGuards, getSandboxLabel, isSandboxEnvironment } from './config/runtime'
 
@@ -62,6 +63,7 @@ function App() {
         <Route path="/menu" element={<Menu />} />
         <Route path="/reservacion-dia-madres" element={<MothersDayReservation />} />
         <Route path="/reservacion" element={<StandardReservation />} />
+        <Route path="/cotiza-tu-evento" element={<EventQuoteSimple />} />
         <Route path="/reservacion-especial/:slug" element={<SpecialEventReservation />} />
         <Route path="/reservacion-detalle" element={<ReservationClientDetail />} />
         {import.meta.env.DEV ? <Route path="/dev/dial-lab" element={<DialDevLab />} /> : null}

@@ -863,7 +863,7 @@ export default function Sales() {
       }
       loadAllData();
     };
-    const intervalMs = dateRange === 'today' ? 30000 : 0;
+    const intervalMs = dateRange === 'today' ? 15000 : 0;
     const interval = intervalMs > 0 ? setInterval(tick, intervalMs) : null;
     const onVis = () => {
       if (typeof document !== 'undefined' && !document.hidden && dateRange === 'today') {
@@ -993,7 +993,15 @@ export default function Sales() {
   const teHero = parseApiDatetime(data?.selected_period?.end);
   const heroPeriodContainsNow =
     !Number.isNaN(tsHero) && !Number.isNaN(teHero) && Date.now() >= tsHero && Date.now() <= teHero;
-  const heroSalesTotal = (stats.total || 0) + (openAmount || 0);
+  /** Total tipo Monitor SR: preferir mismo valor embebido en current_stats por si falta dashboard (caché / respuesta parcial). */
+  const compatRaw =
+    stats?.sr_monitor_total ?? data?.dashboard?.monitor_compat_total;
+  const monitorCompatTotal =
+    compatRaw !== undefined && compatRaw !== null ? Number(compatRaw) : NaN;
+  const cobMasAbierto = (stats.total || 0) + (openAmount || 0);
+  const compatOk = Number.isFinite(monitorCompatTotal);
+  const heroSalesTotal = compatOk ? monitorCompatTotal : cobMasAbierto;
+
   const peakHour = data?.analytics?.peak_hour;
   const avgTicket = stats.total / (stats.checks || 1);
   const paymentMethodsSum = (data?.payment_methods || []).reduce(
@@ -1044,9 +1052,6 @@ export default function Sales() {
                     {' '}
                     · <span className="text-orange-300/95">{openCount} en curso</span>
                     {' '}
-                    <span className="font-normal normal-case text-slate-600">
-                      ({stats.checks + openCount} movimientos en sr_sales — sync SR)
-                    </span>
                   </>
                 ) : null}
                 {lastUpdate && (
@@ -1062,9 +1067,28 @@ export default function Sales() {
                   {formatCurrency(heroSalesTotal)}
                 </h1>
                 <span className="text-slate-500 text-xs sm:text-sm mt-1 sm:mt-0">
-                  Venta en vivo (cobradas + en curso)&nbsp;·&nbsp;{selectedRangeLabel}
+                  Venta total&nbsp;·&nbsp;{selectedRangeLabel}
                 </span>
               </div>
+              {compatOk ? (
+                <p className="text-slate-600 text-[10px] sm:text-[11px] max-w-2xl leading-snug mt-1">
+                  Mismo rango de fecha/turno que arriba; suma <span className="text-slate-400">una vez por cuenta</span>:
+                  si hay desglose por productos sincronizado usa esas líneas; si no, el total del ticket (excluye cancelados).
+                  La fila <span className="text-slate-400">Cobrado / En curso</span> sigue mostrando cómo está partido el sync.
+                  {cobMasAbierto !== heroSalesTotal ? (
+                    <>
+                      {' '}
+                      <span className="text-slate-500">
+                        (Referencia cobrado&nbsp;+&nbsp;en curso desde encabezados: {formatCurrency(cobMasAbierto)}.)
+                      </span>
+                    </>
+                  ) : null}
+                </p>
+              ) : (
+                <p className="text-slate-600 text-[10px] sm:text-[11px] max-w-2xl leading-snug mt-1">
+                  Total aproximado: cobrado + en curso (sin dato «Monitor» en respuesta).
+                </p>
+              )}
               <div className="mt-1 flex flex-wrap gap-x-4 gap-y-1 text-[11px]">
                 <span className="flex items-center gap-1.5">
                   <span className="inline-block w-1.5 h-1.5 rounded-full bg-cyan-400"></span>

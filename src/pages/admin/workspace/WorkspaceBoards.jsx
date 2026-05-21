@@ -362,14 +362,14 @@ export default function WorkspaceBoards() {
                         {col.cards.map((card, cardIdx) => (
                           <Draggable key={card.id} draggableId={String(card.id)} index={cardIdx}>
                             {(provided, snapshot) => (
-                              <div ref={provided.innerRef} {...provided.draggableProps}
-                                className={`group/card rounded-xl p-3 transition-all duration-200 ${
+                              <div ref={provided.innerRef} {...provided.draggableProps} {...provided.dragHandleProps}
+                                className={`group/card relative rounded-xl p-3 transition-all duration-200 cursor-grab active:cursor-grabbing ${
                                   snapshot.isDragging
                                     ? 'shadow-2xl ring-2 ring-emerald-400/40 rotate-1 scale-105 bg-[#0a1428]'
                                     : 'bg-[#050a14]/80 border border-slate-700/20 hover:border-emerald-500/20 hover:shadow-lg'
                                 }`}>
-                                {/* Drag handle */}
-                                <div {...provided.dragHandleProps} className="absolute top-1.5 right-1.5 opacity-0 group-hover/card:opacity-100 transition-opacity cursor-grab active:cursor-grabbing p-0.5 rounded hover:bg-slate-700/40">
+                                {/* Drag indicator */}
+                                <div className="absolute top-1.5 right-1.5 opacity-0 group-hover/card:opacity-100 transition-opacity p-0.5 rounded">
                                   <GripHorizontal size={12} className="text-slate-500" />
                                 </div>
 

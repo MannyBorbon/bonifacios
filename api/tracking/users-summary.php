@@ -12,14 +12,23 @@ $sql = "
         u.full_name,
         u.role,
         COUNT(us.id) as total_sessions,
-        COALESCE(SUM(us.duration_seconds), 0) as total_seconds,
+        COALESCE(SUM(
+            CASE
+                WHEN us.is_active = FALSE THEN us.duration_seconds
+                WHEN us.is_active = TRUE  THEN TIMESTAMPDIFF(SECOND, us.started_at, NOW())
+                ELSE 0
+            END
+        ), 0) as total_seconds,
         COALESCE(AVG(NULLIF(us.duration_seconds, 0)), 0) as avg_seconds,
         MAX(us.started_at) as last_seen,
-        -- Is currently online: active session started in last 15 min
+        -- Is currently online: active session with recent or no last_activity (just started)
         MAX(CASE 
             WHEN us.is_active = TRUE 
             AND us.ended_at IS NULL 
-            AND (us.last_activity IS NULL OR us.last_activity > DATE_SUB(NOW(), INTERVAL 5 MINUTE))
+            AND (
+                us.last_activity IS NULL
+                OR us.last_activity > DATE_SUB(NOW(), INTERVAL 5 MINUTE)
+            )
             THEN 1 ELSE 0 
         END) as is_online
     FROM users u

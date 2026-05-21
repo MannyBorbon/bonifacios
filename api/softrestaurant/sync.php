@@ -632,10 +632,10 @@ function syncSales($conn, $sales) {
                             ) THEN sr_sales.payment_type
                             ELSE VALUES(payment_type)
                         END,
-                        cash_amount     = GREATEST(COALESCE(sr_sales.cash_amount,0), COALESCE(VALUES(cash_amount),0)),
-                        card_amount     = GREATEST(COALESCE(sr_sales.card_amount,0), COALESCE(VALUES(card_amount),0)),
-                        voucher_amount  = GREATEST(COALESCE(sr_sales.voucher_amount,0), COALESCE(VALUES(voucher_amount),0)),
-                        other_amount    = GREATEST(COALESCE(sr_sales.other_amount,0), COALESCE(VALUES(other_amount),0)),
+                        cash_amount     = CASE WHEN COALESCE(VALUES(cash_amount),0)+COALESCE(VALUES(card_amount),0)+COALESCE(VALUES(voucher_amount),0)+COALESCE(VALUES(other_amount),0) > 0.005 THEN VALUES(cash_amount) ELSE COALESCE(sr_sales.cash_amount,0) END,
+                        card_amount     = CASE WHEN COALESCE(VALUES(cash_amount),0)+COALESCE(VALUES(card_amount),0)+COALESCE(VALUES(voucher_amount),0)+COALESCE(VALUES(other_amount),0) > 0.005 THEN VALUES(card_amount) ELSE COALESCE(sr_sales.card_amount,0) END,
+                        voucher_amount  = CASE WHEN COALESCE(VALUES(cash_amount),0)+COALESCE(VALUES(card_amount),0)+COALESCE(VALUES(voucher_amount),0)+COALESCE(VALUES(other_amount),0) > 0.005 THEN VALUES(voucher_amount) ELSE COALESCE(sr_sales.voucher_amount,0) END,
+                        other_amount    = CASE WHEN COALESCE(VALUES(cash_amount),0)+COALESCE(VALUES(card_amount),0)+COALESCE(VALUES(voucher_amount),0)+COALESCE(VALUES(other_amount),0) > 0.005 THEN VALUES(other_amount) ELSE COALESCE(sr_sales.other_amount,0) END,
                         receipt_printed = VALUES(receipt_printed),
                         opened_at       = VALUES(opened_at),
                         closed_at       = CASE
@@ -796,9 +796,9 @@ function syncChequePayments($conn, $rows) {
     }
 
     $stmt->close();
-    if (!empty($folioAgg)) {
-        applyChequePaymentAggregatesToSales($conn, $folioAgg);
-    }
+    // applyChequePaymentAggregatesToSales eliminado: chequespagos puede tener filas
+    // acumulativas que inflan los importes. Los pagos se sincronizan desde cheques.tarjeta
+    // /efectivo/vales/otros directamente en el módulo 'sales'.
     return [$inserted, $updated, $failed];
 }
 
@@ -867,8 +867,9 @@ function applyChequePaymentAggregatesToSales($conn, $folioAgg) {
             $closedAt = date('Y-m-d H:i:s');
         }
         $match = (string)$folioKey;
+        // 10 placeholders: 4×decimal, payment_type, closed_at×2, match×3
         $stmt->bind_param(
-            'ddddsssss',
+            'ddddssssss',
             $cash,
             $card,
             $voucher,
@@ -1265,6 +1266,14 @@ function syncShifts($conn, $shifts) {
     return [$inserted, $updated, $failed];
 }
 
+/**
+ * Folio/canón SR normalizado para cruzar cancelaciones.cancelaciones ↔ sr_sales.{sr_ticket_id,folio,ticket_number}.
+ */
+function bonifacios_normalize_sr_sale_identity(?string $raw): string {
+    $t = strtolower(trim(str_replace(['#'], '', trim((string) $raw))));
+    return $t;
+}
+
 function syncCancellationsData($conn, $cancellations) {
     $inserted = 0;
     $updated = 0;
@@ -1279,18 +1288,34 @@ function syncCancellationsData($conn, $cancellations) {
             reason = VALUES(reason)
     ");
 
+    // Antes sólo coincida folio=en MySQL pero el folio interno SR vive en sr_ticket_id; y sólo «open»
+    // dejaba filas cobradas siguen contándose tras anularlas en SoftRestaurant.
     $stmtMarkCancelled = $conn->prepare("
-        UPDATE sr_sales SET status = 'cancelled', closed_at = NOW()
-        WHERE folio = ? AND status = 'open'
+        UPDATE sr_sales
+        SET status = 'cancelled',
+            closed_at = CASE
+                WHEN closed_at IS NULL OR closed_at IN ('','0000-00-00 00:00:00') THEN NOW()
+                ELSE closed_at END
+        WHERE LOWER(TRIM(COALESCE(status,''))) NOT IN ('cancelled','canceled','cancelado')
+          AND (
+            LOWER(TRIM(REPLACE(CAST(sr_ticket_id AS CHAR), '#', ''))) = ?
+            OR LOWER(TRIM(REPLACE(CAST(folio AS CHAR), '#', ''))) = ?
+            OR LOWER(TRIM(REPLACE(CAST(ticket_number AS CHAR), '#', ''))) = ?
+          )
     ");
 
     foreach ($cancellations as $c) {
         try {
-            $ticketNumber = $c['ticket_number'] ?? '';
+            $ticketNumber = trim((string) ($c['ticket_number'] ?? ''));
             $amount       = floatval($c['amount'] ?? 0);
             $userName     = $c['user_name'] ?? '';
             $reason       = $c['reason'] ?? '';
             $cancelDate   = $c['cancel_date'] ?? date('Y-m-d H:i:s');
+
+            if ($ticketNumber === '') {
+                $failed++;
+                continue;
+            }
 
             $stmtInsert->bind_param('sdsss', $ticketNumber, $amount, $userName, $reason, $cancelDate);
             $stmtInsert->execute();
@@ -1298,9 +1323,12 @@ function syncCancellationsData($conn, $cancellations) {
             if ($stmtInsert->affected_rows === 1 && $stmtInsert->insert_id > 0) $inserted++;
             else $updated++;
 
-            // Marcar como cancelado en sr_sales para que salga de conteos abiertos
-            $stmtMarkCancelled->bind_param('s', $ticketNumber);
-            $stmtMarkCancelled->execute();
+            // Marcar todas las variantes coincidentes (sr_ticket_id = folio SR,folio/ticket=numcheque, etc.).
+            $k = bonifacios_normalize_sr_sale_identity($ticketNumber);
+            if ($k !== '') {
+                $stmtMarkCancelled->bind_param('sss', $k, $k, $k);
+                $stmtMarkCancelled->execute();
+            }
 
         } catch (Exception $e) {
             $failed++;

@@ -106,10 +106,10 @@ class BonifaciosSync {
                     $this->syncTodayClosedSnapshot();
                 }
 
-                if (!$this->initialLoad) {
-                    $this->syncTodayChequePayments();
-                    $this->syncTodayTicketItems();
-                }
+                // Siempre sincronizar items y pagos del turno actual,
+                // incluso en modo histórico, para tener productos en vivo
+                $this->syncTodayChequePayments();
+                $this->syncTodayTicketItems();
 
                 $this->syncCashMovements();
                 $this->syncShifts();
@@ -140,6 +140,33 @@ class BonifaciosSync {
     }
 
     // ─────────────────────────────────────────────────────────────
+    // UTILIDADES PARA CORRECCIÓN DE PAGOS (chequespagos)
+    // ─────────────────────────────────────────────────────────────
+    private function sqlChequespagosAggJoin(): string {
+        // cheques.tarjeta/efectivo/vales/otros son los valores autoritativos de SR.
+        // No se usa chequespagos para evitar inflación por filas duplicadas/correctivas.
+        return '';
+    }
+
+    private function sqlEffectiveEfectivoExpr(): string {
+        // efectivo incluye propina pagada en efectivo (comportamiento nativo de SR)
+        return 'ISNULL(c.efectivo, 0)';
+    }
+
+    private function sqlEffectiveTarjetaExpr(): string {
+        // tarjeta incluye propina de tarjeta — el API separa venta y propina en el desglose
+        return 'ISNULL(c.tarjeta, 0)';
+    }
+
+    private function sqlEffectiveValesExpr(): string {
+        return 'ISNULL(c.vales, 0)';
+    }
+
+    private function sqlEffectiveOtrosExpr(): string {
+        return 'ISNULL(c.otros, 0)';
+    }
+
+    // ─────────────────────────────────────────────────────────────
     // VENTAS CERRADAS (cheques) — histórico + tiempo real
     // ─────────────────────────────────────────────────────────────
     private function syncSales(): void {
@@ -150,6 +177,13 @@ class BonifaciosSync {
             $H=$dp['H']; $I=$dp['I']; $S=$dp['S'];
 
             $this->log("[VENTAS] desde: {$dp['str']}");
+
+            // Definir expresiones de corrección para ambos modos
+            $pJoin = $this->sqlChequespagosAggJoin();
+            $eEf = $this->sqlEffectiveEfectivoExpr();
+            $eTa = $this->sqlEffectiveTarjetaExpr();
+            $eVa = $this->sqlEffectiveValesExpr();
+            $eOt = $this->sqlEffectiveOtrosExpr();
 
             if ($this->initialLoad) {
                 // ── HISTÓRICO: cerrados, en lotes de BATCH_SIZE ──
@@ -168,26 +202,26 @@ class BonifaciosSync {
                     m.nombre AS nombre_mesero,
                     c.pagado, c.cancelado,
                     -- Total neto sin propina (cuando propinaincluida>0, el total de SR la incluye)
-                    CASE WHEN ISNULL(c.total,0) > 0
-                         THEN c.total - CASE WHEN ISNULL(c.propinaincluida,0) > 0
-                                             THEN ISNULL(c.propina,0) ELSE 0 END
-                         ELSE ISNULL(c.subtotal,0) + ISNULL(c.totalimpuesto1,0)
-                              - ISNULL(c.descuentoimporte,0)
-                    END                              AS total,
-                    ISNULL(c.subtotal,0)             AS subtotal,
-                    ISNULL(c.totalimpuesto1,0)       AS impuesto,
-                    ISNULL(c.propina,0)              AS propina,
-                    ISNULL(c.propinaincluida,0)      AS propinaincluida,
-                    ISNULL(c.propinapagada,0)        AS propinapagada,
-                    ISNULL(c.descuentoimporte,0)     AS descuento,
-                    ISNULL(c.efectivo,0)             AS efectivo,
-                    ISNULL(c.tarjeta,0)              AS tarjeta,
-                    ISNULL(c.vales,0)                AS vales,
-                    ISNULL(c.otros,0)                AS otros
+                    -- si total=0 es cortesia completa (descuento=100%)
+                    ISNULL(c.total,0) AS total,
+                    ISNULL(c.subtotal,0) AS subtotal,
+                    ISNULL(c.totalimpuesto1,0) AS impuesto,
+                    ISNULL(c.propina,0) AS propina,
+                    ISNULL(c.descuentoimporte,0) AS descuento,
+                    ISNULL(c.propinaincluida,0) AS propinaincluida,
+                    ISNULL(c.propinapagada,0) AS propinapagada,
+                    {$eEf} AS efectivo,
+                    {$eTa} AS tarjeta,
+                    {$eVa} AS vales,
+                    {$eOt} AS otros
                 FROM cheques c
                 LEFT JOIN meseros m ON m.idmesero = c.idmesero
+                {$pJoin}
                 WHERE c.cancelado = 0
-                  AND c.pagado = 1
+                  AND (
+                      ISNULL(c.pagado, 0) = 1
+                      OR ( {$eEf} + {$eTa} + {$eVa} + {$eOt} ) > 0.0001
+                  )
                   AND ($dateFilter)
                 ORDER BY c.fecha ASC";
 
@@ -200,35 +234,41 @@ class BonifaciosSync {
                     return;
                 }
             } else {
-                // ── TIEMPO REAL: solo turno actual (GETDATE en SQL Server) ──
-                $shiftFilter = SHIFT_FILTER_C;
-                $sql = "SELECT TOP " . BATCH_SIZE . "
-                    c.folio, c.numcheque, c.fecha,
-                    c.mesa,  c.nopersonas, c.idmesero, c.idturno,
-                    m.nombre AS nombre_mesero,
-                    c.pagado, c.cancelado,
-                    CASE WHEN ISNULL(c.total,0) > 0
-                         THEN c.total - CASE WHEN ISNULL(c.propinaincluida,0) > 0
-                                             THEN ISNULL(c.propina,0) ELSE 0 END
-                         ELSE ISNULL(c.subtotal,0) + ISNULL(c.totalimpuesto1,0)
-                              - ISNULL(c.descuentoimporte,0)
-                    END                              AS total,
-                    ISNULL(c.subtotal,0)             AS subtotal,
-                    ISNULL(c.totalimpuesto1,0)       AS impuesto,
-                    ISNULL(c.propina,0)              AS propina,
-                    ISNULL(c.propinaincluida,0)      AS propinaincluida,
-                    ISNULL(c.propinapagada,0)        AS propinapagada,
-                    ISNULL(c.descuentoimporte,0)     AS descuento,
-                    ISNULL(c.efectivo,0)             AS efectivo,
-                    ISNULL(c.tarjeta,0)              AS tarjeta,
-                    ISNULL(c.vales,0)                AS vales,
-                    ISNULL(c.otros,0)                AS otros
-                FROM cheques c
-                LEFT JOIN meseros m ON m.idmesero = c.idmesero
-                WHERE c.cancelado = 0
-                  AND c.pagado = 1
-                  AND ($shiftFilter)
-                ORDER BY c.fecha ASC";
+                // ── TIEMPO REAL: TURNO ACTUAL + ÚLTIMAS 48H ──
+                // Re-sincroniza tickets del turno actual Y de las últimas 48h para
+                // actualizar cash_amount de tickets cobrados en turnos recientes ya cerrados
+                // Re-usar las mismas expresiones de corrección para tiempo real
+            $sql = "SELECT
+                c.folio, c.numcheque, c.fecha,
+                c.mesa,  c.nopersonas, c.idmesero, c.idturno,
+                m.nombre AS nombre_mesero,
+                c.pagado, c.cancelado,
+                CASE WHEN ISNULL(c.total,0) > 0
+                     THEN c.total - CASE WHEN ISNULL(c.propinaincluida,0) > 0
+                                         THEN ISNULL(c.propina,0) ELSE 0 END
+                     ELSE ISNULL(c.subtotal,0) + ISNULL(c.totalimpuesto1,0)
+                          - ISNULL(c.descuentoimporte,0)
+                END                              AS total,
+                ISNULL(c.subtotal,0)             AS subtotal,
+                ISNULL(c.totalimpuesto1,0)       AS impuesto,
+                ISNULL(c.propina,0)              AS propina,
+                ISNULL(c.propinaincluida,0)      AS propinaincluida,
+                ISNULL(c.propinapagada,0)        AS propinapagada,
+                ISNULL(c.descuentoimporte,0)     AS descuento,
+                {$eEf} AS efectivo,
+                {$eTa} AS tarjeta,
+                {$eVa} AS vales,
+                {$eOt} AS otros
+            FROM cheques c
+            LEFT JOIN meseros m ON m.idmesero = c.idmesero
+            {$pJoin}
+            WHERE c.cancelado = 0
+              AND (
+                  ISNULL(c.pagado, 0) = 1
+                  OR ( {$eEf} + {$eTa} + {$eVa} + {$eOt} ) > 0.0001
+              )
+              AND c.fecha >= DATEADD(HOUR, -48, GETDATE())
+            ORDER BY c.fecha ASC";
 
                 $rows = $this->conn->query($sql)->fetchAll();
             }
@@ -239,6 +279,7 @@ class BonifaciosSync {
 
             $data           = [];
             $lastClosedDate = $this->state['sales'] ?? HISTORY_START;
+            $ticketFolios   = [];
 
             foreach ($rows as $r) {
                 $fechaObj = $this->toDatetime($r['fecha']);
@@ -287,10 +328,15 @@ class BonifaciosSync {
                     'closed_at'      => $dt,
                     'items'          => [],
                 ];
+                $ticketFolios[] = $tid;
 
                 if ($dt > $lastClosedDate) {
                     $lastClosedDate = $dt;
                 }
+            }
+
+            if (!empty($data) && !empty($ticketFolios)) {
+                $this->attachItemsToSalesPayload($data, $this->fetchTicketItemsByFolios('cheqdet', $ticketFolios));
             }
 
             $apiOk = false;
@@ -305,7 +351,10 @@ class BonifaciosSync {
                 return;
             }
 
-            $this->state['sales'] = $lastClosedDate;
+            // Solo avanzar cursor en modo histórico, no en tiempo real
+            if ($this->initialLoad) {
+                $this->state['sales'] = $lastClosedDate;
+            }
 
             if ($this->initialLoad && $apiOk && count($rows) < BATCH_SIZE) {
                 $this->initialLoad = false;
@@ -327,11 +376,17 @@ class BonifaciosSync {
                 return;
             }
             $shiftFilter = SHIFT_FILTER_C;
+            // Misma fórmula de "total" que syncSales: si la propina va incluida en c.total, restarla para no inflar la venta neta.
             $sql = "SELECT TOP 400
                 c.folio, c.numcheque, c.fecha,
                 c.mesa,  c.nopersonas, c.idmesero, c.idturno,
                 m.nombre AS nombre_mesero,
-                ISNULL(c.total,0)            AS total,
+                CASE WHEN ISNULL(c.total,0) > 0
+                     THEN c.total - CASE WHEN ISNULL(c.propinaincluida,0) > 0
+                                         THEN ISNULL(c.propina,0) ELSE 0 END
+                     ELSE ISNULL(c.subtotal,0) + ISNULL(c.totalimpuesto1,0)
+                          - ISNULL(c.descuentoimporte,0)
+                END                          AS total,
                 ISNULL(c.subtotal,0)         AS subtotal,
                 ISNULL(c.totalimpuesto1,0)   AS impuesto,
                 ISNULL(c.propina,0)          AS propina,
@@ -355,6 +410,7 @@ class BonifaciosSync {
             }
 
             $data = [];
+            $ticketFolios = [];
             foreach ($rows as $r) {
                 $fechaObj = $this->toDatetime($r['fecha']);
                 if (!$fechaObj) {
@@ -402,6 +458,11 @@ class BonifaciosSync {
                     'closed_at'      => $dt,
                     'items'          => [],
                 ];
+                $ticketFolios[] = $tid;
+            }
+
+            if (!empty($data) && !empty($ticketFolios)) {
+                $this->attachItemsToSalesPayload($data, $this->fetchTicketItemsByFolios('cheqdet', $ticketFolios));
             }
 
             if (!empty($data)) {
@@ -418,6 +479,22 @@ class BonifaciosSync {
     // ─────────────────────────────────────────────────────────────
     private function syncTodayOpen(): void {
         try {
+            // Filtro de turno actual para tempcheques (igual que SHIFT_FILTER_C pero para tempcheques)
+            $shiftFilterT = "
+                (
+                    t.fecha >= DATEADD(HOUR, 8, CAST(
+                        CASE WHEN DATEPART(HOUR, GETDATE()) < 8
+                             THEN DATEADD(DAY,-1, CONVERT(date, GETDATE()))
+                             ELSE CONVERT(date, GETDATE()) END
+                    AS datetime))
+                    AND t.fecha < DATEADD(HOUR, 8, CAST(
+                        CASE WHEN DATEPART(HOUR, GETDATE()) < 8
+                             THEN CONVERT(date, GETDATE())
+                             ELSE DATEADD(DAY,1, CONVERT(date, GETDATE())) END
+                    AS datetime))
+                )
+            ";
+
             $sql = "SELECT
                 t.folio, t.numcheque, t.fecha, t.mesa, t.nopersonas,
                 t.idmesero, m.nombre AS nombre_mesero,
@@ -434,7 +511,8 @@ class BonifaciosSync {
                 ISNULL(t.descuentoimporte,0)     AS descuento
             FROM tempcheques t
             LEFT JOIN meseros m ON m.idmesero = t.idmesero
-            WHERE NOT EXISTS (SELECT 1 FROM cheques c WHERE c.folio = t.folio)";
+            WHERE NOT EXISTS (SELECT 1 FROM cheques c WHERE c.folio = t.folio)
+              AND ($shiftFilterT)";
 
             $rows = $this->conn->query($sql)->fetchAll();
             if (count($rows) === 0) {
@@ -442,6 +520,7 @@ class BonifaciosSync {
             }
 
             $data = [];
+            $ticketFolios = [];
             foreach ($rows as $r) {
                 $fechaObj = $this->toDatetime($r['fecha']);
                 if (!$fechaObj) {
@@ -478,6 +557,11 @@ class BonifaciosSync {
                     'closed_at'      => null,
                     'items'          => [],
                 ];
+                $ticketFolios[] = $tid;
+            }
+
+            if (!empty($data) && !empty($ticketFolios)) {
+                $this->attachItemsToSalesPayload($data, $this->fetchTicketItemsByFolios('tempcheqdet', $ticketFolios));
             }
 
             if (!empty($data)) {
@@ -547,59 +631,91 @@ class BonifaciosSync {
     // ─────────────────────────────────────────────────────────────
     private function syncTodayTicketItems(): void {
         try {
-            $detailTable = $this->tableExists('cheqdet') ? 'cheqdet' : ($this->tableExists('tempcheqdet') ? 'tempcheqdet' : null);
-            if ($detailTable === null || !$this->tableExists('cheques')) {
+            if (!$this->tableExists('cheques') && !$this->tableExists('tempcheques')) {
+                return;
+            }
+            $nameCol = null;
+            if ($this->tableExists('productos')) {
+                $nameCol = $this->firstExistingColumn('productos', ['descripcion', 'nombre', 'nombremostrar', 'name']);
+            }
+
+            $buildSelect = function (string $detailTable, string $headerTable, string $headerAlias, string $headerFilter) use ($nameCol): ?string {
+                if (!$this->tableExists($detailTable) || !$this->tableExists($headerTable)) {
+                    return null;
+                }
+
+                $folioCol = $this->firstExistingColumn($detailTable, ['foliodet', 'folio', 'idcheque', 'numcheque']) ?? 'foliodet';
+                $qtyCol = $this->firstExistingColumn($detailTable, ['cantidad', 'qty']) ?? 'cantidad';
+                $priceCol = $this->firstExistingColumn($detailTable, ['precio', 'unit_price']) ?? 'precio';
+                $discountCol = $this->firstExistingColumn($detailTable, ['descuento', 'discount']);
+                $notesCol = $this->firstExistingColumn($detailTable, ['comentario', 'observaciones', 'notes']);
+
+                $productNameExpr = $nameCol
+                    ? "ISNULL(CAST(p.$nameCol AS VARCHAR(255)), CAST(d.idproducto AS VARCHAR(50)))"
+                    : "CAST(d.idproducto AS VARCHAR(50))";
+                $discountExpr = $discountCol ? "ISNULL(CAST(d.$discountCol AS DECIMAL(10,2)),0)" : "CAST(0 AS DECIMAL(10,2))";
+                $notesExpr = $notesCol ? "ISNULL(CAST(d.$notesCol AS VARCHAR(255)), '')" : "CAST('' AS VARCHAR(255))";
+                $joinProductos = $this->tableExists('productos')
+                    ? "LEFT JOIN productos p ON p.idproducto = d.idproducto"
+                    : "";
+
+                return "SELECT
+                    CAST(d.$folioCol AS VARCHAR(50)) AS folio,
+                    CAST(d.idproducto AS VARCHAR(50)) AS product_id,
+                    $productNameExpr AS product_name,
+                    ISNULL(CAST(d.$qtyCol AS DECIMAL(10,3)),1) AS qty,
+                    ISNULL(CAST(d.$priceCol AS DECIMAL(10,2)),0) AS unit_price,
+                    $discountExpr AS discount,
+                    $notesExpr AS notes
+                FROM $detailTable d
+                $joinProductos
+                INNER JOIN $headerTable $headerAlias ON $headerAlias.folio = d.$folioCol
+                WHERE $headerFilter
+                  AND d.idproducto IS NOT NULL";
+            };
+
+            $shiftFilterT = "
+                (
+                    th.fecha >= DATEADD(HOUR, 8, CAST(
+                        CASE WHEN DATEPART(HOUR, GETDATE()) < 8
+                             THEN DATEADD(DAY,-1, CONVERT(date, GETDATE()))
+                             ELSE CONVERT(date, GETDATE()) END
+                    AS datetime))
+                    AND th.fecha < DATEADD(HOUR, 8, CAST(
+                        CASE WHEN DATEPART(HOUR, GETDATE()) < 8
+                             THEN CONVERT(date, GETDATE())
+                             ELSE DATEADD(DAY,1, CONVERT(date, GETDATE())) END
+                    AS datetime))
+                )
+            ";
+
+            $selects = [];
+
+            $closedSelect = $buildSelect(
+                'cheqdet',
+                'cheques',
+                'ch',
+                'ch.fecha >= DATEADD(HOUR, -48, GETDATE()) AND ch.pagado = 1 AND ch.cancelado = 0 AND ISNULL(d.modificador,0) = 0'
+            );
+            if ($closedSelect !== null) {
+                $selects[] = $closedSelect;
+            }
+
+            $openSelect = $buildSelect(
+                'tempcheqdet',
+                'tempcheques',
+                'th',
+                "NOT EXISTS (SELECT 1 FROM cheques c WHERE c.folio = th.folio) AND ($shiftFilterT)"
+            );
+            if ($openSelect !== null) {
+                $selects[] = $openSelect;
+            }
+
+            if ($selects === []) {
                 return;
             }
 
-            $shiftFilter = str_replace('c.fecha', 'ch.fecha', SHIFT_FILTER_C);
-            $folioCol    = $this->firstExistingColumn($detailTable, ['foliodet', 'folio', 'idcheque', 'numcheque']) ?? 'foliodet';
-            $qtyCol      = $this->firstExistingColumn($detailTable, ['cantidad', 'qty']) ?? 'cantidad';
-            $priceCol    = $this->firstExistingColumn($detailTable, ['precio', 'unit_price']) ?? 'precio';
-            $discountCol = $this->firstExistingColumn($detailTable, ['descuento', 'discount']);
-            $notesCol    = $this->firstExistingColumn($detailTable, ['comentario', 'observaciones', 'notes']);
-
-            // Detectar columna de nombre de producto: SR usa 'descripcion', 'nombre' u otros
-            $nameCol = null;
-            if ($this->tableExists('productos')) {
-                foreach (['descripcion', 'nombre', 'nombremostrar', 'name'] as $candidate) {
-                    try {
-                        $test = $this->conn->query(
-                            "SELECT TOP 1 CAST($candidate AS VARCHAR(5)) FROM productos"
-                        );
-                        if ($test !== false) {
-                            $nameCol = $candidate;
-                            break;
-                        }
-                    } catch (\Throwable $e) {
-                        // columna no existe, probar la siguiente
-                    }
-                }
-            }
-            $productNameExpr = $nameCol
-                ? "ISNULL(CAST(p.$nameCol AS VARCHAR(255)), CAST(d.idproducto AS VARCHAR(50)))"
-                : "CAST(d.idproducto AS VARCHAR(50))";
-            $discountExpr = $discountCol ? "ISNULL(CAST(d.$discountCol AS DECIMAL(10,2)),0)" : "CAST(0 AS DECIMAL(10,2))";
-            $notesExpr = $notesCol ? "ISNULL(CAST(d.$notesCol AS VARCHAR(255)), '')" : "CAST('' AS VARCHAR(255))";
-            $joinProductos = $this->tableExists('productos')
-                ? "LEFT JOIN productos p ON p.idproducto = d.idproducto"
-                : "";
-
-            $sql = "SELECT
-                CAST(d.$folioCol AS VARCHAR(50)) AS folio,
-                CAST(d.idproducto AS VARCHAR(50))  AS product_id,
-                $productNameExpr                   AS product_name,
-                ISNULL(CAST(d.$qtyCol    AS DECIMAL(10,3)),1) AS qty,
-                ISNULL(CAST(d.$priceCol  AS DECIMAL(10,2)),0) AS unit_price,
-                $discountExpr AS discount,
-                $notesExpr AS notes
-            FROM $detailTable d
-            $joinProductos
-            INNER JOIN cheques ch ON ch.folio = d.$folioCol
-            WHERE ($shiftFilter)
-              AND d.idproducto IS NOT NULL
-            ORDER BY d.$folioCol";
-
+            $sql = implode("\nUNION ALL\n", $selects) . "\nORDER BY folio";
             $rows = $this->conn->query($sql)->fetchAll();
             if (count($rows) === 0) {
                 return;
@@ -633,6 +749,251 @@ class BonifaciosSync {
         } catch (\Throwable $e) {
             $this->log("[ITEMS] ERROR: " . $e->getMessage());
         }
+    }
+
+    private function fetchTicketItemsByFolios(string $detailTable, array $folios): array {
+        $folios = array_values(array_unique(array_filter(array_map(static fn ($v) => trim((string)$v), $folios), static fn ($v) => $v !== '')));
+        if ($folios === [] || !$this->tableExists($detailTable)) {
+            return [];
+        }
+
+        $folioCol = $this->firstExistingColumn($detailTable, ['foliodet', 'folio', 'idcheque', 'numcheque']) ?? 'foliodet';
+        $qtyCol = $this->firstExistingColumn($detailTable, ['cantidad', 'qty']) ?? 'cantidad';
+        $priceCol = $this->firstExistingColumn($detailTable, ['precio', 'unit_price']) ?? 'precio';
+        $discountCol = $this->firstExistingColumn($detailTable, ['descuento', 'discount']);
+        $notesCol = $this->firstExistingColumn($detailTable, ['comentario', 'observaciones', 'notes']);
+        $nameCol = $this->tableExists('productos')
+            ? $this->firstExistingColumn('productos', ['descripcion', 'nombre', 'nombremostrar', 'name'])
+            : null;
+
+        $productNameExpr = $nameCol
+            ? "ISNULL(CAST(p.$nameCol AS VARCHAR(255)), CAST(d.idproducto AS VARCHAR(50)))"
+            : "CAST(d.idproducto AS VARCHAR(50))";
+        $discountExpr = $discountCol ? "ISNULL(CAST(d.$discountCol AS DECIMAL(10,2)),0)" : "CAST(0 AS DECIMAL(10,2))";
+        $notesExpr = $notesCol ? "ISNULL(CAST(d.$notesCol AS VARCHAR(255)), '')" : "CAST('' AS VARCHAR(255))";
+        $joinProductos = $this->tableExists('productos')
+            ? "LEFT JOIN productos p ON p.idproducto = d.idproducto"
+            : "";
+        $placeholders = implode(',', array_fill(0, count($folios), '?'));
+
+        $sql = "SELECT
+            CAST(d.$folioCol AS VARCHAR(50)) AS folio,
+            CAST(d.idproducto AS VARCHAR(50)) AS product_id,
+            $productNameExpr AS product_name,
+            ISNULL(CAST(d.$qtyCol AS DECIMAL(10,3)),1) AS qty,
+            ISNULL(CAST(d.$priceCol AS DECIMAL(10,2)),0) AS unit_price,
+            $discountExpr AS discount,
+            $notesExpr AS notes
+        FROM $detailTable d
+        $joinProductos
+        WHERE CAST(d.$folioCol AS VARCHAR(50)) IN ($placeholders)
+          AND d.idproducto IS NOT NULL
+          AND ISNULL(d.modificador, 0) = 0
+        ORDER BY d.$folioCol";
+
+        $stmt = $this->conn->prepare($sql);
+        $stmt->execute($folios);
+        $rows = $stmt->fetchAll();
+        if (!$rows) {
+            return [];
+        }
+
+        $byFolio = [];
+        foreach ($rows as $r) {
+            $folio = trim((string)($r['folio'] ?? ''));
+            if ($folio === '') {
+                continue;
+            }
+            $qty = floatval($r['qty'] ?? 0);
+            $price = floatval($r['unit_price'] ?? 0);
+            $disc = floatval($r['discount'] ?? 0);
+            $byFolio[$folio][] = [
+                'product_id'   => (string)($r['product_id'] ?? ''),
+                'product_name' => trim((string)($r['product_name'] ?? '')),
+                'qty'          => $qty,
+                'unit_price'   => $price,
+                'subtotal'     => round($qty * $price - $disc, 2),
+                'discount'     => $disc,
+                'notes'        => trim((string)($r['notes'] ?? '')),
+            ];
+        }
+
+        return $byFolio;
+    }
+
+    private function attachItemsToSalesPayload(array &$salesPayload, array $itemsByFolio): void {
+        if ($salesPayload === [] || $itemsByFolio === []) {
+            return;
+        }
+
+        foreach ($salesPayload as &$sale) {
+            $srTicketId = trim((string)($sale['sr_ticket_id'] ?? ''));
+            if ($srTicketId !== '' && isset($itemsByFolio[$srTicketId])) {
+                $sale['items'] = $itemsByFolio[$srTicketId];
+            }
+        }
+        unset($sale);
+    }
+
+    private function mergeCancellationRow(array &$byTicket, array $row): void {
+        $ticketNumber = trim((string)($row['ticket_number'] ?? $row['folio'] ?? ''));
+        if ($ticketNumber === '') {
+            return;
+        }
+
+        $fObj = $this->toDatetime($row['cancel_date'] ?? $row['fecha'] ?? null);
+        if (!$fObj) {
+            return;
+        }
+
+        $key = strtolower(trim(str_replace('#', '', $ticketNumber)));
+        $candidate = [
+            'ticket_number' => $ticketNumber,
+            'amount'        => floatval($row['amount'] ?? $row['total'] ?? 0),
+            'user_name'     => trim((string)($row['user_name'] ?? $row['usuario'] ?? '')),
+            'reason'        => trim((string)($row['reason'] ?? $row['motivo'] ?? '')),
+            'status'        => 'cancelled',
+            'cancel_date'   => $fObj->format('Y-m-d H:i:s'),
+        ];
+
+        if (!isset($byTicket[$key])) {
+            $byTicket[$key] = $candidate;
+            return;
+        }
+
+        $current = $byTicket[$key];
+        if ($candidate['cancel_date'] > $current['cancel_date']) {
+            $current['cancel_date'] = $candidate['cancel_date'];
+            $current['amount'] = $candidate['amount'];
+        }
+        if ($current['user_name'] === '' && $candidate['user_name'] !== '') {
+            $current['user_name'] = $candidate['user_name'];
+        }
+        if ($current['reason'] === '' && $candidate['reason'] !== '') {
+            $current['reason'] = $candidate['reason'];
+        }
+        $byTicket[$key] = $current;
+    }
+
+    private function sortCancellationRows(array $rows): array {
+        usort($rows, static function (array $a, array $b): int {
+            $cmp = strcmp((string)($a['cancel_date'] ?? ''), (string)($b['cancel_date'] ?? ''));
+            if ($cmp !== 0) {
+                return $cmp;
+            }
+            return strcmp((string)($a['ticket_number'] ?? ''), (string)($b['ticket_number'] ?? ''));
+        });
+        return $rows;
+    }
+
+    private function sqlSafeDatetimeExpr(string $columnExpr, ?string $fallbackExpr = null): string {
+        $primary = "CASE
+            WHEN ISDATE(CAST($columnExpr AS NVARCHAR(50))) = 1
+                THEN CONVERT(DATETIME, CAST($columnExpr AS NVARCHAR(50)))
+            ELSE NULL
+        END";
+
+        if ($fallbackExpr === null) {
+            return $primary;
+        }
+
+        $fallback = "CASE
+            WHEN ISDATE(CAST($fallbackExpr AS NVARCHAR(50))) = 1
+                THEN CONVERT(DATETIME, CAST($fallbackExpr AS NVARCHAR(50)))
+            ELSE NULL
+        END";
+
+        return "COALESCE($primary, $fallback)";
+    }
+
+    private function fetchCancellationRowsAfter(string $after, int $limit): array {
+        $limit = max(1, $limit);
+        $sampleLimit = max($limit * 4, 200);
+        $byTicket = [];
+
+        if ($this->tableExists('cancelaciones')) {
+            $sql = "SELECT TOP $sampleLimit
+                folio AS ticket_number,
+                fecha AS cancel_date,
+                ISNULL(total,0) AS amount,
+                usuario AS user_name,
+                motivo AS reason
+            FROM cancelaciones
+            WHERE fecha > ?
+            ORDER BY fecha ASC";
+            $stmt = $this->conn->prepare($sql);
+            $stmt->execute([$after]);
+            foreach ($stmt->fetchAll() as $row) {
+                $this->mergeCancellationRow($byTicket, $row);
+            }
+        }
+
+        if ($this->tableExists('cheques')) {
+            $sql = "SELECT TOP $sampleLimit
+                CAST(folio AS VARCHAR(50)) AS ticket_number,
+                fechacancelado AS cancel_date,
+                ISNULL(total,0) AS amount,
+                ISNULL(CAST(usuariocancelo AS VARCHAR(120)),'') AS user_name,
+                ISNULL(CAST(razoncancelado AS VARCHAR(255)),'') AS reason
+            FROM cheques
+            WHERE ISNULL(cancelado,0) = 1
+              AND fechacancelado IS NOT NULL
+              AND fechacancelado > CONVERT(DATETIME, ?, 120)
+            ORDER BY fechacancelado ASC";
+            $stmt = $this->conn->prepare($sql);
+            $stmt->execute([$after]);
+            foreach ($stmt->fetchAll() as $row) {
+                $this->mergeCancellationRow($byTicket, $row);
+            }
+        }
+
+        $rows = $this->sortCancellationRows(array_values($byTicket));
+        if (count($rows) > $limit) {
+            $rows = array_slice($rows, 0, $limit);
+        }
+        return $rows;
+    }
+
+    private function fetchRecentCancellationRows(int $hours = 96): array {
+        $byTicket = [];
+
+        if ($this->tableExists('cancelaciones')) {
+            $sql = "SELECT
+                folio AS ticket_number,
+                fecha AS cancel_date,
+                ISNULL(total,0) AS amount,
+                usuario AS user_name,
+                motivo AS reason
+            FROM cancelaciones
+            WHERE fecha >= DATEADD(HOUR, -$hours, GETDATE())
+            ORDER BY fecha DESC";
+            $stmt = $this->conn->prepare($sql);
+            $stmt->execute();
+            foreach ($stmt->fetchAll() as $row) {
+                $this->mergeCancellationRow($byTicket, $row);
+            }
+        }
+
+        if ($this->tableExists('cheques')) {
+            $sql = "SELECT
+                CAST(folio AS VARCHAR(50)) AS ticket_number,
+                fechacancelado AS cancel_date,
+                ISNULL(total,0) AS amount,
+                ISNULL(CAST(usuariocancelo AS VARCHAR(120)),'') AS user_name,
+                ISNULL(CAST(razoncancelado AS VARCHAR(255)),'') AS reason
+            FROM cheques
+            WHERE ISNULL(cancelado,0) = 1
+              AND fechacancelado IS NOT NULL
+              AND fechacancelado >= DATEADD(HOUR, -$hours, GETDATE())
+            ORDER BY fechacancelado DESC";
+            $stmt = $this->conn->prepare($sql);
+            $stmt->execute();
+            foreach ($stmt->fetchAll() as $row) {
+                $this->mergeCancellationRow($byTicket, $row);
+            }
+        }
+
+        return $this->sortCancellationRows(array_values($byTicket));
     }
 
     // ─────────────────────────────────────────────────────────────
@@ -809,47 +1170,28 @@ class BonifaciosSync {
     // CANCELACIONES
     // ─────────────────────────────────────────────────────────────
     private function syncCancellations(): void {
-        if ($this->initialLoad) {
-            return;
-        }
         try {
-            // Verificar si la tabla cancelaciones existe (no disponible en todas las instalaciones SR)
-            $exists = $this->conn->query(
-                "SELECT OBJECT_ID('cancelaciones', 'U') AS oid"
-            )->fetchColumn();
-            if (!$exists) {
-                return; // tabla no disponible en esta instalación
-            }
+            $cursor = (string)($this->state['cancellations'] ?? HISTORY_START);
+            $batchLimit = $this->initialLoad ? max(BATCH_SIZE * 4, 200) : max(BATCH_SIZE * 2, 100);
+            $data = $this->fetchCancellationRowsAfter($cursor, $batchLimit);
 
-            $sql = "SELECT folio, fecha, ISNULL(total,0) AS total, usuario, motivo
-                    FROM cancelaciones
-                    WHERE fecha >= CAST(GETDATE() AS DATE)
-                    ORDER BY fecha DESC";
-
-            $rows = $this->conn->query($sql)->fetchAll();
-            if (count($rows) === 0) {
-                return;
-            }
-
-            $data = [];
-            foreach ($rows as $r) {
-                $fObj = $this->toDatetime($r['fecha']);
-                if (!$fObj) {
-                    continue;
-                }
-                $data[] = [
-                    'ticket_number' => (string)($r['folio']   ?? ''),
-                    'amount'        => floatval($r['total']),
-                    'user_name'     => (string)($r['usuario'] ?? ''),
-                    'reason'        => (string)($r['motivo']  ?? ''),
-                    'status'        => 'cancelled',
-                    'cancel_date'   => $fObj->format('Y-m-d H:i:s'),
-                ];
+            if ($data === [] && !$this->initialLoad) {
+                $data = $this->fetchRecentCancellationRows(96);
             }
 
             if (!empty($data)) {
-                $this->sendToAPI('cancellations', $data);
-                $this->log("[CANCELACIONES] " . count($data) . " enviadas.");
+                $r = $this->sendToAPI('cancellations', $data);
+                $apiOk = is_array($r) && (($r['success'] ?? false) === true);
+                if ($apiOk) {
+                    $last = end($data);
+                    $lastCancelDate = (string)($last['cancel_date'] ?? $cursor);
+                    if ($lastCancelDate > $cursor) {
+                        $this->state['cancellations'] = $lastCancelDate;
+                    }
+                    $this->log("[CANCELACIONES] " . count($data) . " enviadas.");
+                } else {
+                    $this->log("[CANCELACIONES] API no confirmó éxito; mantengo cursor en $cursor.");
+                }
             }
         } catch (\Throwable $e) {
             $this->log("[CANCELACIONES] ERROR: " . $e->getMessage());
@@ -982,32 +1324,27 @@ class BonifaciosSync {
 
     private function syncProducts(): void {
         try {
-            if (!$this->tableExists('productos')) {
+            if (!$this->tableExists('productos') || !$this->tableExists('productosdetalle')) {
+                $this->log("[PRODUCTOS] SKIP: tabla productos o productosdetalle no existe");
                 return;
             }
-            $nameCol = $this->firstExistingColumn('productos', ['nombre', 'descripcion', 'nombremostrar']) ?? 'nombre';
-            $priceCol = $this->firstExistingColumn('productos', ['precio', 'precio1', 'precioventa']) ?? 'precio';
-            $activeCol = $this->firstExistingColumn('productos', ['activo', 'visible', 'status']);
-            $codeCol = $this->firstExistingColumn('productos', ['codigo', 'clave']);
-            $categoryCol = $this->firstExistingColumn('productos', ['categoria', 'grupo']);
-            $subCategoryCol = $this->firstExistingColumn('productos', ['subcategoria', 'subgrupo']);
-            $descCol = $this->firstExistingColumn('productos', ['descripcion', 'detalle']);
-            $costCol = $this->firstExistingColumn('productos', ['costo', 'costopromedio']);
-            $unitCol = $this->firstExistingColumn('productos', ['unidad', 'umedida']);
-
+            
+            // SoftRestaurant 8: precios en tabla separada productosdetalle
             $sql = "SELECT TOP 1000
-                CAST(idproducto AS VARCHAR(50)) AS idproducto,
-                " . ($codeCol ? "CAST($codeCol AS VARCHAR(50))" : "CAST(idproducto AS VARCHAR(50))") . " AS codigo,
-                CAST($nameCol AS VARCHAR(255)) AS nombre,
-                " . ($categoryCol ? "CAST($categoryCol AS VARCHAR(120))" : "CAST('General' AS VARCHAR(120))") . " AS categoria,
-                " . ($subCategoryCol ? "CAST($subCategoryCol AS VARCHAR(120))" : "CAST('' AS VARCHAR(120))") . " AS subcategoria,
-                " . ($descCol ? "CAST($descCol AS VARCHAR(255))" : "CAST('' AS VARCHAR(255))") . " AS descripcion,
-                ISNULL(CAST($priceCol AS DECIMAL(10,2)),0) AS precio,
-                " . ($costCol ? "ISNULL(CAST($costCol AS DECIMAL(10,2)),0)" : "CAST(0 AS DECIMAL(10,2))") . " AS costo,
-                " . ($unitCol ? "CAST($unitCol AS VARCHAR(30))" : "CAST('pieza' AS VARCHAR(30))") . " AS unidad,
-                " . ($activeCol ? "ISNULL(CAST($activeCol AS INT),1)" : "1") . " AS activo
-            FROM productos
-            ORDER BY $nameCol";
+                CAST(p.idproducto AS VARCHAR(50)) AS idproducto,
+                CAST(p.idproducto AS VARCHAR(50)) AS codigo,
+                CAST(ISNULL(p.descripcion, p.nombrecorto) AS VARCHAR(255)) AS nombre,
+                CAST(ISNULL(p.idgrupo, 'GENERAL') AS VARCHAR(120)) AS categoria,
+                CAST('' AS VARCHAR(120)) AS subcategoria,
+                CAST(ISNULL(p.descripcion, '') AS VARCHAR(255)) AS descripcion,
+                ISNULL(CAST(pd.precio AS DECIMAL(10,2)), 0) AS precio,
+                CAST(0 AS DECIMAL(10,2)) AS costo,
+                CAST('pieza' AS VARCHAR(30)) AS unidad,
+                CASE WHEN ISNULL(pd.bloqueado, 0) = 0 THEN 1 ELSE 0 END AS activo
+            FROM productos p
+            LEFT JOIN productosdetalle pd ON pd.idproducto = p.idproducto
+            WHERE ISNULL(p.descripcion, '') <> ''
+            ORDER BY p.descripcion";
 
             $rows = $this->conn->query($sql)->fetchAll();
             if (!$rows) {
@@ -1115,15 +1452,15 @@ class BonifaciosSync {
                 " . ($nameCol ? "CAST($nameCol AS VARCHAR(120))" : "CAST('' AS VARCHAR(120))") . " AS cliente,
                 " . ($phoneCol ? "CAST($phoneCol AS VARCHAR(60))" : "CAST('' AS VARCHAR(60))") . " AS telefono,
                 " . ($emailCol ? "CAST($emailCol AS VARCHAR(120))" : "CAST('' AS VARCHAR(120))") . " AS email,
-                CAST($dateCol AS DATETIME) AS fecha_res,
+                CASE WHEN ISDATE(CAST($dateCol AS NVARCHAR(50)))=1 THEN CONVERT(DATETIME,CAST($dateCol AS NVARCHAR(50))) ELSE NULL END AS fecha_res,
                 " . ($timeCol ? "CAST($timeCol AS VARCHAR(20))" : "CAST('00:00:00' AS VARCHAR(20))") . " AS hora_res,
                 " . ($partyCol ? "ISNULL(CAST($partyCol AS INT),2)" : "2") . " AS personas,
                 " . ($tableCol ? "CAST($tableCol AS VARCHAR(50))" : "CAST('' AS VARCHAR(50))") . " AS mesa,
                 " . ($statusCol ? "CAST($statusCol AS VARCHAR(20))" : "CAST('1' AS VARCHAR(20))") . " AS estatus,
                 " . ($notesCol ? "CAST($notesCol AS VARCHAR(255))" : "CAST('' AS VARCHAR(255))") . " AS notas
             FROM reservaciones
-            WHERE CAST($dateCol AS DATE) >= DATEADD(DAY, -30, CAST(GETDATE() AS DATE))
-            ORDER BY CAST($dateCol AS DATETIME) DESC";
+            WHERE CAST(CONVERT(DATE, CAST($dateCol AS NVARCHAR(50)), 121) AS DATE) >= DATEADD(DAY, -30, CAST(GETDATE() AS DATE))
+            ORDER BY CASE WHEN ISDATE(CAST($dateCol AS NVARCHAR(50)))=1 THEN CONVERT(DATETIME,CAST($dateCol AS NVARCHAR(50))) ELSE NULL END DESC";
 
             $rows = $this->conn->query($sql)->fetchAll();
             if (!$rows) {
@@ -1185,8 +1522,8 @@ class BonifaciosSync {
                 " . ($minCol ? "ISNULL(CAST($minCol AS DECIMAL(10,3)),0)" : "CAST(0 AS DECIMAL(10,3))") . " AS min_stock,
                 " . ($maxCol ? "ISNULL(CAST($maxCol AS DECIMAL(10,3)),0)" : "CAST(0 AS DECIMAL(10,3))") . " AS max_stock,
                 " . ($priceCol ? "ISNULL(CAST($priceCol AS DECIMAL(10,2)),0)" : "CAST(0 AS DECIMAL(10,2))") . " AS last_price,
-                " . ($lastPurchaseCol ? "CAST($lastPurchaseCol AS DATETIME)" : "NULL") . " AS last_purchase_date,
-                " . ($lastCountCol ? "CAST($lastCountCol AS DATETIME)" : "NULL") . " AS last_count_date
+                " . ($lastPurchaseCol ? "CASE WHEN ISDATE(CAST($lastPurchaseCol AS NVARCHAR(50)))=1 THEN CONVERT(DATETIME,CAST($lastPurchaseCol AS NVARCHAR(50))) ELSE NULL END" : "NULL") . " AS last_purchase_date,
+                " . ($lastCountCol ? "CASE WHEN ISDATE(CAST($lastCountCol AS NVARCHAR(50)))=1 THEN CONVERT(DATETIME,CAST($lastCountCol AS NVARCHAR(50))) ELSE NULL END" : "NULL") . " AS last_count_date
             FROM inventario";
 
             $rows = $this->conn->query($sql)->fetchAll();
@@ -1264,8 +1601,15 @@ class BonifaciosSync {
     private function firstExistingColumn(string $table, array $candidates): ?string {
         foreach ($candidates as $column) {
             try {
-                $this->conn->query("SELECT TOP 1 CAST($column AS VARCHAR(1)) FROM $table");
-                return $column;
+                $stmt = $this->conn->prepare("
+                    SELECT 1 
+                    FROM INFORMATION_SCHEMA.COLUMNS 
+                    WHERE TABLE_NAME = :table AND COLUMN_NAME = :column
+                ");
+                $stmt->execute([':table' => $table, ':column' => $column]);
+                if ($stmt->fetchColumn()) {
+                    return $column;
+                }
             } catch (\Throwable $e) {
                 // try next
             }

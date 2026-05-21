@@ -1,4 +1,5 @@
 ﻿import { useState, useEffect, useCallback, useRef } from 'react'
+import { Mic, MicOff, Video, VideoOff } from 'lucide-react'
 import { meetingsAPI } from '../../services/api'
 
 export default function GroupCallWebRTC({ meetingId, currentUserId, participants, mode = 'video', onClose, meetingTitle = 'Reunion en vivo' }) {
@@ -8,6 +9,7 @@ export default function GroupCallWebRTC({ meetingId, currentUserId, participants
   const [videoMuted, setVideoMuted] = useState(mode === 'audio')
   const [status, setStatus] = useState('connecting')
   const [errorMsg, setErrorMsg] = useState('')
+  const [retryKey, setRetryKey] = useState(0)
 
   const pcsRef = useRef(new Map())
   const localStreamRef = useRef(null)
@@ -80,11 +82,28 @@ export default function GroupCallWebRTC({ meetingId, currentUserId, participants
         const iceRes = await meetingsAPI.getIceServers()
         if (!cancelled && Array.isArray(iceRes.data?.iceServers)) iceServersRef.current = iceRes.data.iceServers
       } catch { /* use default STUN */ }
+      const getMediaWithFallback = async () => {
+        const attempts = mode !== 'audio' ? [
+          { audio: { echoCancellation: true, noiseSuppression: true }, video: { width: { ideal: 1280 }, height: { ideal: 720 } } },
+          { audio: { echoCancellation: true, noiseSuppression: true }, video: true },
+          { audio: true, video: false },
+        ] : [
+          { audio: { echoCancellation: true, noiseSuppression: true }, video: false },
+          { audio: true, video: false },
+        ]
+        let lastErr = null
+        for (const constraints of attempts) {
+          try {
+            return await navigator.mediaDevices.getUserMedia(constraints)
+          } catch (err) {
+            lastErr = err
+            if (err.name === 'NotAllowedError') throw err
+          }
+        }
+        throw lastErr
+      }
       try {
-        const stream = await navigator.mediaDevices.getUserMedia({
-          audio: { echoCancellation: true, noiseSuppression: true },
-          video: mode !== 'audio' ? { width: { ideal: 1280 }, height: { ideal: 720 } } : false,
-        })
+        const stream = await getMediaWithFallback()
         if (cancelled) { stream.getTracks().forEach(t => t.stop()); return }
         localStreamRef.current = stream
         setLocalStream(stream)
@@ -92,7 +111,14 @@ export default function GroupCallWebRTC({ meetingId, currentUserId, participants
       } catch (err) {
         if (!cancelled) {
           setStatus('error')
-          setErrorMsg(err.name === 'NotAllowedError' ? 'Permiso de camara/microfono denegado. Habilitatlos en la barra del navegador.' : `Error al acceder a dispositivos: ${err.message}`)
+          const msg = err.name === 'NotAllowedError'
+            ? 'Permiso denegado. Habilita la cámara y el micrófono en la barra del navegador y recarga.'
+            : err.name === 'NotFoundError'
+              ? 'No se encontró la cámara o micrófono. Verifica que estén conectados y que Windows tenga permisos de privacidad activados (Configuración → Privacidad → Cámara / Micrófono).'
+              : err.name === 'NotReadableError'
+                ? 'El dispositivo está siendo usado por otra aplicación. Cierra otras apps que usen la cámara y recarga.'
+                : `Error al acceder a dispositivos: ${err.message}`
+          setErrorMsg(msg)
         }
       }
     }
@@ -106,7 +132,7 @@ export default function GroupCallWebRTC({ meetingId, currentUserId, participants
       knownPeersRef.current.clear()
       meetingsAPI.cleanupSignals(parseInt(meetingId)).catch(() => {})
     }
-  }, [meetingId, mode])
+  }, [meetingId, mode, retryKey])
 
   useEffect(() => {
     if (localVideoElRef.current && localStream) localVideoElRef.current.srcObject = localStream
@@ -154,9 +180,18 @@ export default function GroupCallWebRTC({ meetingId, currentUserId, participants
 
   if (status === 'error') return (
     <div className="overflow-hidden rounded-2xl border border-rose-500/20 bg-[#0d0607] p-8 text-center">
-      <p className="text-sm text-rose-300 font-medium mb-1">Sin acceso a camara / microfono</p>
-      <p className="text-xs text-slate-500 max-w-sm mx-auto leading-relaxed mb-5">{errorMsg}</p>
-      <button onClick={() => onCloseRef.current?.()} className="rounded-xl border border-slate-600/40 bg-slate-800/50 px-5 py-3 sm:px-4 sm:py-2 text-xs text-slate-300 hover:bg-slate-700/50 active:bg-slate-700/60 transition-colors touch-manipulation min-h-[44px]">Cerrar</button>
+      <div className="flex h-12 w-12 items-center justify-center rounded-full bg-rose-500/10 border border-rose-500/20 mx-auto mb-3">
+        <MicOff className="h-5 w-5 text-rose-400" />
+      </div>
+      <p className="text-sm text-rose-300 font-medium mb-2">Sin acceso a cámara / micrófono</p>
+      <p className="text-xs text-slate-400 max-w-sm mx-auto leading-relaxed mb-5">{errorMsg}</p>
+      <div className="flex flex-col sm:flex-row items-center justify-center gap-2">
+        <button
+          onClick={() => { setStatus('connecting'); setErrorMsg(''); setRetryKey(k => k + 1) }}
+          className="rounded-xl border border-cyan-500/30 bg-cyan-500/10 px-5 py-3 sm:px-4 sm:py-2 text-xs font-medium text-cyan-300 hover:bg-cyan-500/20 active:bg-cyan-500/25 transition-colors touch-manipulation min-h-[44px]"
+        >Reintentar</button>
+        <button onClick={() => onCloseRef.current?.()} className="rounded-xl border border-slate-600/40 bg-slate-800/50 px-5 py-3 sm:px-4 sm:py-2 text-xs text-slate-300 hover:bg-slate-700/50 active:bg-slate-700/60 transition-colors touch-manipulation min-h-[44px]">Cerrar</button>
+      </div>
     </div>
   )
 
@@ -184,9 +219,16 @@ export default function GroupCallWebRTC({ meetingId, currentUserId, participants
                 <div className="absolute bottom-1 left-1 rounded bg-black/50 px-1 text-[9px] text-white/70">T&#250;</div>
               </div>
             ) : (
-              <div className="flex h-16 w-16 items-center justify-center rounded-full bg-slate-800 text-3xl">&#127908;</div>
+              <div className="flex h-16 w-16 items-center justify-center rounded-full bg-slate-800">
+                <Mic className="h-7 w-7 text-slate-400" />
+              </div>
             )}
             <p className="text-center text-xs text-slate-500">Esperando que otros participantes se unan...</p>
+            {mode !== 'audio' && !videoMuted && (
+              <p className="text-center text-[10px] text-slate-600 max-w-xs leading-relaxed">
+                ¿Pantalla negra? Ve a <strong className="text-slate-500">Configuración de Windows → Privacidad → Cámara</strong> y activa el acceso para el navegador.
+              </p>
+            )}
           </div>
         ) : (
           <>
@@ -219,19 +261,19 @@ export default function GroupCallWebRTC({ meetingId, currentUserId, participants
       <div className="flex shrink-0 items-center justify-center gap-2.5 sm:gap-2 border-t border-white/[0.05] bg-[#020810]/80 px-3 py-3 sm:py-2.5 pb-[calc(0.75rem+env(safe-area-inset-bottom))] sm:pb-2.5">
         <button type="button" onClick={toggleAudio}
           className={`flex min-w-[56px] sm:min-w-[52px] flex-col items-center gap-0.5 rounded-xl px-3 py-2.5 sm:py-2 text-[10px] font-medium transition-colors touch-manipulation min-h-[48px] sm:min-h-0 ${audioMuted ? 'bg-rose-500/22 text-rose-200' : 'bg-slate-700/45 text-slate-100 hover:bg-slate-600/55 active:bg-slate-600/70'}`}>
-          <span className="text-base leading-none">{audioMuted ? '&#128263;' : '&#127908;'}</span>
+          {audioMuted ? <MicOff className="h-5 w-5" /> : <Mic className="h-5 w-5" />}
           {audioMuted ? 'MIC-OFF' : 'MIC'}
         </button>
         {mode !== 'audio' && (
           <button type="button" onClick={toggleVideo}
             className={`flex min-w-[56px] sm:min-w-[52px] flex-col items-center gap-0.5 rounded-xl px-3 py-2.5 sm:py-2 text-[10px] font-medium transition-colors touch-manipulation min-h-[48px] sm:min-h-0 ${videoMuted ? 'bg-rose-500/22 text-rose-200' : 'bg-slate-700/45 text-slate-100 hover:bg-slate-600/55 active:bg-slate-600/70'}`}>
-            <span className="text-base leading-none">{videoMuted ? '&#128249;' : '&#128247;'}</span>
+            {videoMuted ? <VideoOff className="h-5 w-5" /> : <Video className="h-5 w-5" />}
             {videoMuted ? 'CAM-OFF' : 'CAM'}
           </button>
         )}
         <button type="button" onClick={() => onCloseRef.current?.()}
           className="flex min-w-[56px] sm:min-w-[52px] flex-col items-center gap-0.5 rounded-xl bg-rose-600/85 px-3 py-2.5 sm:py-2 text-[10px] font-medium text-rose-50 transition-colors hover:bg-rose-500 active:bg-rose-400 touch-manipulation min-h-[48px] sm:min-h-0">
-          <span className="text-base leading-none">&#10005;</span>
+          <span className="text-base leading-none">✕</span>
           Salir
         </button>
       </div>

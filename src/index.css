@@ -370,3 +370,105 @@ body {
 .admin-mobile-content [class*="bg-[#0b1120]"] {
   background-color: rgba(12, 22, 40, 0.96) !important;
 }
+
+/* ─────────────────────────────────────────────
+   LIGHT THEME — Admin UI
+   Uses semantic classes on AdminLayout shell
+   elements so selectors survive Tailwind purge.
+───────────────────────────────────────────── */
+
+/* Root shell */
+.admin-light {
+  background-color: #f1f5f9 !important;
+  color: #1e293b;
+}
+
+/* Sidebar */
+.admin-light .admin-sidebar {
+  background-color: #e8edf5 !important;
+  border-color: #cbd5e1 !important;
+}
+.admin-light .admin-sidebar * {
+  border-color: #cbd5e1;
+}
+.admin-light .admin-sidebar a,
+.admin-light .admin-sidebar button,
+.admin-light .admin-sidebar span {
+  color: #334155;
+}
+.admin-light .admin-sidebar a:hover,
+.admin-light .admin-sidebar button:hover {
+  background-color: rgba(6, 182, 212, 0.08) !important;
+  color: #0f172a;
+}
+
+/* Header */
+.admin-light .admin-header {
+  background-color: rgba(232, 237, 245, 0.92) !important;
+  border-color: #cbd5e1 !important;
+}
+.admin-light .admin-header h1,
+.admin-light .admin-header span {
+  color: #0f172a !important;
+}
+.admin-light .admin-header button {
+  color: #64748b;
+}
+.admin-light .admin-header button:hover {
+  color: #0f172a;
+  background-color: rgba(0,0,0,0.04) !important;
+}
+
+/* Main content area — use CSS filter to invert dark backgrounds */
+.admin-light .admin-main {
+  background-color: #f1f5f9 !important;
+  color: #1e293b;
+}
+
+/* All cards/panels inside main content */
+.admin-light .admin-main > * {
+  color: #1e293b;
+}
+
+/* The scrollable page content */
+.admin-light .admin-main .overflow-y-auto,
+.admin-light .admin-main main,
+.admin-light .admin-main [role="main"] {
+  background-color: #f1f5f9 !important;
+}
+
+/* Text color corrections inside light shell */
+.admin-light .admin-main .text-white { color: #0f172a !important; }
+.admin-light .admin-main .text-slate-200 { color: #1e293b !important; }
+.admin-light .admin-main .text-slate-300 { color: #334155 !important; }
+.admin-light .admin-main .text-slate-400 { color: #475569 !important; }
+.admin-light .admin-main .text-slate-500 { color: #64748b !important; }
+.admin-light .admin-main .text-slate-600 { color: #94a3b8 !important; }
+
+/* Inputs */
+.admin-light input,
+.admin-light textarea,
+.admin-light select {
+  background-color: #ffffff !important;
+  color: #0f172a !important;
+  border-color: #cbd5e1 !important;
+}
+.admin-light input::placeholder,
+.admin-light textarea::placeholder { color: #94a3b8 !important; }
+
+/* Borders */
+.admin-light .border-slate-800,
+.admin-light .border-slate-700 { border-color: #e2e8f0 !important; }
+
+/* Notification dropdown */
+.admin-light .admin-header .fixed,
+.admin-light .admin-notif-dropdown {
+  background-color: #ffffff !important;
+  border-color: #e2e8f0 !important;
+}
+
+/* Mobile bottom nav */
+.admin-light .admin-mobile-nav {
+  background-color: #e8edf5 !important;
+  border-color: #cbd5e1 !important;
+}

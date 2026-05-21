@@ -5,16 +5,10 @@ import PublicTracker from '../components/PublicTracker'
 function Home() {
   const [language, setLanguage] = useState('es')
   const [showAward, setShowAward] = useState(false)
-  const [eventForm, setEventForm] = useState({ name: '', phone: '', email: '', event_type: '', event_type_other: '', date: '', guests: '', location: '', notes: '' })
-  const [isSubmitting, setIsSubmitting] = useState(false)
-  const [submitMessage, setSubmitMessage] = useState('')
   const [activeHomeEvent, setActiveHomeEvent] = useState(null)
 
   const phoneDisplay = '622 173 8884'
   const phoneE164Mx = '526221738884'
-
-  const instagramUrl = 'https://www.instagram.com/bonifaciosrestaurant/'
-  const facebookUrl = 'https://www.facebook.com/Bonifaciosrestaurant'
 
   const translations = {
     es: {
@@ -197,44 +191,6 @@ function Home() {
   const whatsappText = encodeURIComponent(t.whatsappMsg)
   const whatsappUrl = `https://wa.me/${phoneE164Mx}?text=${whatsappText}`
 
-  const handleSubmitQuote = async () => {
-    if (!eventForm.name || !eventForm.phone || !eventForm.event_type || !eventForm.date) {
-      setSubmitMessage('Por favor completa todos los campos requeridos')
-      return
-    }
-    const isOtherType = ['otro', 'other', 'autre', '其他'].includes(String(eventForm.event_type || '').toLowerCase().trim())
-    if (isOtherType && !eventForm.event_type_other.trim()) {
-      setSubmitMessage('Por favor especifica el tipo de evento cuando selecciones "Otro".')
-      return
-    }
-
-    setIsSubmitting(true)
-    setSubmitMessage('')
-
-    try {
-      const response = await fetch('/api/quotes/submit.php', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(eventForm)
-      })
-
-      const data = await response.json()
-
-      if (data.success) {
-        setSubmitMessage('¡Solicitud enviada! Te contactaremos pronto.')
-        setEventForm({ name: '', phone: '', email: '', event_type: '', event_type_other: '', date: '', guests: '', location: '', notes: '' })
-      } else {
-        setSubmitMessage('Error al enviar la solicitud. Por favor intenta de nuevo.')
-      }
-    } catch {
-      setSubmitMessage('Error de conexión. Por favor intenta de nuevo.')
-    } finally {
-      setIsSubmitting(false)
-    }
-  }
-
   const schedule = [
     { day: t.days[0], hours: '8 a.m.–10 p.m.' },
     { day: t.days[1], hours: '1–10:30 p.m.' },
@@ -276,6 +232,13 @@ function Home() {
     }
 
     return themes[normalized] || themes.general
+  }
+
+  const getHomeEventHref = (event) => {
+    const slug = String(event?.slug || '').toLowerCase().trim()
+    if (!slug) return null
+    if (slug === 'dia-madres') return '/reservacion-dia-madres'
+    return `/reservacion-especial/${slug}`
   }
 
   /** Botón flotante WhatsApp en home: `true` para volver a mostrarlo (código del `<a>` se mantiene abajo). */
@@ -320,23 +283,19 @@ function Home() {
                 <p className="font-serif italic text-[#F4E4C1]/60 mb-10">{t.tagline}</p>
                 <div className="flex flex-col sm:flex-row gap-4 justify-center items-center">
                   <Link to="/reservacion" className="inline-block rounded-full bg-[#D4AF37] px-10 py-4 text-black font-bold shadow-2xl">
-                    {t.cta}
+                    Reserva tu Mesa
                   </Link>
-                  
-                  {/* Botón de Día de las Madres - siempre visible */}
+
                   <Link
-                    to="/reservacion-dia-madres"
-                    className="group relative inline-flex items-center gap-2 overflow-hidden rounded-full border border-pink-200/35 bg-gradient-to-r from-fuchsia-900/95 via-pink-700/95 to-rose-700/95 px-6 sm:px-8 py-3.5 font-serif text-sm font-semibold tracking-wide text-pink-50 shadow-xl shadow-fuchsia-900/40 transition-all duration-400 hover:-translate-y-0.5 hover:scale-[1.02] hover:border-pink-100/75 hover:shadow-pink-700/45 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-pink-200/70"
+                    to="/cotiza-tu-evento"
+                    className="inline-flex items-center rounded-full border border-[#D4AF37]/50 bg-black/40 px-8 py-3.5 font-serif text-sm font-semibold tracking-wide text-[#D4AF37] backdrop-blur-md shadow-xl transition-all duration-300 hover:bg-[#D4AF37]/15 hover:border-[#D4AF37]/80 hover:shadow-[#D4AF37]/20"
                   >
-                    <div className="absolute inset-0 bg-gradient-to-r from-white/15 via-white/5 to-white/15 opacity-0 transition-opacity duration-500 group-hover:opacity-100" />
-                    <div className="absolute -inset-10 translate-x-[-130%] bg-gradient-to-r from-transparent via-white/25 to-transparent transition-transform duration-700 group-hover:translate-x-[130%]" />
-                    <span className="relative z-10 uppercase">Día de las Madres</span>
+                    Cotiza tu Evento
                   </Link>
-                  
-                  {/* Evento especial dinámico si existe */}
-                  {activeHomeEvent && activeHomeEvent.slug !== 'dia-madres' && (
+
+                  {activeHomeEvent && getHomeEventHref(activeHomeEvent) && (
                     <Link
-                      to={`/reservacion-especial/${activeHomeEvent.slug}`}
+                      to={getHomeEventHref(activeHomeEvent)}
                       className={getHomeEventTheme(activeHomeEvent.slug).className}
                     >
                       <div className="absolute inset-0 bg-gradient-to-r from-white/15 via-white/5 to-white/15 opacity-0 transition-opacity duration-500 group-hover:opacity-100" />
@@ -425,180 +384,6 @@ function Home() {
                 </div>
               </div>
 
-              {/* EVENT QUOTE FORM - COMPLETO COMO EN v1.5 */}
-              <div className="mx-auto mt-20 max-w-2xl">
-                <div className="relative overflow-hidden rounded-2xl border border-[#D4AF37]/20 bg-gradient-to-br from-black/60 via-black/40 to-black/60 p-8 sm:p-10 backdrop-blur-xl">
-                  <div className="absolute -right-16 -top-16 h-48 w-48 rounded-full bg-[#D4AF37]/8 blur-3xl" />
-                  <div className="absolute -left-16 -bottom-16 h-48 w-48 rounded-full bg-[#D4AF37]/5 blur-3xl" />
-                  <div className="relative">
-                    <div className="mb-2 inline-flex rounded-xl bg-[#D4AF37]/15 p-3.5">
-                      <svg className="h-6 w-6 text-[#D4AF37]" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="1.5">
-                        <path strokeLinecap="round" strokeLinejoin="round" d="M21 15.999h-5.5a2.5 2.5 0 010-5H21M3 8.5h5.5a2.5 2.5 0 010 5H3m9-10.5v17M8 3h8l-1 3H9L8 3z" />
-                      </svg>
-                    </div>
-                    <h2 className="font-serif text-xl sm:text-2xl font-light text-[#F4E4C1] mb-1">{t.eventTitle}</h2>
-                    <p className="text-sm text-[#F4E4C1]/50 mb-8">{t.eventSubtitle}</p>
-                    
-                    <form onSubmit={handleSubmitQuote} className="space-y-5">
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                        <div>
-                          <label className="block text-[10px] uppercase tracking-widest text-[#D4AF37]/60 mb-1.5">{t.eventName} *</label>
-                          <input
-                            type="text"
-                            value={eventForm.name}
-                            onChange={(e) => setEventForm({ ...eventForm, name: e.target.value })}
-                            className="w-full rounded-xl border border-[#D4AF37]/20 bg-black/40 px-4 py-3 text-sm text-[#F4E4C1] placeholder-[#F4E4C1]/20 backdrop-blur-md focus:border-[#D4AF37]/50 focus:outline-none transition-colors"
-                            placeholder="..."
-                            required
-                          />
-                        </div>
-                        <div>
-                          <label className="block text-[10px] uppercase tracking-widest text-[#D4AF37]/60 mb-1.5">{t.eventPhone} *</label>
-                          <input
-                            type="tel"
-                            value={eventForm.phone}
-                            onChange={(e) => setEventForm({ ...eventForm, phone: e.target.value })}
-                            className="w-full rounded-xl border border-[#D4AF37]/20 bg-black/40 px-4 py-3 text-sm text-[#F4E4C1] placeholder-[#F4E4C1]/20 backdrop-blur-md focus:border-[#D4AF37]/50 focus:outline-none transition-colors"
-                            placeholder="622 000 0000"
-                            required
-                          />
-                        </div>
-                      </div>
-
-                      <div>
-                        <label className="block text-[10px] uppercase tracking-widest text-[#D4AF37]/60 mb-1.5">{t.eventEmail}</label>
-                        <input
-                          type="email"
-                          value={eventForm.email}
-                          onChange={(e) => setEventForm({ ...eventForm, email: e.target.value })}
-                          className="w-full rounded-xl border border-[#D4AF37]/20 bg-black/40 px-4 py-3 text-sm text-[#F4E4C1] placeholder-[#F4E4C1]/20 backdrop-blur-md focus:border-[#D4AF37]/50 focus:outline-none transition-colors"
-                          placeholder="correo@ejemplo.com"
-                          required
-                        />
-                      </div>
-
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                        <div>
-                          <label className="block text-[10px] uppercase tracking-widest text-[#D4AF37]/60 mb-1.5">{t.eventType} *</label>
-                          <select
-                            value={eventForm.event_type}
-                            onChange={(e) => {
-                              const nextType = e.target.value
-                              const isOther = ['otro', 'other', 'autre', '其他'].includes(String(nextType || '').toLowerCase().trim())
-                              setEventForm({ ...eventForm, event_type: nextType, event_type_other: isOther ? eventForm.event_type_other : '' })
-                            }}
-                            className="w-full rounded-xl border border-[#D4AF37]/20 bg-black/40 px-4 py-3 text-sm text-[#F4E4C1] backdrop-blur-md focus:border-[#D4AF37]/50 focus:outline-none transition-colors"
-                            required
-                          >
-                            <option value="">{t.eventSelectType}</option>
-                            {t.eventTypes.map((type) => (
-                              <option key={type} value={type}>{type}</option>
-                            ))}
-                          </select>
-                        </div>
-                        {['otro', 'other', 'autre', '其他'].includes(String(eventForm.event_type || '').toLowerCase().trim()) && (
-                          <div>
-                            <label className="block text-[10px] uppercase tracking-widest text-[#D4AF37]/60 mb-1.5">{t.eventTypeOther} *</label>
-                            <input
-                              type="text"
-                              value={eventForm.event_type_other}
-                              onChange={(e) => setEventForm({ ...eventForm, event_type_other: e.target.value })}
-                              className="w-full rounded-xl border border-[#D4AF37]/20 bg-black/40 px-4 py-3 text-sm text-[#F4E4C1] placeholder-[#F4E4C1]/20 backdrop-blur-md focus:border-[#D4AF37]/50 focus:outline-none transition-colors"
-                              placeholder={t.eventTypeOtherPh}
-                              required
-                            />
-                          </div>
-                        )}
-                        <div>
-                          <label className="block text-[10px] uppercase tracking-widest text-[#D4AF37]/60 mb-1.5">{t.eventDate} *</label>
-                          <input
-                            type="date"
-                            value={eventForm.date}
-                            onChange={(e) => setEventForm({ ...eventForm, date: e.target.value })}
-                            className="w-full rounded-xl border border-[#D4AF37]/20 bg-black/40 px-4 py-3 text-sm text-[#F4E4C1] backdrop-blur-md focus:border-[#D4AF37]/50 focus:outline-none transition-colors"
-                            required
-                          />
-                        </div>
-                      </div>
-
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                        <div>
-                          <label className="block text-[10px] uppercase tracking-widest text-[#D4AF37]/60 mb-1.5">{t.eventGuests} *</label>
-                          <input
-                            type="number"
-                            value={eventForm.guests}
-                            onChange={(e) => setEventForm({ ...eventForm, guests: e.target.value })}
-                            className="w-full rounded-xl border border-[#D4AF37]/20 bg-black/40 px-4 py-3 text-sm text-[#F4E4C1] placeholder-[#F4E4C1]/20 backdrop-blur-md focus:border-[#D4AF37]/50 focus:outline-none transition-colors"
-                            placeholder="..."
-                            min="1"
-                            required
-                          />
-                        </div>
-                        <div>
-                          <label className="block text-[10px] uppercase tracking-widest text-[#D4AF37]/60 mb-1.5">{t.eventLocation} *</label>
-                          <select
-                            value={eventForm.location}
-                            onChange={(e) => setEventForm({ ...eventForm, location: e.target.value })}
-                            className="w-full rounded-xl border border-[#D4AF37]/20 bg-black/40 px-4 py-3 text-sm text-[#F4E4C1] backdrop-blur-md focus:border-[#D4AF37]/50 focus:outline-none transition-colors"
-                            required
-                          >
-                            <option value="">{t.eventSelectLocation}</option>
-                            {t.eventLocationOptions.map((location) => (
-                              <option key={location} value={location}>{location}</option>
-                            ))}
-                          </select>
-                        </div>
-                      </div>
-
-                      <div>
-                        <label className="block text-[10px] uppercase tracking-widest text-[#D4AF37]/60 mb-1.5">{t.eventNotes}</label>
-                        <textarea
-                          value={eventForm.notes}
-                          onChange={(e) => setEventForm({ ...eventForm, notes: e.target.value })}
-                          rows={4}
-                          className="w-full rounded-xl border border-[#D4AF37]/20 bg-black/40 px-4 py-3 text-sm text-[#F4E4C1] placeholder-[#F4E4C1]/20 backdrop-blur-md focus:border-[#D4AF37]/50 focus:outline-none transition-colors resize-none"
-                          placeholder="Detalles adicionales (opcional)"
-                        />
-                      </div>
-
-                      <div className="text-center">
-                        <button
-                          type="submit"
-                          disabled={isSubmitting}
-                          className="inline-flex items-center justify-center gap-2 rounded-full bg-gradient-to-r from-[#D4AF37] to-[#C9A961] px-8 py-3.5 font-serif text-sm font-medium text-black transition-all duration-300 hover:scale-105 hover:shadow-lg hover:shadow-[#D4AF37]/25 disabled:opacity-50 disabled:cursor-not-allowed"
-                        >
-                          {isSubmitting ? (
-                            <>
-                              <svg className="h-4 w-4 animate-spin" fill="none" viewBox="0 0 24 24">
-                                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
-                              </svg>
-                              Enviando...
-                            </>
-                          ) : (
-                            <>
-                              <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
-                              </svg>
-                              {t.eventSubmit}
-                            </>
-                          )}
-                        </button>
-                      </div>
-
-                      {submitMessage && (
-                        <div className={`rounded-lg p-4 text-center ${
-                          submitMessage.includes('éxito') || submitMessage.includes('success') 
-                            ? 'bg-green-500/20 text-green-400 border border-green-500/30' 
-                            : 'bg-red-500/20 text-red-400 border border-red-500/30'
-                        }`}>
-                          {submitMessage}
-                        </div>
-                      )}
-                    </form>
-                  </div>
-                </div>
-              </div>
 
             </div> 
           </main>

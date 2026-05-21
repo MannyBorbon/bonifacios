@@ -52,12 +52,14 @@ function AdminLayout() {
   const [pushBusy, setPushBusy] = useState(false);
   const sessionReady = useRef(false);
   const inactivityTimer = useRef(null);
+  const inMeetingRef = useRef(false);
 
-  // Inactivity auto-logout (3 minutes)
+  // Inactivity auto-logout (3 minutes) — suspended while in a meeting room
   useEffect(() => {
     const LIMIT = 3 * 60 * 1000;
 
     const doLogout = () => {
+      if (inMeetingRef.current) return;
       alert('Sesión cerrada por inactividad\n\nNon omnis moriar');
       localStorage.removeItem('token');
       localStorage.removeItem('user');
@@ -65,17 +67,32 @@ function AdminLayout() {
     };
 
     const resetTimer = () => {
+      if (inMeetingRef.current) return;
       if (inactivityTimer.current) clearTimeout(inactivityTimer.current);
       inactivityTimer.current = setTimeout(doLogout, LIMIT);
     };
 
+    const suspendTimer = () => {
+      inMeetingRef.current = true;
+      if (inactivityTimer.current) clearTimeout(inactivityTimer.current);
+    };
+
+    const resumeTimer = () => {
+      inMeetingRef.current = false;
+      resetTimer();
+    };
+
     const events = ['mousemove', 'mousedown', 'keydown', 'touchstart', 'scroll', 'click'];
     events.forEach(ev => document.addEventListener(ev, resetTimer, { passive: true }));
+    window.addEventListener('meeting:start', suspendTimer);
+    window.addEventListener('meeting:end',   resumeTimer);
     resetTimer();
 
     return () => {
       if (inactivityTimer.current) clearTimeout(inactivityTimer.current);
       events.forEach(ev => document.removeEventListener(ev, resetTimer));
+      window.removeEventListener('meeting:start', suspendTimer);
+      window.removeEventListener('meeting:end',   resumeTimer);
     };
   }, []);
 
@@ -150,6 +167,17 @@ function AdminLayout() {
       document.removeEventListener('keydown', handleInteraction);
     };
   }, [audio]);
+
+  useEffect(() => {
+    const onMeetingStart = () => { audio.pause() }
+    const onMeetingEnd   = () => { audio.play().catch(() => {}) }
+    window.addEventListener('meeting:start', onMeetingStart)
+    window.addEventListener('meeting:end',   onMeetingEnd)
+    return () => {
+      window.removeEventListener('meeting:start', onMeetingStart)
+      window.removeEventListener('meeting:end',   onMeetingEnd)
+    }
+  }, [audio])
 
   useEffect(() => {
     let active = true;
@@ -451,7 +479,7 @@ function AdminLayout() {
 
   // ── Notification dropdown (reusable via portal) ──
   const NotifDropdown = () => (
-    <div ref={notifDropdownRef} className="fixed right-3 sm:right-6 top-12 sm:top-16 w-[calc(100%-24px)] sm:w-80 max-w-sm rounded-xl border border-cyan-500/15 bg-[#0a0f1e] shadow-2xl overflow-hidden" style={{ zIndex: 99999 }}>
+    <div ref={notifDropdownRef} className="admin-notif-dropdown fixed right-3 sm:right-6 top-12 sm:top-16 w-[calc(100%-24px)] sm:w-80 max-w-sm rounded-xl border border-cyan-500/15 bg-[#0a0f1e] shadow-2xl overflow-hidden" style={{ zIndex: 99999 }}>
       <div className="px-4 py-3 border-b border-cyan-500/10 space-y-2">
         <div className="flex items-center justify-between">
           <p className="text-sm font-medium text-slate-200">Notificaciones</p>
@@ -536,14 +564,14 @@ function AdminLayout() {
   );
 
   return (
-    <div className="h-[100dvh] bg-[#030712] flex overflow-hidden select-none">
+    <div className={`admin-layout-root h-[100dvh] bg-[#030712] flex overflow-hidden select-none${theme === 'light' ? ' admin-light' : ''}`}>
 
       {/* ─── Desktop/Tablet Sidebar ─── */}
       {!isMobile && (
         <motion.aside
           animate={{ width: sidebarCollapsed ? 56 : 220 }}
           transition={{ type: 'spring', stiffness: 400, damping: 34 }}
-          className="h-full bg-[#050a14] border-r border-slate-800/40 flex flex-col shrink-0 z-20">
+          className="admin-sidebar h-full bg-[#050a14] border-r border-slate-800/40 flex flex-col shrink-0 z-20">
           {/* Sidebar header / logo */}
           <div className={`flex items-center h-14 border-b border-slate-800/40 shrink-0 ${sidebarCollapsed ? 'justify-center' : 'gap-2.5 px-4'}`}>
             <Link to="/admin/dashboard" className="flex items-center gap-2.5 group">
@@ -568,7 +596,7 @@ function AdminLayout() {
               animate={{ x: 0 }}
               exit={{ x: -280 }}
               transition={{ type: 'spring', stiffness: 400, damping: 40 }}
-              className="fixed inset-y-0 left-0 z-[70] w-[280px] bg-[#050a14] border-r border-slate-800/40 flex flex-col shadow-2xl">
+              className="admin-sidebar fixed inset-y-0 left-0 z-[70] w-[280px] bg-[#050a14] border-r border-slate-800/40 flex flex-col shadow-2xl">
               <div className="flex items-center justify-between h-14 border-b border-slate-800/40 px-4 shrink-0">
                 <div className="flex items-center gap-2.5">
                   <div className="w-7 h-7 rounded-lg bg-gradient-to-br from-[#D4AF37] to-amber-600 flex items-center justify-center shrink-0">
@@ -587,9 +615,9 @@ function AdminLayout() {
       </AnimatePresence>
 
       {/* ─── Main Area ─── */}
-      <div className="flex-1 flex flex-col min-w-0">
+      <div className="admin-main flex-1 flex flex-col min-w-0">
         {/* Header bar */}
-        <header className="h-14 border-b border-slate-800/40 bg-[#050a14]/80 backdrop-blur-sm flex items-center justify-between px-3 sm:px-4 shrink-0 z-10">
+        <header className="admin-header h-14 border-b border-slate-800/40 bg-[#050a14]/80 backdrop-blur-sm flex items-center justify-between px-3 sm:px-4 shrink-0 z-10">
           <div className="flex items-center gap-2">
             {isMobile && (
               <button onClick={() => setMobileSidebarOpen(true)} className="p-2 -ml-1 rounded-lg text-slate-500 hover:text-white transition-colors touch-manipulation min-h-[44px] min-w-[44px] flex items-center justify-center">
@@ -675,7 +703,7 @@ function AdminLayout() {
 
       {/* ─── Mobile Bottom Nav ─── */}
       {isMobile && (
-        <nav className="fixed bottom-0 inset-x-0 z-50 bg-[#050a14]/95 backdrop-blur-xl border-t border-slate-800/40 pb-[env(safe-area-inset-bottom)]">
+        <nav className="admin-mobile-nav fixed bottom-0 inset-x-0 z-50 bg-[#050a14]/95 backdrop-blur-xl border-t border-slate-800/40 pb-[env(safe-area-inset-bottom)]">
           <div className="flex items-center justify-around h-16 px-1">
             {MOBILE_NAV_ITEMS.map(item => {
               const Icon = item.icon;

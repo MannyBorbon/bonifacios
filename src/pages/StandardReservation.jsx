@@ -178,18 +178,15 @@ export default function StandardReservation() {
 
                 <div>
                   <label className="mb-1.5 block text-[10px] uppercase tracking-widest text-[#D4AF37]/60">Personas *</label>
-                  <select
+                  <input
+                    type="number"
                     value={form.guests}
                     onChange={(e) => setForm({ ...form, guests: parseInt(e.target.value, 10) || 1 })}
-                    className="w-full rounded-xl border border-[#D4AF37]/20 bg-black/40 px-4 py-3 text-sm text-[#F4E4C1] backdrop-blur-md focus:border-[#D4AF37]/50 focus:outline-none transition-colors"
+                    className="w-full rounded-xl border border-[#D4AF37]/20 bg-black/40 px-4 py-3 text-sm text-[#F4E4C1] placeholder-[#F4E4C1]/20 backdrop-blur-md focus:border-[#D4AF37]/50 focus:outline-none transition-colors"
+                    placeholder="Número de personas"
+                    min="1"
                     required
-                  >
-                    {Array.from({ length: 20 }, (_, idx) => idx + 1).map((count) => (
-                      <option key={count} value={count}>
-                        {count} {count === 1 ? 'persona' : 'personas'}
-                      </option>
-                    ))}
-                  </select>
+                  />
                 </div>
 
                 <div>
