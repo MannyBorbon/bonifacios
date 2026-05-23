@@ -274,22 +274,46 @@ try {
 }
 
 try {
-    // En tempcheques (tickets abiertos)
+    // En tempcheques — todas las columnas de estado para detectar campo cancelado/anulado
+    // Usamos SELECT * para descubrir todas las columnas disponibles en esta instalación SR
     $rows = $conn->query("
-        SELECT CAST(folio AS VARCHAR(50)) AS folio, numcheque, fecha, ISNULL(total,0) AS total
-        FROM tempcheques WHERE numcheque IN ($inList)
+        SELECT * FROM tempcheques WHERE numcheque IN ($inList)
     ")->fetchAll();
     if (count($rows) === 0) {
         line("  tempcheques: NO encontrados");
     } else {
-        line("  tempcheques (" . count($rows) . " filas):");
+        line("  tempcheques (" . count($rows) . " filas) — todas las columnas:");
         foreach ($rows as $r) {
-            line(sprintf("    folio=%-8s  numcheque=%-6s  fecha=%-22s  total=%8.2f",
-                $r['folio'], $r['numcheque'], (string)$r['fecha'], floatval($r['total'])));
+            // Mostrar columnas que puedan indicar cancelación
+            $status_cols = [];
+            foreach ($r as $col => $val) {
+                $colLower = strtolower($col);
+                if (in_array($colLower, ['cancelado','anulado','estatus','status','estado','void','activo','eliminado','pagado','impreso'])) {
+                    $status_cols[] = "$col=" . (is_null($val) ? 'NULL' : $val);
+                }
+            }
+            line(sprintf("    folio=%-8s  numcheque=%-6s  total=%8.2f  estado_cols=[%s]",
+                $r['folio'] ?? '?', $r['numcheque'] ?? '?',
+                floatval($r['total'] ?? 0),
+                implode(', ', $status_cols)));
         }
     }
 } catch (Throwable $e) {
     line("  ERROR tempcheques: " . $e->getMessage());
+}
+
+// También: ¿existe alguna tabla que registre folios reabiertos/cancelados en tempcheques?
+line("");
+line("Buscando tablas de SR que puedan tener cancelaciones de tempcheques:");
+$tablasCheck = ['cancelaciones', 'cuentascanceladas', 'foliosanulados', 'anulaciones', 'descuentos', 'tempcancelaciones'];
+foreach ($tablasCheck as $t) {
+    try {
+        $exists = $conn->query("SELECT OBJECT_ID('{$t}','U') AS oid")->fetch();
+        if ($exists['oid']) {
+            $cnt = $conn->query("SELECT COUNT(*) AS n FROM {$t}")->fetch();
+            line("  ✓ Tabla '{$t}' existe — registros: " . $cnt['n']);
+        }
+    } catch (Throwable $e) { /* no existe */ }
 }
 
 // Buscar en el rango de numcheques del turno de hoy para ver todos los estados
