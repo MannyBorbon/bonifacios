@@ -437,6 +437,20 @@ function getCancelledStatusSql(?string $alias = null): string {
     return "LOWER(COALESCE({$p}status,'')) IN ('cancelled','canceled','cancelado')";
 }
 
+/**
+ * Excluye tickets que aparecen en sr_cancellations, independientemente de sr_sales.status.
+ * Protege contra el caso donde el sync aún no ha actualizado status='cancelled' en sr_sales.
+ * Compara por sr_ticket_id (= folio interno SR = ticket_number en sr_cancellations).
+ */
+function getCancellationExclusionSql(?string $alias = null): string {
+    $p = sqlSaleColumnPrefix($alias);
+    return "NOT EXISTS (
+        SELECT 1 FROM sr_cancellations sc
+        WHERE LOWER(TRIM(REPLACE(CAST(sc.ticket_number AS CHAR), '#', '')))
+            = LOWER(TRIM(REPLACE(CAST({$p}sr_ticket_id AS CHAR), '#', '')))
+    )";
+}
+
 /** Ticket con cobro registrado: status cerrado o importes de medio de pago en sr_sales. */
 function getPaymentSplitPositiveSql(?string $alias = null): string {
     $p = sqlSaleColumnPrefix($alias);
@@ -730,6 +744,7 @@ function getSrMonitorComparableTotal(\PDO $pdo, string $start, string $end): flo
             ) it ON TRIM(REPLACE(CAST(s.sr_ticket_id AS CHAR), \'#\', \'\')) = it.tid
             WHERE s.sale_datetime BETWEEN ? AND ?
               AND NOT (' . getCancelledStatusSql('s') . ')
+              AND ' . getCancellationExclusionSql('s') . '
               AND NOT (s.total = 0 AND COALESCE(s.subtotal, 0) > 0)
         ';
         $stmt = $pdo->prepare($sql);
@@ -782,6 +797,7 @@ function getSalesStats($pdo, $start, $end, bool $includeOpen = true) {
             FROM sr_sales
             WHERE sale_datetime BETWEEN ? AND ?
               AND NOT (" . getCancelledStatusSql() . ")
+              AND " . getCancellationExclusionSql() . "
               AND " . getCollectedSaleSql();
 
     $stmt = $pdo->prepare($sql);
