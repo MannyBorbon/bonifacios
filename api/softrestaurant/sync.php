@@ -599,6 +599,10 @@ function syncSales($conn, $sales) {
                         tip_paid        = VALUES(tip_paid),
                         total           = VALUES(total),
                         status          = CASE
+                            -- 🛡️ PROTECCIÓN: ticket ya cancelado → inmutable, nada lo sobreescribe
+                            WHEN LOWER(COALESCE(sr_sales.status,'')) IN ('cancelled','canceled','cancelado')
+                                THEN sr_sales.status
+                            -- Protección existente: no degradar closed → open
                             WHEN (
                                 (
                                     LOWER(COALESCE(sr_sales.status,'')) IN ('closed','cerrado','cobrado','pagado','paid')
