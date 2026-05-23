@@ -1279,6 +1279,24 @@ function syncCancellationsData($conn, $cancellations) {
     $updated  = 0;
     $failed   = 0;
 
+    // Crear tabla si no existe (es posible que no haya sido creada aún en esta instalación).
+    // La tabla NO tiene clave única compuesta ticket_number+cancel_date intencionalmente:
+    // se gestiona por DELETE+INSERT para evitar filas duplicadas cuando fechacancelado
+    // cambia de NULL→valor real en un ciclo posterior del sync.
+    $conn->query("CREATE TABLE IF NOT EXISTS sr_cancellations (
+        id            INT UNSIGNED    NOT NULL AUTO_INCREMENT,
+        ticket_number VARCHAR(64)     NOT NULL,
+        amount        DECIMAL(14,4)   NOT NULL DEFAULT 0.0000,
+        user_name     VARCHAR(120)    NOT NULL DEFAULT '',
+        reason        VARCHAR(255)    NOT NULL DEFAULT '',
+        cancel_date   DATETIME        NOT NULL,
+        created_at    TIMESTAMP       NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at    TIMESTAMP       NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        PRIMARY KEY (id),
+        UNIQUE KEY uq_sr_cancellations_ticket (ticket_number),
+        KEY idx_sr_cancellations_date (cancel_date)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
+
     // Deduplicar por ticket_number (no por la clave compuesta ticket_number+cancel_date).
     // Razón: SR frecuentemente no llena fechacancelado → el sync usa fecha como fallback.
     // Si en un ciclo posterior SR puebla fechacancelado, la clave compuesta generaría
