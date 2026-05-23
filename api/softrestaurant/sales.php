@@ -503,12 +503,21 @@ function getCollectedSaleSql(?string $alias = null): string {
         . ' AND NOT ' . getCancelledStatusSql($alias)
         . " AND LOWER(TRIM(COALESCE({$p}payment_type,''))) NOT IN ('','pending','abierto','open')"
         . ')';
+    // 🛡️ Ticket cancelado nunca cuenta como cobrado aunque tenga montos de pago registrados.
+    $paymentSplitEvidence = '('
+        . getPaymentSplitPositiveSql($alias)
+        . ' AND NOT ' . getCancelledStatusSql($alias)
+        . ')';
+    $chequeEvidence = '('
+        . getChequePaymentEvidenceSql($alias)
+        . ' AND NOT ' . getCancelledStatusSql($alias)
+        . ')';
     return '('
         . getClosedStatusSql($alias)
         . ' OR '
-        . getPaymentSplitPositiveSql($alias)
+        . $paymentSplitEvidence
         . ' OR '
-        . getChequePaymentEvidenceSql($alias)
+        . $chequeEvidence
         . ' OR '
         . $closedAtEvidence
         . ' OR '
