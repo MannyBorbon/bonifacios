@@ -246,7 +246,79 @@ try {
 }
 sep();
 
-// ── 10. Acción sugerida ───────────────────────────────────────
+// ── 10. Buscar numcheques específicos de hoy (del reporte SR) ─
+line("Buscando numcheques 14312,14313,14315,14318 en cheques y tempcheques:");
+$targetNums = [14312, 14313, 14315, 14318];
+$inList = implode(',', $targetNums);
+
+try {
+    // En cheques (cualquier estado)
+    $rows = $conn->query("
+        SELECT CAST(folio AS VARCHAR(50)) AS folio, numcheque, fecha, fechacancelado,
+               cancelado, pagado, ISNULL(total,0) AS total, ISNULL(CAST(razoncancelado AS VARCHAR(80)),'') AS razon
+        FROM cheques WHERE numcheque IN ($inList)
+    ")->fetchAll();
+    if (count($rows) === 0) {
+        line("  cheques: NO encontrados");
+    } else {
+        line("  cheques (" . count($rows) . " filas):");
+        foreach ($rows as $r) {
+            line(sprintf("    folio=%-8s  numcheque=%-6s  fecha=%-22s  cancelado=%-2s  pagado=%-2s  total=%8.2f  fechacancelado=%s  razon=%s",
+                $r['folio'], $r['numcheque'], (string)$r['fecha'],
+                $r['cancelado'], $r['pagado'], floatval($r['total']),
+                (string)($r['fechacancelado'] ?? 'NULL'), $r['razon']));
+        }
+    }
+} catch (Throwable $e) {
+    line("  ERROR cheques: " . $e->getMessage());
+}
+
+try {
+    // En tempcheques (tickets abiertos)
+    $rows = $conn->query("
+        SELECT CAST(folio AS VARCHAR(50)) AS folio, numcheque, fecha, ISNULL(total,0) AS total
+        FROM tempcheques WHERE numcheque IN ($inList)
+    ")->fetchAll();
+    if (count($rows) === 0) {
+        line("  tempcheques: NO encontrados");
+    } else {
+        line("  tempcheques (" . count($rows) . " filas):");
+        foreach ($rows as $r) {
+            line(sprintf("    folio=%-8s  numcheque=%-6s  fecha=%-22s  total=%8.2f",
+                $r['folio'], $r['numcheque'], (string)$r['fecha'], floatval($r['total'])));
+        }
+    }
+} catch (Throwable $e) {
+    line("  ERROR tempcheques: " . $e->getMessage());
+}
+
+// Buscar en el rango de numcheques del turno de hoy para ver todos los estados
+line("");
+line("Todos los cheques de hoy (numcheque 14300-14400) con cualquier estado:");
+try {
+    $rows = $conn->query("
+        SELECT TOP 30 CAST(folio AS VARCHAR(50)) AS folio, numcheque, fecha, fechacancelado,
+               cancelado, pagado, ISNULL(total,0) AS total
+        FROM cheques
+        WHERE numcheque BETWEEN 14300 AND 14400
+        ORDER BY numcheque ASC
+    ")->fetchAll();
+    if (count($rows) === 0) {
+        line("  (ninguno en ese rango en cheques)");
+    } else {
+        foreach ($rows as $r) {
+            $estado = $r['cancelado'] == 1 ? 'CANCELADO' : ($r['pagado'] == 1 ? 'PAGADO' : 'ABIERTO');
+            line(sprintf("    folio=%-8s  numcheque=%-6s  fecha=%-22s  estado=%-10s  total=%8.2f  fechacancelado=%s",
+                $r['folio'], $r['numcheque'], (string)$r['fecha'], $estado, floatval($r['total']),
+                (string)($r['fechacancelado'] ?? 'NULL')));
+        }
+    }
+} catch (Throwable $e) {
+    line("  ERROR rango: " . $e->getMessage());
+}
+sep();
+
+// ── 11. Acción sugerida ───────────────────────────────────────
 line("ESTADO Y ACCIÓN:");
 line("Cursor actual: $cursor2");
 line("Si la sección 9 muestra tickets y NO están en phpMyAdmin sr_cancellations:");
