@@ -1,0 +1,173 @@
+<?php
+/**
+ * Diagnóstico de cancelaciones
+ * Ejecutar en el restaurante: php check-cancelaciones.php
+ * 
+ * Verifica:
+ *  1. Cuántos tickets cancelados hay en cheques (sin filtro de fecha)
+ *  2. Muestra los últimos 10
+ *  3. Muestra el cursor actual en sync-state-v3.json
+ *  4. Muestra lo que devolvería la query del sync con ese cursor
+ */
+
+error_reporting(E_ALL);
+date_default_timezone_set('America/Hermosillo');
+
+define('SR_DSN',  "sqlsrv:Server=100.84.227.35\\NATIONALSOFT;Database=softrestaurant8pro;Encrypt=false;TrustServerCertificate=true;LoginTimeout=30");
+define('SR_USER', 'usuario_web');
+define('SR_PASS', 'Filipenses4:8@');
+define('STATE_FILE', __DIR__ . '/sync-state-v3.json');
+
+function line(string $s = ''): void { echo $s . "\n"; }
+function sep(): void { line(str_repeat('─', 60)); }
+
+line("=== DIAGNÓSTICO CANCELACIONES ===");
+line(date('Y-m-d H:i:s'));
+sep();
+
+// ── 1. Estado del cursor ─────────────────────────────────────
+$state = [];
+if (file_exists(STATE_FILE)) {
+    $state = json_decode(file_get_contents(STATE_FILE), true) ?? [];
+}
+$cursor = $state['cancellations'] ?? '2000-01-01 00:00:00';
+line("Cursor 'cancellations' en sync-state-v3.json: $cursor");
+line("initial_load_done: " . (isset($state['initial_load_done']) ? 'true' : 'false'));
+sep();
+
+// ── 2. Conexión ───────────────────────────────────────────────
+try {
+    $conn = new PDO(SR_DSN, SR_USER, SR_PASS, [
+        PDO::ATTR_ERRMODE            => PDO::ERRMODE_EXCEPTION,
+        PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
+    ]);
+    line("✓ SQL Server conectado");
+} catch (Throwable $e) {
+    line("✗ Conexión fallida: " . $e->getMessage());
+    exit(1);
+}
+sep();
+
+// ── 3. ¿Cuántos tickets cancelados en total? ──────────────────
+try {
+    $total = $conn->query("SELECT COUNT(*) AS n FROM cheques WHERE ISNULL(cancelado,0)=1")->fetch();
+    line("Total cheques con cancelado=1: " . $total['n']);
+
+    // Con fechacancelado NOT NULL (query antigua del sync)
+    $conFecha = $conn->query("SELECT COUNT(*) AS n FROM cheques WHERE ISNULL(cancelado,0)=1 AND fechacancelado IS NOT NULL")->fetch();
+    line("  → con fechacancelado NOT NULL: " . $conFecha['n']);
+
+    // Con fechacancelado NULL
+    $sinFecha = $conn->query("SELECT COUNT(*) AS n FROM cheques WHERE ISNULL(cancelado,0)=1 AND fechacancelado IS NULL")->fetch();
+    line("  → con fechacancelado NULL (usará fecha): " . $sinFecha['n']);
+} catch (Throwable $e) {
+    line("ERROR conteo: " . $e->getMessage());
+}
+sep();
+
+// ── 4. Últimos 10 tickets cancelados ─────────────────────────
+line("Últimos 10 tickets cancelados (COALESCE(fechacancelado, fecha)):");
+try {
+    $rows = $conn->query("
+        SELECT TOP 10
+            CAST(folio AS VARCHAR(50)) AS folio,
+            numcheque,
+            fecha,
+            fechacancelado,
+            COALESCE(fechacancelado, fecha) AS cancel_date_efectiva,
+            ISNULL(total,0) AS total,
+            ISNULL(CAST(razoncancelado AS VARCHAR(100)),'') AS razon,
+            ISNULL(CAST(usuariocancelo AS VARCHAR(30)),'') AS usuario
+        FROM cheques
+        WHERE ISNULL(cancelado,0) = 1
+        ORDER BY COALESCE(fechacancelado, fecha) DESC
+    ")->fetchAll();
+
+    if (count($rows) === 0) {
+        line("  (ninguno encontrado — puede que no haya cancelaciones en SR)");
+    } else {
+        foreach ($rows as $r) {
+            line(sprintf(
+                "  folio=%-8s  numcheque=%-6s  fecha=%-20s  fechacancelado=%-20s  cancel_efectiva=%-20s  total=%8.2f  razon=%s",
+                $r['folio'],
+                $r['numcheque'],
+                (string)$r['fecha'],
+                (string)($r['fechacancelado'] ?? 'NULL'),
+                (string)$r['cancel_date_efectiva'],
+                floatval($r['total']),
+                $r['razon']
+            ));
+        }
+    }
+} catch (Throwable $e) {
+    line("ERROR últimos cancelados: " . $e->getMessage());
+}
+sep();
+
+// ── 5. ¿Qué devolvería la query del sync con el cursor actual? ──
+line("Query del sync con cursor='$cursor':");
+try {
+    $stmt = $conn->prepare("
+        SELECT TOP 20
+            CAST(folio AS VARCHAR(50)) AS ticket_number,
+            COALESCE(fechacancelado, fecha) AS cancel_date,
+            ISNULL(total,0) AS amount,
+            ISNULL(CAST(usuariocancelo AS VARCHAR(120)),'') AS user_name,
+            ISNULL(CAST(razoncancelado AS VARCHAR(255)),'') AS reason
+        FROM cheques
+        WHERE ISNULL(cancelado,0) = 1
+          AND COALESCE(fechacancelado, fecha) > CONVERT(DATETIME, ?, 120)
+        ORDER BY COALESCE(fechacancelado, fecha) ASC
+    ");
+    $stmt->execute([$cursor]);
+    $rows = $stmt->fetchAll();
+
+    if (count($rows) === 0) {
+        line("  ⚠ CERO FILAS — ningún ticket con cancel_date > '$cursor'");
+        line("  → Si el cursor es muy reciente, resetéalo a 2000-01-01 00:00:00");
+    } else {
+        line("  Encontradas " . count($rows) . " filas:");
+        foreach ($rows as $r) {
+            line(sprintf(
+                "    ticket=%-8s  cancel_date=%-20s  amount=%8.2f  user=%s",
+                $r['ticket_number'],
+                (string)$r['cancel_date'],
+                floatval($r['amount']),
+                $r['user_name']
+            ));
+        }
+    }
+} catch (Throwable $e) {
+    line("ERROR query sync: " . $e->getMessage());
+}
+sep();
+
+// ── 6. ¿Existe tabla cancelaciones? ──────────────────────────
+try {
+    $exists = $conn->query("SELECT OBJECT_ID('cancelaciones','U') AS oid")->fetch();
+    line("Tabla 'cancelaciones' en SR: " . ($exists['oid'] ? "SÍ existe" : "NO existe"));
+    if ($exists['oid']) {
+        $cnt = $conn->query("SELECT COUNT(*) AS n FROM cancelaciones")->fetch();
+        line("  → Registros en cancelaciones: " . $cnt['n']);
+        if ($cnt['n'] > 0) {
+            $sample = $conn->query("SELECT TOP 3 * FROM cancelaciones ORDER BY fecha DESC")->fetchAll();
+            foreach ($sample as $r) {
+                line("  " . json_encode($r, JSON_UNESCAPED_UNICODE));
+            }
+        }
+    }
+} catch (Throwable $e) {
+    line("ERROR verificando cancelaciones: " . $e->getMessage());
+}
+sep();
+
+// ── 7. Acción sugerida ────────────────────────────────────────
+line("ACCIÓN SUGERIDA:");
+line("Si la sección 5 muestra CERO FILAS y hay cancelaciones en sección 3/4:");
+line("  1. Abre sync-state-v3.json");
+line("  2. Cambia el valor de 'cancellations' a '2000-01-01 00:00:00'");
+line("  3. Guarda y reinicia el sync");
+line("");
+line("Si hay cero cancelaciones en sección 3 también:");
+line("  → No hay tickets cancelados en SR → el $0.00 del dashboard es correcto.");
+sep();
