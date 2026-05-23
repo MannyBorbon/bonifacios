@@ -911,39 +911,52 @@ class BonifaciosSync {
         $sampleLimit = max($limit * 4, 200);
         $byTicket = [];
 
+        // Fuente 1: tabla cancelaciones (existe solo en algunas versiones de SR).
+        // Aislada en try/catch propio para que un error de columnas no impida leer cheques.
         if ($this->tableExists('cancelaciones')) {
-            $sql = "SELECT TOP $sampleLimit
-                folio AS ticket_number,
-                fecha AS cancel_date,
-                ISNULL(total,0) AS amount,
-                usuario AS user_name,
-                motivo AS reason
-            FROM cancelaciones
-            WHERE fecha > ?
-            ORDER BY fecha ASC";
-            $stmt = $this->conn->prepare($sql);
-            $stmt->execute([$after]);
-            foreach ($stmt->fetchAll() as $row) {
-                $this->mergeCancellationRow($byTicket, $row);
+            try {
+                $sql = "SELECT TOP $sampleLimit
+                    folio AS ticket_number,
+                    fecha AS cancel_date,
+                    ISNULL(total,0) AS amount,
+                    usuario AS user_name,
+                    motivo AS reason
+                FROM cancelaciones
+                WHERE fecha > ?
+                ORDER BY fecha ASC";
+                $stmt = $this->conn->prepare($sql);
+                $stmt->execute([$after]);
+                foreach ($stmt->fetchAll() as $row) {
+                    $this->mergeCancellationRow($byTicket, $row);
+                }
+            } catch (\Throwable $e) {
+                // Columnas distintas u otro error en esta tabla: continuar con la fuente de cheques
+                $this->log("[CANCELACIONES] cancelaciones table query error (se continúa con cheques): " . $e->getMessage());
             }
         }
 
+        // Fuente 2: cheques con cancelado=1.
+        // COALESCE(fechacancelado, fecha): SR frecuentemente NO llena fechacancelado aunque sí pone cancelado=1.
+        // Si fechacancelado es NULL se usa fecha (fecha de apertura del ticket) como fecha de cancelación.
         if ($this->tableExists('cheques')) {
-            $sql = "SELECT TOP $sampleLimit
-                CAST(folio AS VARCHAR(50)) AS ticket_number,
-                fechacancelado AS cancel_date,
-                ISNULL(total,0) AS amount,
-                ISNULL(CAST(usuariocancelo AS VARCHAR(120)),'') AS user_name,
-                ISNULL(CAST(razoncancelado AS VARCHAR(255)),'') AS reason
-            FROM cheques
-            WHERE ISNULL(cancelado,0) = 1
-              AND fechacancelado IS NOT NULL
-              AND fechacancelado > CONVERT(DATETIME, ?, 120)
-            ORDER BY fechacancelado ASC";
-            $stmt = $this->conn->prepare($sql);
-            $stmt->execute([$after]);
-            foreach ($stmt->fetchAll() as $row) {
-                $this->mergeCancellationRow($byTicket, $row);
+            try {
+                $sql = "SELECT TOP $sampleLimit
+                    CAST(folio AS VARCHAR(50)) AS ticket_number,
+                    COALESCE(fechacancelado, fecha) AS cancel_date,
+                    ISNULL(total,0) AS amount,
+                    ISNULL(CAST(usuariocancelo AS VARCHAR(120)),'') AS user_name,
+                    ISNULL(CAST(razoncancelado AS VARCHAR(255)),'') AS reason
+                FROM cheques
+                WHERE ISNULL(cancelado,0) = 1
+                  AND COALESCE(fechacancelado, fecha) > CONVERT(DATETIME, ?, 120)
+                ORDER BY COALESCE(fechacancelado, fecha) ASC";
+                $stmt = $this->conn->prepare($sql);
+                $stmt->execute([$after]);
+                foreach ($stmt->fetchAll() as $row) {
+                    $this->mergeCancellationRow($byTicket, $row);
+                }
+            } catch (\Throwable $e) {
+                $this->log("[CANCELACIONES] cheques cancelled query error: " . $e->getMessage());
             }
         }
 
@@ -957,39 +970,49 @@ class BonifaciosSync {
     private function fetchRecentCancellationRows(int $hours = 96): array {
         $byTicket = [];
 
+        // Fuente 1: tabla cancelaciones (aislada para no bloquear la fuente principal)
         if ($this->tableExists('cancelaciones')) {
-            $sql = "SELECT
-                folio AS ticket_number,
-                fecha AS cancel_date,
-                ISNULL(total,0) AS amount,
-                usuario AS user_name,
-                motivo AS reason
-            FROM cancelaciones
-            WHERE fecha >= DATEADD(HOUR, -$hours, GETDATE())
-            ORDER BY fecha DESC";
-            $stmt = $this->conn->prepare($sql);
-            $stmt->execute();
-            foreach ($stmt->fetchAll() as $row) {
-                $this->mergeCancellationRow($byTicket, $row);
+            try {
+                $sql = "SELECT
+                    folio AS ticket_number,
+                    fecha AS cancel_date,
+                    ISNULL(total,0) AS amount,
+                    usuario AS user_name,
+                    motivo AS reason
+                FROM cancelaciones
+                WHERE fecha >= DATEADD(HOUR, -$hours, GETDATE())
+                ORDER BY fecha DESC";
+                $stmt = $this->conn->prepare($sql);
+                $stmt->execute();
+                foreach ($stmt->fetchAll() as $row) {
+                    $this->mergeCancellationRow($byTicket, $row);
+                }
+            } catch (\Throwable $e) {
+                $this->log("[CANCELACIONES] cancelaciones recent query error (se continúa con cheques): " . $e->getMessage());
             }
         }
 
+        // Fuente 2: cheques con cancelado=1 en las últimas $hours horas.
+        // COALESCE(fechacancelado, fecha): SR frecuentemente NO llena fechacancelado.
         if ($this->tableExists('cheques')) {
-            $sql = "SELECT
-                CAST(folio AS VARCHAR(50)) AS ticket_number,
-                fechacancelado AS cancel_date,
-                ISNULL(total,0) AS amount,
-                ISNULL(CAST(usuariocancelo AS VARCHAR(120)),'') AS user_name,
-                ISNULL(CAST(razoncancelado AS VARCHAR(255)),'') AS reason
-            FROM cheques
-            WHERE ISNULL(cancelado,0) = 1
-              AND fechacancelado IS NOT NULL
-              AND fechacancelado >= DATEADD(HOUR, -$hours, GETDATE())
-            ORDER BY fechacancelado DESC";
-            $stmt = $this->conn->prepare($sql);
-            $stmt->execute();
-            foreach ($stmt->fetchAll() as $row) {
-                $this->mergeCancellationRow($byTicket, $row);
+            try {
+                $sql = "SELECT
+                    CAST(folio AS VARCHAR(50)) AS ticket_number,
+                    COALESCE(fechacancelado, fecha) AS cancel_date,
+                    ISNULL(total,0) AS amount,
+                    ISNULL(CAST(usuariocancelo AS VARCHAR(120)),'') AS user_name,
+                    ISNULL(CAST(razoncancelado AS VARCHAR(255)),'') AS reason
+                FROM cheques
+                WHERE ISNULL(cancelado,0) = 1
+                  AND COALESCE(fechacancelado, fecha) >= DATEADD(HOUR, -$hours, GETDATE())
+                ORDER BY COALESCE(fechacancelado, fecha) DESC";
+                $stmt = $this->conn->prepare($sql);
+                $stmt->execute();
+                foreach ($stmt->fetchAll() as $row) {
+                    $this->mergeCancellationRow($byTicket, $row);
+                }
+            } catch (\Throwable $e) {
+                $this->log("[CANCELACIONES] cheques recent cancelled query error: " . $e->getMessage());
             }
         }
 
@@ -1171,22 +1194,49 @@ class BonifaciosSync {
     // ─────────────────────────────────────────────────────────────
     private function syncCancellations(): void {
         try {
-            $cursor = (string)($this->state['cancellations'] ?? HISTORY_START);
+            $cursor     = (string)($this->state['cancellations'] ?? HISTORY_START);
             $batchLimit = $this->initialLoad ? max(BATCH_SIZE * 4, 200) : max(BATCH_SIZE * 2, 100);
-            $data = $this->fetchCancellationRowsAfter($cursor, $batchLimit);
 
-            if ($data === [] && !$this->initialLoad) {
-                $data = $this->fetchRecentCancellationRows(96);
+            // Batch histórico: solo sirve para avanzar cursor y cubrir el pasado
+            $batchData = $this->fetchCancellationRowsAfter($cursor, $batchLimit);
+            $data      = $batchData;
+
+            // En tiempo real: SIEMPRE incluir también las últimas 96h como complemento.
+            // Garantiza que las cancelaciones de HOY aparecen inmediatamente aunque
+            // el cursor histórico aún esté avanzando por tickets cancelados del pasado.
+            // Una sola consulta extra; sin llamadas dobles a fetchCancellationRowsAfter.
+            if (!$this->initialLoad) {
+                $recent = $this->fetchRecentCancellationRows(96);
+                if (!empty($recent)) {
+                    // Merge sin duplicados: batch histórico tiene prioridad (ya indexado)
+                    $byKey = [];
+                    foreach ($data as $row) {
+                        $k = strtolower(trim(str_replace('#', '', (string)($row['ticket_number'] ?? ''))));
+                        if ($k !== '') {
+                            $byKey[$k] = $row;
+                        }
+                    }
+                    foreach ($recent as $row) {
+                        $k = strtolower(trim(str_replace('#', '', (string)($row['ticket_number'] ?? ''))));
+                        if ($k !== '' && !isset($byKey[$k])) {
+                            $byKey[$k] = $row;
+                        }
+                    }
+                    $data = array_values($byKey);
+                }
             }
 
             if (!empty($data)) {
-                $r = $this->sendToAPI('cancellations', $data);
+                $r     = $this->sendToAPI('cancellations', $data);
                 $apiOk = is_array($r) && (($r['success'] ?? false) === true);
                 if ($apiOk) {
-                    $last = end($data);
-                    $lastCancelDate = (string)($last['cancel_date'] ?? $cursor);
-                    if ($lastCancelDate > $cursor) {
-                        $this->state['cancellations'] = $lastCancelDate;
+                    // Avanzar cursor solo con los datos del batch histórico (no de "recientes")
+                    if (!empty($batchData)) {
+                        $last           = end($batchData);
+                        $lastCancelDate = (string)($last['cancel_date'] ?? $cursor);
+                        if ($lastCancelDate > $cursor) {
+                            $this->state['cancellations'] = $lastCancelDate;
+                        }
                     }
                     $this->log("[CANCELACIONES] " . count($data) . " enviadas.");
                 } else {

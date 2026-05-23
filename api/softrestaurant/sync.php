@@ -1276,20 +1276,22 @@ function bonifacios_normalize_sr_sale_identity(?string $raw): string {
 
 function syncCancellationsData($conn, $cancellations) {
     $inserted = 0;
-    $updated = 0;
-    $failed = 0;
+    $updated  = 0;
+    $failed   = 0;
+
+    // Deduplicar por ticket_number (no por la clave compuesta ticket_number+cancel_date).
+    // Razón: SR frecuentemente no llena fechacancelado → el sync usa fecha como fallback.
+    // Si en un ciclo posterior SR puebla fechacancelado, la clave compuesta generaría
+    // una segunda fila para el mismo ticket. Con DELETE+INSERT garantizamos 1 fila por ticket.
+    $stmtDel = $conn->prepare("DELETE FROM sr_cancellations WHERE ticket_number = ?");
 
     $stmtInsert = $conn->prepare("
         INSERT INTO sr_cancellations (ticket_number, amount, user_name, reason, cancel_date)
         VALUES (?, ?, ?, ?, ?)
-        ON DUPLICATE KEY UPDATE
-            amount = VALUES(amount),
-            user_name = VALUES(user_name),
-            reason = VALUES(reason)
     ");
 
-    // Antes sólo coincida folio=en MySQL pero el folio interno SR vive en sr_ticket_id; y sólo «open»
-    // dejaba filas cobradas siguen contándose tras anularlas en SoftRestaurant.
+    // Marcar sr_sales como cancelado para que los KPIs no lo cuenten como venta cobrada.
+    // Cruza sr_ticket_id (= folio SR) y las variantes folio/ticket_number (= numcheque).
     $stmtMarkCancelled = $conn->prepare("
         UPDATE sr_sales
         SET status = 'cancelled',
@@ -1308,8 +1310,8 @@ function syncCancellationsData($conn, $cancellations) {
         try {
             $ticketNumber = trim((string) ($c['ticket_number'] ?? ''));
             $amount       = floatval($c['amount'] ?? 0);
-            $userName     = $c['user_name'] ?? '';
-            $reason       = $c['reason'] ?? '';
+            $userName     = (string) ($c['user_name'] ?? '');
+            $reason       = (string) ($c['reason'] ?? '');
             $cancelDate   = $c['cancel_date'] ?? date('Y-m-d H:i:s');
 
             if ($ticketNumber === '') {
@@ -1317,13 +1319,19 @@ function syncCancellationsData($conn, $cancellations) {
                 continue;
             }
 
+            // DELETE existente (puede no existir → affected_rows = 0)
+            $stmtDel->bind_param('s', $ticketNumber);
+            $stmtDel->execute();
+            $wasExisting = $stmtDel->affected_rows > 0;
+
+            // INSERT fresco
             $stmtInsert->bind_param('sdsss', $ticketNumber, $amount, $userName, $reason, $cancelDate);
             $stmtInsert->execute();
 
-            if ($stmtInsert->affected_rows === 1 && $stmtInsert->insert_id > 0) $inserted++;
-            else $updated++;
+            if ($wasExisting) $updated++;
+            else $inserted++;
 
-            // Marcar todas las variantes coincidentes (sr_ticket_id = folio SR,folio/ticket=numcheque, etc.).
+            // Marcar todas las variantes coincidentes en sr_sales.
             $k = bonifacios_normalize_sr_sale_identity($ticketNumber);
             if ($k !== '') {
                 $stmtMarkCancelled->bind_param('sss', $k, $k, $k);
