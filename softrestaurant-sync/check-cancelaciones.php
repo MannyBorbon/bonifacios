@@ -161,13 +161,99 @@ try {
 }
 sep();
 
-// ── 7. Acción sugerida ────────────────────────────────────────
-line("ACCIÓN SUGERIDA:");
-line("Si la sección 5 muestra CERO FILAS y hay cancelaciones en sección 3/4:");
-line("  1. Abre sync-state-v3.json");
-line("  2. Cambia el valor de 'cancellations' a '2000-01-01 00:00:00'");
-line("  3. Guarda y reinicia el sync");
-line("");
-line("Si hay cero cancelaciones en sección 3 también:");
-line("  → No hay tickets cancelados en SR → el $0.00 del dashboard es correcto.");
+// ── 7. Cancelados HOY (turno actual 08:00 de hoy) ─────────────
+line("Cancelados en el turno ACTUAL (cheques.cancelado=1, fecha de hoy):");
+try {
+    $sql = "SELECT TOP 20
+        CAST(folio AS VARCHAR(50)) AS folio,
+        numcheque,
+        fecha,
+        fechacancelado,
+        COALESCE(fechacancelado, fecha) AS cancel_date_efectiva,
+        ISNULL(total,0) AS total,
+        cancelado
+    FROM cheques
+    WHERE ISNULL(cancelado,0) = 1
+      AND COALESCE(fechacancelado, fecha) >= DATEADD(HOUR, 8, CAST(
+            CASE WHEN DATEPART(HOUR, GETDATE()) < 8
+                 THEN DATEADD(DAY,-1, CONVERT(date, GETDATE()))
+                 ELSE CONVERT(date, GETDATE()) END
+        AS datetime))
+    ORDER BY COALESCE(fechacancelado, fecha) ASC";
+    $rows = $conn->query($sql)->fetchAll();
+    if (count($rows) === 0) {
+        line("  (ninguno en el turno actual — SR no registra cancelaciones de hoy todavía)");
+    } else {
+        line("  Encontrados: " . count($rows));
+        foreach ($rows as $r) {
+            line(sprintf(
+                "  folio=%-8s  numcheque=%-6s  fecha=%-22s  fechacancelado=%-22s  cancel_efectiva=%-22s  total=%8.2f",
+                $r['folio'],
+                $r['numcheque'],
+                (string)$r['fecha'],
+                (string)($r['fechacancelado'] ?? 'NULL'),
+                (string)$r['cancel_date_efectiva'],
+                floatval($r['total'])
+            ));
+        }
+    }
+} catch (Throwable $e) {
+    line("ERROR cancelados hoy: " . $e->getMessage());
+}
+sep();
+
+// ── 8. Total actual de cancelados (cuenta actualizada) ────────
+line("Conteo ACTUALIZADO de cancelados en SR:");
+try {
+    $t = $conn->query("SELECT COUNT(*) AS n FROM cheques WHERE ISNULL(cancelado,0)=1")->fetch();
+    $nf = $conn->query("SELECT COUNT(*) AS n FROM cheques WHERE ISNULL(cancelado,0)=1 AND fechacancelado IS NOT NULL")->fetch();
+    $nn = $conn->query("SELECT COUNT(*) AS n FROM cheques WHERE ISNULL(cancelado,0)=1 AND fechacancelado IS NULL")->fetch();
+    line("  Total:                        " . $t['n']);
+    line("  → fechacancelado NOT NULL:    " . $nf['n']);
+    line("  → fechacancelado NULL:        " . $nn['n'] . "  ← estos se sincronizan usando fecha como fallback");
+} catch (Throwable $e) {
+    line("ERROR conteo: " . $e->getMessage());
+}
+sep();
+
+// ── 9. Query "tiempo real" del sync con cursor actual ────────
+$cursor2 = $state['cancellations'] ?? '2000-01-01 00:00:00';
+line("Query fetchRecentCancellationRows (96h) — lo que el sync envía en tiempo real:");
+try {
+    $stmt = $conn->prepare("
+        SELECT TOP 20
+            CAST(folio AS VARCHAR(50)) AS ticket_number,
+            COALESCE(fechacancelado, fecha) AS cancel_date,
+            ISNULL(total,0) AS amount
+        FROM cheques
+        WHERE ISNULL(cancelado,0) = 1
+          AND COALESCE(fechacancelado, fecha) >= DATEADD(HOUR, -96, GETDATE())
+        ORDER BY COALESCE(fechacancelado, fecha) DESC
+    ");
+    $stmt->execute();
+    $rows = $stmt->fetchAll();
+    if (count($rows) === 0) {
+        line("  (0 filas) — no hay cancelados en las últimas 96h en SR");
+    } else {
+        line("  Encontrados: " . count($rows));
+        foreach ($rows as $r) {
+            line(sprintf("    ticket=%-8s  cancel_date=%-22s  amount=%8.2f",
+                $r['ticket_number'], (string)$r['cancel_date'], floatval($r['amount'])));
+        }
+    }
+} catch (Throwable $e) {
+    line("ERROR query tiempo real: " . $e->getMessage());
+}
+sep();
+
+// ── 10. Acción sugerida ───────────────────────────────────────
+line("ESTADO Y ACCIÓN:");
+line("Cursor actual: $cursor2");
+line("Si la sección 9 muestra tickets y NO están en phpMyAdmin sr_cancellations:");
+line("  → El sync no está corriendo, o fue detenido.");
+line("  → Reinicia con: run_bonifacios.bat");
+line("Si la sección 7 muestra tickets pero la sección 9 no:");
+line("  → El COALESCE usa 'fecha' como fallback, pero esa fecha");
+line("    puede quedar FUERA del rango de las últimas 96h si la");
+line("    apertura fue hace más de 4 días (poco probable hoy).");
 sep();
